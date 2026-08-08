@@ -90,6 +90,10 @@ def _retryable_agent_error(exc: Exception) -> bool:
     )
 
 
+def _agent_registry_unsupported(exc: Exception) -> bool:
+    return "agent_registry_not_enabled" in f"{type(exc).__name__}: {exc}".lower()
+
+
 def _wait_for_rate_slot() -> None:
     """参考套餐查询：错开 Agent 注册请求启动时间。"""
     global _NEXT_REQUEST_AT
@@ -266,11 +270,14 @@ def _run_generate(*, account_id: int, email: str, access_token: str, trigger: st
         logger.info("[CodexAgent] 生成成功: %s runtime=%s", email, result.get("agent_runtime_id") or "-")
         return result
     except Exception as exc:
+        error_text = f"{type(exc).__name__}: {str(exc)[:300]}"
+        unsupported = _agent_registry_unsupported(exc)
         result = {
             "ok": False,
-            "status": "failed",
+            "status": "unsupported" if unsupported else "failed",
             "checked_at": datetime.now().isoformat(timespec="seconds"),
-            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "error": error_text,
+            "message": "当前账号未开放 Agent Registry" if unsupported else "Codex Agent Token 生成失败",
             "network_route": route_meta.get("network_route"),
             "proxy_mode": route_meta.get("proxy_mode"),
             "proxy_used": route_meta.get("proxy_used"),

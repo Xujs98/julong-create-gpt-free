@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GPT 注册控制台</title>
+  <title>矩龙 搞号</title>
+  <link rel="icon" type="image/png" href="/static/brand/julong-favicon.png">
+  <link rel="shortcut icon" href="/favicon.ico">
   <style>
     * { box-sizing: border-box; }
     html { max-width: 100%; overflow-x: hidden; }
@@ -149,6 +151,58 @@
     .status-partial_success { color: #9a6700; background: #fff7d6; }
     .status-running { color: var(--amber); background: #fff7e6; }
     .status-success { color: var(--green); background: #e9f7ef; }
+    /* 付费套餐完整信息由 body 级浮层承载，表格内只显示稳定摘要。 */
+    .accounts-table .plan-summary-pill {
+      max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      justify-content: flex-start; cursor: help; outline: none;
+      transition: transform .18s ease, box-shadow .2s ease;
+    }
+    .accounts-table .plan-summary-pill:hover,
+    .accounts-table .plan-summary-pill:focus-visible {
+      transform: translateY(-1px); box-shadow: 0 5px 14px rgba(22,128,60,.16);
+    }
+    .plan-hover-card {
+      --plan-arrow-x: 28px; position: fixed; z-index: 6500;
+      width: min(390px, calc(100vw - 24px)); padding: 0;
+      color: #354052; background: rgba(255,255,255,.97);
+      border: 1px solid rgba(139,214,202,.72); border-radius: 14px;
+      box-shadow: 0 18px 48px rgba(31,50,78,.18), 0 4px 14px rgba(43,184,166,.10);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      opacity: 0; visibility: hidden; pointer-events: none;
+      transform: translateY(8px) scale(.96); filter: blur(3px);
+      transform-origin: var(--plan-origin, top center);
+      transition: opacity .18s ease, transform .22s cubic-bezier(.2,.8,.2,1), filter .18s ease, visibility 0s linear .22s;
+    }
+    .plan-hover-card.is-visible { opacity: 1; visibility: visible; transform: translateY(0) scale(1); filter: blur(0); transition-delay: 0s; }
+    .plan-hover-card[data-placement="top"] { --plan-origin: bottom center; }
+    .plan-hover-card[data-placement="bottom"] { --plan-origin: top center; }
+    .plan-hover-card::before {
+      content: ""; position: absolute; left: var(--plan-arrow-x); width: 11px; height: 11px;
+      background: #f4fffc; transform: rotate(45deg); z-index: 0;
+    }
+    .plan-hover-card[data-placement="bottom"]::before { top: -6px; border-left: 1px solid rgba(139,214,202,.72); border-top: 1px solid rgba(139,214,202,.72); }
+    .plan-hover-card[data-placement="top"]::before { bottom: -6px; border-right: 1px solid rgba(139,214,202,.72); border-bottom: 1px solid rgba(139,214,202,.72); }
+    .plan-hover-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 15px 16px 13px; border-bottom: 1px solid #e9f2f0;
+      background: linear-gradient(135deg, #effcf8 0%, #f3f8ff 100%); border-radius: 14px 14px 0 0;
+    }
+    .plan-hover-name { font-size: 16px; font-weight: 800; color: #263244; }
+    .plan-hover-sub { margin-top: 3px; color: #7a8798; font-size: 11px; }
+    .plan-hover-state {
+      flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px;
+      border-radius: 999px; color: #23856c; background: #e4f8f2; font-size: 11px; font-weight: 800;
+    }
+    .plan-hover-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #2bb8a6; box-shadow: 0 0 0 4px rgba(43,184,166,.12); }
+    .plan-hover-state.is-off { color: #a06b18; background: #fff6df; }
+    .plan-hover-state.is-off::before { background: #e6a23c; box-shadow: 0 0 0 4px rgba(230,162,60,.13); }
+    .plan-hover-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 9px 10px; padding: 14px 16px 15px; }
+    .plan-hover-item { min-width: 0; padding: 9px 10px; border: 1px solid #edf1f5; border-radius: 9px; background: linear-gradient(180deg,#fff,#fbfcfd); }
+    .plan-hover-item.is-wide { grid-column: 1 / -1; }
+    .plan-hover-label { display: block; margin-bottom: 4px; color: #97a1ae; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+    .plan-hover-value { display: block; color: #465365; font-size: 12px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+    @media (max-width: 560px) { .plan-hover-grid { grid-template-columns: 1fr; } .plan-hover-item.is-wide { grid-column: auto; } }
+    @media (prefers-reduced-motion: reduce) { .plan-summary-pill, .plan-hover-card { transition: none !important; } }
     .extract-link-cell {
       display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
       margin-top: 4px; max-width: 100%;
@@ -346,6 +400,29 @@
       white-space: normal; overflow-wrap: anywhere; word-break: break-all;
     }
     .config-count { opacity: .72; font-weight: 700; margin-left: 4px; }
+    .account-password-copy { display:inline-flex; align-items:center; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-height:24px; margin-top:4px; padding:0 8px; border:1px solid #c7d8ff; border-radius:5px; background:#f4f7ff; color:#377dff; font:inherit; font-size:11px; font-weight:700; cursor:copy; }
+    .account-password-copy:hover, .account-password-copy:focus-visible { color:#fff; border-color:#377dff; background:#377dff; }
+    .account-password-copy.is-copied { color:#fff; border-color:#2bb8a6; background:#2bb8a6; }
+    .account-password-none { display:inline-block; margin-top:4px; color:#c0c4cc; font-size:11px; }
+    #accountExportModal:not(.hidden) { position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.45); }
+    .account-export-dialog { width:min(430px,100%); background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:0 24px 70px rgba(15,23,42,.28); overflow:hidden; }
+    .account-export-head { display:flex; align-items:flex-start; gap:12px; padding:18px 20px 14px; border-bottom:1px solid var(--line); }
+    .account-export-head-main { min-width:0; flex:1; }
+    .account-export-head h3 { margin:0; font-size:18px; line-height:1.3; }
+    .account-export-head p { margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.45; }
+    .account-export-close { width:30px; height:30px; flex:0 0 30px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-size:20px; cursor:pointer; }
+    .account-export-close:hover { background:var(--soft); color:var(--text); }
+    .account-export-body { padding:18px 20px 8px; }
+    .account-export-options { display:grid; gap:8px; }
+    .account-export-option { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 12px; border:1px solid var(--line); border-radius:7px; cursor:pointer; }
+    .account-export-option:hover { border-color:#9bbcff; background:#f6f9ff; }
+    .account-export-option input { width:16px; height:16px; min-height:16px; margin:0; accent-color:var(--blue); }
+    .account-export-option span { font-size:14px; font-weight:700; }
+    .account-export-option small { margin-left:auto; color:var(--muted); font-size:11px; }
+    .account-export-foot { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px 18px; }
+    .account-export-foot button { min-height:34px; padding:0 14px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--muted); font:inherit; font-size:13px; cursor:pointer; }
+    .account-export-foot button.primary { border-color:var(--blue); background:var(--blue); color:#fff; }
+    @media (max-width:560px) { #accountExportModal:not(.hidden) { padding:14px; align-items:end; } .account-export-dialog { width:100%; } }
     .roxy-workspace-box {
       grid-column: 1 / -1; border: 1px solid #c3d4fb; background: #eef4ff;
       border-radius: 8px; padding: 12px; display: grid; gap: 10px;
@@ -363,10 +440,10 @@
 <header>
   <div class="header-inner">
     <div>
-      <h1>GPT 注册控制台</h1>
+      <h1>矩龙 搞号</h1>
       <p class="meta">本地 Web 控制台 · 数据更新于 <span id="updatedAt">-</span></p>
       <div class="header-links">
-        <a href="https://t.me/+gu_cvEKq_vcyZWRl" target="_blank" rel="noopener noreferrer">TG 交流群</a>
+        <a href="https://api.julongkj.top" target="_blank" rel="noopener noreferrer">矩龙 API</a>
         <a href="/?ui=modern" title="切换到新版侧边栏 UI">切换新 UI</a>
         <form method="post" action="/logout"><button type="submit">退出</button></form>
       </div>
@@ -490,15 +567,15 @@
           <div class="btn-group">
             <span class="btn-group-title">批量</span>
             <button class="btn good" id="btnNoteSelectedAccounts" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
-            <button class="btn good" id="btnCopySelectedLines" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
-            <button class="btn good" id="btnDownloadSelectedTxt" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
+            <button class="btn good" id="btnInjectSelectedSessions" disabled title="启动本地随机指纹浏览器，通过代理池植入选中账号的完整登录状态">植入登录状态</button>
+            <button class="btn good" id="btnDownloadSelectedTxt" disabled title="选择字段后导出选中账号的 TXT 文件">下载TXT</button>
             <button class="btn" id="btnArchiveSelectedAccounts" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档</button>
             <button class="btn" id="btnDeleteSelectedAccounts" disabled title="删除选中的本地账号/token记录">删除</button>
           </div>
           <div class="btn-group">
-            <span class="btn-group-title">全部</span>
-            <button class="btn primary" id="copyAllTokens">复制Token</button>
-            <button class="btn good" id="copyAllLines">复制整行</button>
+            <span class="btn-group-title">选中复制</span>
+            <button class="btn primary" id="btnCopySelectedTokens" disabled title="只复制表格中已勾选账号的 Token，每个账号一行">复制Token</button>
+            <button class="btn good" id="btnCopySelectedLines" disabled title="只复制表格中已勾选账号的完整整行，每个账号一行">复制整行</button>
           </div>
         </div>
       </div>
@@ -657,7 +734,27 @@
   <img id="qrImage" alt="支付二维码">
   <a id="qrOpenLink" class="qr-link" href="#" target="_blank" rel="noopener noreferrer"></a>
 </div>
+<div id="accountExportModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="accountExportTitle">
+  <div class="account-export-dialog" role="document">
+    <div class="account-export-head">
+      <div class="account-export-head-main">
+        <h3 id="accountExportTitle">下载 TXT</h3>
+        <p>选择要写入每行的字段，默认导出邮箱、密码、2FA 和 AT。</p>
+      </div>
+      <button type="button" class="account-export-close" id="btnCloseAccountExport" aria-label="关闭">×</button>
+    </div>
+    <div class="account-export-body"><div class="account-export-options" role="group" aria-label="TXT 导出字段">
+      <label class="account-export-option"><input type="checkbox" data-account-export-field="email" checked><span>邮箱</span><small>email</small></label>
+      <label class="account-export-option"><input type="checkbox" data-account-export-field="password" checked><span>密码</span><small>password</small></label>
+      <label class="account-export-option"><input type="checkbox" data-account-export-field="totp" checked><span>2FA</span><small>viewer URL</small></label>
+      <label class="account-export-option"><input type="checkbox" data-account-export-field="url"><span>URL</span><small>邮箱池取码地址</small></label>
+      <label class="account-export-option"><input type="checkbox" data-account-export-field="access_token" checked><span>AT</span><small>access token</small></label>
+    </div></div>
+    <div class="account-export-foot"><button type="button" id="btnCancelAccountExport">取消</button><button type="button" class="primary" id="btnConfirmAccountExport">导出 TXT</button></div>
+  </div>
+</div>
 
+{% include "_app_dialog.html" %}
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -790,7 +887,7 @@ $('#btnStart').addEventListener('click', async () => {
   const workers = parseInt($('#regWorkers').value || '3', 10);
   const activeCount = Number(JOB_STATUS_COUNTS.active || 0);
   if (activeCount > 0) {
-    const ok = confirm(
+    const ok = await appConfirm(
       `当前任务表里已有 ${activeCount} 个任务在跑或排队，` +
       `这次会再加 ${count} 个，合计 ${activeCount + count} 个，确定继续？\n\n` +
       `（如果只是想跑这 ${count} 个，建议先点"取消所有排队"清掉残留再提交）`
@@ -820,7 +917,7 @@ $('#btnCancelPending').addEventListener('click', async () => {
   const msg = pendingCount > 0
     ? `确定取消 ${pendingCount} 个排队中的任务吗？已运行中的任务不受影响。`
     : '当前页没有排队任务；仍要请求后端取消所有排队任务吗？';
-  if (!confirm(msg)) return;
+  if (!await appConfirm(msg)) return;
   $('#btnCancelPending').disabled = true;
   try {
     const r = await api('/api/jobs/cancel-pending', { method:'POST', headers:{'Content-Type':'application/json'}, body: '{}' });
@@ -902,7 +999,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#accountExportModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1022,7 +1119,7 @@ async function stopJob(jobId, btn) {
   const job = JOBS.find(j => Number(j.id) === Number(jobId));
   const statusText = job?.status || '-';
   const emailText = job?.email || '未分配邮箱';
-  if (!confirm(`确定停止任务 #${jobId}？\n\n状态：${statusText}\n邮箱：${emailText}\n\n排队任务会直接取消；运行中的任务会发送停止信号，并在当前步骤检查点退出。`)) return;
+  if (!await appConfirm(`确定停止任务 #${jobId}？\n\n状态：${statusText}\n邮箱：${emailText}\n\n排队任务会直接取消；运行中的任务会发送停止信号，并在当前步骤检查点退出。`)) return;
   btn.disabled = true;
   try {
     const r = await api(`/api/jobs/${jobId}/stop`, { method:'POST', headers:{'Content-Type':'application/json'}, body: '{}' });
@@ -1039,7 +1136,7 @@ async function deleteJob(jobId, btn) {
   const job = JOBS.find(j => Number(j.id) === Number(jobId));
   const statusText = job?.status || '-';
   const emailText = job?.email || '未分配邮箱';
-  if (!confirm(`确定删除任务 #${jobId}？\n\n状态：${statusText}\n邮箱：${emailText}\n\n会同时删除该任务日志。排队任务删除后将不会执行。`)) return;
+  if (!await appConfirm(`确定删除任务 #${jobId}？\n\n状态：${statusText}\n邮箱：${emailText}\n\n会同时删除该任务日志。排队任务删除后将不会执行。`)) return;
   btn.disabled = true;
   try {
     const r = await api(`/api/jobs/${jobId}/delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: '{}' });
@@ -1058,7 +1155,7 @@ async function deleteSelectedJobs() {
   if (ids.length === 0) { showToast('请先选择任务'); return; }
   const msg = `确定删除选中的 ${ids.length} 个任务吗？\n\n` +
               `会同时删除对应日志。排队/运行中的任务会由后端逐条校验，不能删除的会自动跳过。`;
-  if (!confirm(msg)) return;
+  if (!await appConfirm(msg)) return;
 
   $('#btnDeleteSelectedJobs').disabled = true;
   try {
@@ -1082,7 +1179,7 @@ async function retryJob(jobId, btn) {
   const job = JOBS.find(j => Number(j.id) === Number(jobId));
   if (!job || !job.retryable) { showToast('该任务当前不可重试'); return; }
   const actionText = job.retry_action === 'codex' ? '仅补跑 Codex 授权' : '创建新的完整注册任务';
-  if (!confirm(`确定${job.retry_label || '重试'}任务 #${jobId}？\n\n${actionText}\n原任务记录和日志会保留。`)) return;
+  if (!await appConfirm(`确定${job.retry_label || '重试'}任务 #${jobId}？\n\n${actionText}\n原任务记录和日志会保留。`)) return;
   btn.disabled = true;
   try {
     const r = await api(`/api/jobs/${jobId}/retry`, {
@@ -1101,7 +1198,7 @@ async function retryJob(jobId, btn) {
 
 async function retrySelectedJobs() {
   const ids = Array.from(JOB_SELECTED);
-  if (!confirm(`确定重试选中的 ${ids.length} 个任务吗？\n\n后端会逐条校验；已创建账号的任务只补跑 Codex，其余任务重新入队注册，不能重试的会自动跳过。`)) return;
+  if (!await appConfirm(`确定重试选中的 ${ids.length} 个任务吗？\n\n后端会逐条校验；已创建账号的任务只补跑 Codex，其余任务重新入队注册，不能重试的会自动跳过。`)) return;
   const btn = $('#btnRetrySelectedJobs');
   btn.disabled = true;
   try {
@@ -1196,9 +1293,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
+        const wasLiveChecking = ['queued', 'running'].includes(account?.live_check_status);
+        const isLiveChecking = ['queued', 'running'].includes(item.live_check_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
+        if (wasLiveChecking && !isLiveChecking) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -1269,6 +1369,128 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
+let PLAN_HOVER_TARGET = null;
+let PLAN_HOVER_RAF = 0;
+function _planHoverItem(label, value, wide = false) {
+  if (value === undefined || value === null || value === '') return '';
+  return `<div class="plan-hover-item${wide ? ' is-wide' : ''}"><span class="plan-hover-label">${esc(label)}</span><span class="plan-hover-value">${esc(value)}</span></div>`;
+}
+function _planNetworkLabel(r) {
+  const route = String(r.plan_check_network_route || '').toLowerCase();
+  if (route === 'proxy') return `代理${r.plan_check_proxy_used ? ` · ${r.plan_check_proxy_used}` : ''}`;
+  if (route === 'direct_fallback') return `直连回退${r.plan_check_proxy_fallback_reason ? ` · ${r.plan_check_proxy_fallback_reason}` : ''}`;
+  if (route === 'direct') return '直连';
+  return '';
+}
+function _ensurePlanHoverCard() {
+  let card = document.getElementById('planHoverCard');
+  if (!card) {
+    card = document.createElement('div');
+    card.id = 'planHoverCard';
+    card.className = 'plan-hover-card';
+    card.setAttribute('role', 'tooltip');
+    card.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(card);
+  }
+  return card;
+}
+function _planHoverMarkup(r) {
+  const plan = String(r.current_plan_type || r.plan_type || '-');
+  const activeKnown = typeof r.has_active_subscription === 'boolean';
+  const active = activeKnown ? r.has_active_subscription : r.plan_check_status === 'success';
+  const statusText = activeKnown ? (active ? '订阅有效' : '订阅未激活') : '套餐已查询';
+  const discount = _discountLabel(r);
+  const discountDetail = [discount, r.discount_type].filter(Boolean).join(' · ');
+  const discountPeriods = r.discount_duration_num_periods !== undefined && r.discount_duration_num_periods !== null
+    ? `${r.discount_duration_num_periods} 期` : '';
+  const rows = [
+    _planHoverItem('订阅计划', r.subscription_plan, true),
+    _planHoverItem('计费周期', _billingLabel(r.billing_period)),
+    _planHoverItem('币种', r.billing_currency),
+    _planHoverItem('到期时间', _fmtPlanTime(r.plan_expires_at || r.expires_at, false)),
+    _planHoverItem('续费时间', _fmtPlanTime(r.plan_renews_at || r.renews_at, false)),
+    _planHoverItem('取消时间', _fmtPlanTime(r.plan_cancels_at, false)),
+    _planHoverItem('自动续费', typeof r.last_will_renew === 'boolean' ? (r.last_will_renew ? '是' : '否') : ''),
+    _planHoverItem('欠费状态', typeof r.is_delinquent === 'boolean' ? (r.is_delinquent ? '欠费' : '正常') : ''),
+    _planHoverItem('折扣', discountDetail),
+    _planHoverItem('折扣周期', discountPeriods),
+    _planHoverItem('折扣结束', _fmtPlanTime(r.discount_expires_at, false)),
+    _planHoverItem('折扣取消规则', r.discount_cancellation_policy, true),
+    _planHoverItem('活动标识', r.discount_promo_campaign_id, true),
+    _planHoverItem('购买渠道', r.last_purchase_origin_platform),
+    _planHoverItem('查询时间', _fmtPlanTime(r.plan_checked_at, false)),
+    _planHoverItem('网络路径', _planNetworkLabel(r), true),
+  ].filter(Boolean).join('');
+  return `<div class="plan-hover-head"><div><div class="plan-hover-name">${esc(plan)}</div><div class="plan-hover-sub">账号 #${esc(r.id)} · 完整套餐信息</div></div><span class="plan-hover-state${active ? '' : ' is-off'}">${statusText}</span></div><div class="plan-hover-grid">${rows || _planHoverItem('套餐详情', '暂无更多信息', true)}</div>`;
+}
+function _positionPlanHoverCard(trigger) {
+  const card = _ensurePlanHoverCard();
+  const rect = trigger.getBoundingClientRect();
+  const gap = 11, margin = 12;
+  const width = card.offsetWidth, height = card.offsetHeight;
+  let left = rect.left;
+  left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+  let top = rect.bottom + gap;
+  let placement = 'bottom';
+  if (top + height > window.innerHeight - margin && rect.top - height - gap >= margin) {
+    top = rect.top - height - gap;
+    placement = 'top';
+  } else {
+    top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+  }
+  const arrowCenter = Math.max(18, Math.min(width - 18, rect.left + rect.width / 2 - left));
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+  card.style.setProperty('--plan-arrow-x', `${Math.round(arrowCenter - 6)}px`);
+  card.dataset.placement = placement;
+}
+function _showPlanHoverCard(trigger) {
+  const account = ACCOUNTS.find(r => String(r.id) === String(trigger.dataset.planHover));
+  if (!account) return;
+  const card = _ensurePlanHoverCard();
+  PLAN_HOVER_TARGET = trigger;
+  if (PLAN_HOVER_RAF) cancelAnimationFrame(PLAN_HOVER_RAF);
+  card.classList.remove('is-visible');
+  card.innerHTML = _planHoverMarkup(account);
+  card.setAttribute('aria-hidden', 'false');
+  _positionPlanHoverCard(trigger);
+  PLAN_HOVER_RAF = requestAnimationFrame(() => {
+    if (PLAN_HOVER_TARGET === trigger && trigger.isConnected) card.classList.add('is-visible');
+  });
+}
+function _hidePlanHoverCard() {
+  PLAN_HOVER_TARGET = null;
+  if (PLAN_HOVER_RAF) cancelAnimationFrame(PLAN_HOVER_RAF);
+  PLAN_HOVER_RAF = 0;
+  const card = document.getElementById('planHoverCard');
+  if (!card) return;
+  card.classList.remove('is-visible');
+  card.setAttribute('aria-hidden', 'true');
+}
+(function bindPlanHoverCard() {
+  _ensurePlanHoverCard();
+  document.addEventListener('pointerover', e => {
+    const trigger = e.target.closest?.('[data-plan-hover]');
+    if (!trigger || trigger.contains(e.relatedTarget)) return;
+    _showPlanHoverCard(trigger);
+  });
+  document.addEventListener('pointerout', e => {
+    const trigger = e.target.closest?.('[data-plan-hover]');
+    if (!trigger || trigger.contains(e.relatedTarget)) return;
+    _hidePlanHoverCard();
+  });
+  document.addEventListener('focusin', e => {
+    const trigger = e.target.closest?.('[data-plan-hover]');
+    if (trigger) _showPlanHoverCard(trigger);
+  });
+  document.addEventListener('focusout', e => {
+    const trigger = e.target.closest?.('[data-plan-hover]');
+    if (trigger && !trigger.contains(e.relatedTarget)) _hidePlanHoverCard();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') _hidePlanHoverCard(); });
+  window.addEventListener('scroll', _hidePlanHoverCard, true);
+  window.addEventListener('resize', _hidePlanHoverCard);
+})();
 function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
@@ -1317,14 +1539,16 @@ function _planCell(r) {
   if (billing) parts.push(billing);
   if (r.billing_currency) parts.push(r.billing_currency);
   if (expire) parts.push(`到期 ${expire}`);
-  const discount = _discountLabel(r);
-  if (discount) parts.push(discount);
   const text = parts.length ? `${plan}（${parts.join('/')}）` : plan;
   const detail = [title];
   if (expireRaw) detail.push(`到期时间: ${expireRaw}`);
   if (r.plan_renews_at) detail.push(`续费时间: ${r.plan_renews_at}`);
   if (r.discount_expires_at) detail.push(`折扣结束: ${r.discount_expires_at}`);
   if (r.discount_promo_campaign_id) detail.push(`优惠: ${r.discount_promo_campaign_id}`);
+  if (isPaid) {
+    const aria = `${text}，移入或聚焦查看完整套餐信息`;
+    return `<span class="pill ${cls} plan-summary-pill" data-plan-hover="${esc(r.id)}" tabindex="0" aria-describedby="planHoverCard" aria-label="${esc(aria)}">${esc(text)}</span>`;
+  }
   return `<span class="pill ${cls}" title="${esc(detail.join('；'))}">${esc(text)}</span>`;
 }
 function _planAction(r) {
@@ -1399,6 +1623,11 @@ function _liveStatusSub(r) {
   if (s === 'failed') return `<div class="sub-cell" style="color:#e6a23c" title="${esc(err || at)}">查活: 失败</div>`;
   return '';
 }
+function _accountPasswordCell(r) {
+  return r.password_available
+    ? `<button type="button" class="account-password-copy" data-account-copy-secret="password" data-account-id="${esc(r.id)}" title="点击复制账号密码">密码</button>`
+    : '<span class="account-password-none" title="该账号注册时未保存创建密码；开启创建密码只对新注册任务生效">未设置密码</span>';
+}
 function renderAccounts() {
   const p = PAGERS.accounts;
   const total = ACCOUNTS_TOTAL;
@@ -1407,19 +1636,19 @@ function renderAccounts() {
     <tr>
       <td><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="muted">#${esc(r.id)}</td>
-      <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div></td>
+      <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div>${_accountPasswordCell(r)}</td>
       <td>${esc(r.email_source || '-')}</td>
       <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span>${_liveStatusSub(r)}</td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
-      <td>${r.totp_enabled ? '已启用' : '<span class="muted">未启用</span>'}</td>
+      <td>${r.totp_enabled ? '已启用' : '<span class="muted" title="该账号没有保存 TOTP；可能是注册时未开启 2FA，或设置阶段失败，请查看注册日志">未启用</span>'}</td>
       <td>${_codexCell(r)}</td>
       <td>${_codexAgentCell(r)}</td>
       <td class="muted">${esc(r.created_at || '-')}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
           <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制Token</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
-          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-live-check="${esc(r.id)}" title="依次校验现有 AT、保存 Session、协议账号密码与 2FA；旧账号才使用邮箱验证码">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
@@ -1440,9 +1669,11 @@ function updateAccountSelectionUi(pageRows = null) {
   const downloadAgentBtn = $('#btnDownloadSelectedAgent');
   const uploadAgentSub2Btn = $('#btnUploadSelectedAgentSub2');
   const checkPlanBtn = $('#btnCheckSelectedPlans');
+  const copySelectedTokenBtn = $('#btnCopySelectedTokens');
   const copySelectedBtn = $('#btnCopySelectedLines');
   const downloadTxtBtn = $('#btnDownloadSelectedTxt');
   const noteSelectedBtn = $('#btnNoteSelectedAccounts');
+  const injectSessionsBtn = $('#btnInjectSelectedSessions');
   const archiveSelectedBtn = $('#btnArchiveSelectedAccounts');
   if (hint) hint.textContent = `已选 ${ACCOUNT_SELECTED.size}`;
   if (bulkBtn) bulkBtn.disabled = ACCOUNT_SELECTED.size === 0;
@@ -1454,9 +1685,11 @@ function updateAccountSelectionUi(pageRows = null) {
   if (downloadAgentBtn) downloadAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (uploadAgentSub2Btn) uploadAgentSub2Btn.disabled = ACCOUNT_SELECTED.size === 0;
   if (checkPlanBtn) checkPlanBtn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (copySelectedTokenBtn) copySelectedTokenBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (copySelectedBtn) copySelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadTxtBtn) downloadTxtBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (noteSelectedBtn) noteSelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (injectSessionsBtn) injectSessionsBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (archiveSelectedBtn) {
     archiveSelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
     archiveSelectedBtn.textContent = SHOW_ARCHIVED_ACCOUNTS ? '恢复选中' : '归档选中';
@@ -1561,7 +1794,17 @@ $('#accountsBody').addEventListener('click', async (e) => {
       const value = await fetchOneAccountSecret(id, field);
       if (!value) { showToast('可复制内容为空'); return; }
       copyText(value);
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
+      if (field === 'password') {
+        const original = copySecretBtn.textContent;
+        copySecretBtn.classList.add('is-copied');
+        copySecretBtn.textContent = value;
+        window.setTimeout(() => {
+          if (!copySecretBtn.isConnected) return;
+          copySecretBtn.classList.remove('is-copied');
+          copySecretBtn.textContent = original;
+        }, 1600);
+      }
+      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'password' ? '密码已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
@@ -1647,7 +1890,7 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const stopCodexBtn = e.target.closest('[data-codex-stop]');
   if (stopCodexBtn) {
     const email = stopCodexBtn.dataset.codexStop;
-    if (!confirm(`确定停止该账号的 Codex 补跑吗？\n\n${email}\n\n会发送停止信号并将状态标记为“已停止”。`)) return;
+    if (!await appConfirm(`确定停止该账号的 Codex 补跑吗？\n\n${email}\n\n会发送停止信号并将状态标记为“已停止”。`)) return;
     stopCodexBtn.disabled = true;
     try {
       const r = await api('/api/codex/stop', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email}) });
@@ -1664,7 +1907,7 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const resetBtn = e.target.closest('[data-codex-reset-retrying]');
   if (resetBtn) {
     const email = resetBtn.dataset.codexResetRetrying;
-    if (!confirm(`确定重置该账号的 Codex「补跑中」状态吗？\n\n${email}\n\n重置后状态会变为“失败”，可再次点击“补跑 Codex”。`)) return;
+    if (!await appConfirm(`确定重置该账号的 Codex「补跑中」状态吗？\n\n${email}\n\n重置后状态会变为“失败”，可再次点击“补跑 Codex”。`)) return;
     resetBtn.disabled = true;
     try {
       const r = await api('/api/codex/reset-retrying', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, status:'failed'}) });
@@ -1684,7 +1927,7 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-codex-retry]');
   if (!btn) return;
   const email = btn.dataset.codexRetry;
-  if (!confirm(`重新跑 Codex 授权？\n\n${email}\n\n将消耗：\n  • 1 封邮箱 OTP（自动收）\n  • 1 个接码短信（约 $0.13）\n\n补跑会在后台进行（~1-2 分钟），完成后状态自动更新。`)) return;
+  if (!await appConfirm(`重新跑 Codex 授权？\n\n${email}\n\n将消耗：\n  • 1 封邮箱 OTP（自动收）\n  • 1 个接码短信（约 $0.13）\n\n补跑会在后台进行（~1-2 分钟），完成后状态自动更新。`)) return;
   btn.disabled = true;
   try {
     const r = await api('/api/codex/retry', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email}) });
@@ -1717,9 +1960,11 @@ $('#accountsSelectAll').addEventListener('change', (e) => {
 });
 $('#btnDeleteSelectedAccounts').addEventListener('click', deleteSelectedAccounts);
 $('#btnArchiveSelectedAccounts').addEventListener('click', archiveSelectedAccounts);
+$('#btnCopySelectedTokens').addEventListener('click', copySelectedAccountTokens);
 $('#btnCopySelectedLines').addEventListener('click', copySelectedAccountLines);
 $('#btnDownloadSelectedTxt').addEventListener('click', downloadSelectedAccountTxt);
 $('#btnNoteSelectedAccounts').addEventListener('click', noteSelectedAccounts);
+$('#btnInjectSelectedSessions').addEventListener('click', injectSelectedSessions);
 $('#btnExtractSelectedLinks').addEventListener('click', extractSelectedLinks);
 $('#btnGenerateSelectedAgent').addEventListener('click', generateSelectedCodexAgents);
 $('#btnDownloadSelectedAgent').addEventListener('click', downloadSelectedCodexAgents);
@@ -1776,6 +2021,23 @@ async function fetchOneAccountSecret(id, field) {
   return r.value || '';
 }
 
+function openAccountExportModal() {
+  const modal = $('#accountExportModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  updateModalScrollLock();
+  requestAnimationFrame(() => modal.querySelector('input[data-account-export-field="email"]')?.focus());
+}
+function closeAccountExportModal() {
+  const modal = $('#accountExportModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  updateModalScrollLock();
+}
+function selectedAccountExportFields() {
+  return $$('[data-account-export-field]:checked').map(input => input.dataset.accountExportField).filter(Boolean);
+}
+
 async function copySelectedAccountLines() {
   const ids = Array.from(ACCOUNT_SELECTED).map(Number);
   if (!ids.length) { showToast('请先选择账号'); return; }
@@ -1787,26 +2049,62 @@ async function copySelectedAccountLines() {
   } catch(err) { showToast('复制失败: ' + err.message); }
 }
 
+async function copySelectedAccountTokens() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  try {
+    const tokens = await fetchAccountSecrets(ids, 'access_token');
+    if (!tokens.length) { showToast('选中账号没有可复制 Token'); return; }
+    copyText(tokens.join('\n'));
+    showToast(`已复制 ${tokens.length} 个 Token`);
+  } catch(err) { showToast('复制失败: ' + err.message); }
+}
+
 async function downloadSelectedAccountTxt() {
   const ids = Array.from(ACCOUNT_SELECTED).map(Number);
   if (!ids.length) { showToast('请先选择账号'); return; }
-  let lines = [];
-  try {
-    lines = await fetchAccountSecrets(ids, 'copy_line');
-  } catch(err) { showToast('生成 TXT 失败: ' + err.message); return; }
-  if (!lines.length) { showToast('选中账号没有可下载整行'); return; }
-  const now = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  const filename = `accounts-selected-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`;
-  const blob = new Blob(['\ufeff' + lines.join('\n') + '\n'], {type: 'text/plain;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
-  showToast(`已下载 ${lines.length} 个账号 TXT`);
+  openAccountExportModal();
+  const modal = $('#accountExportModal');
+  if (!modal || modal.dataset.bound === '1') return;
+  modal.dataset.bound = '1';
+  const finish = () => closeAccountExportModal();
+  $('#btnCloseAccountExport')?.addEventListener('click', finish);
+  $('#btnCancelAccountExport')?.addEventListener('click', finish);
+  modal.addEventListener('click', event => { if (event.target === modal) finish(); });
+  modal.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); finish(); return; }
+    if (event.key !== 'Tab') return;
+    const focusable = [...modal.querySelectorAll('button:not([disabled]), input:not([disabled])')]
+      .filter(el => el.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0]; const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  $('#btnConfirmAccountExport')?.addEventListener('click', async () => {
+    const fields = selectedAccountExportFields();
+    if (!fields.length) { showToast('至少选择一个导出字段'); return; }
+    const button = $('#btnConfirmAccountExport');
+    button.disabled = true;
+    const old = button.textContent;
+    button.textContent = '生成中…';
+    try {
+      const result = await api('/api/accounts/export-txt', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({account_ids: Array.from(ACCOUNT_SELECTED).map(Number), fields}),
+      });
+      const lines = result.lines || [];
+      if (!lines.length) { showToast('选中账号没有可下载内容'); return; }
+      const now = new Date(); const pad = n => String(n).padStart(2, '0');
+      const filename = `accounts-selected-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`;
+      const blob = new Blob(['\ufeff' + lines.join('\n') + '\n'], {type: 'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = filename; a.rel = 'noopener'; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
+      finish(); showToast(`已下载 ${lines.length} 个账号 TXT`);
+    } catch (err) { showToast('生成 TXT 失败: ' + err.message); }
+    finally { button.textContent = old; button.disabled = false; }
+  });
 }
 
 async function downloadSelectedCpa() {
@@ -1816,7 +2114,7 @@ async function downloadSelectedCpa() {
   const missingCodex = selectedAccounts.filter(a => (a.codex_status || '') !== 'success').length;
   let msg = `确定从 CPA 下载选中的 ${ids.length} 个账号的 CPA/Codex JSON 吗？\n\n会按账号邮箱匹配 CPA auth-files，成功的文件会打包成 ZIP。`;
   if (missingCodex) msg += `\n\n其中 ${missingCodex} 个账号本地 Codex 状态不是 success，若 CPA 端没有文件会写入 manifest 错误清单。`;
-  if (!confirm(msg)) return;
+  if (!await appConfirm(msg)) return;
   const btn = $('#btnDownloadSelectedCpa');
   const old = btn.textContent;
   btn.disabled = true;
@@ -1877,7 +2175,7 @@ async function extractOneLink(id, btn) {
     showToast('仅支持 free(可Plus试用) 账号提链');
     return;
   }
-  if (!confirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n提链类型按配置使用 PIX/UPI/KAKAO_PAY/IDEAL，成功会消耗 1 次 CDK。`)) return;
+  if (!await appConfirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n提链类型按配置使用 PIX/UPI/KAKAO_PAY/IDEAL，成功会消耗 1 次 CDK。`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '提链中…';
@@ -1902,7 +2200,7 @@ async function extractSelectedLinks() {
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
   if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
-  if (!confirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
+  if (!await appConfirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
   const btn = $('#btnExtractSelectedLinks');
   const old = btn.textContent;
   btn.disabled = true;
@@ -1928,7 +2226,7 @@ async function generateOneCodexAgent(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
   if (!acc.has_access_token) { showToast('该账号没有 access_token'); return; }
-  if (!confirm(`确定为该账号生成 Codex Agent Token 吗？\n\n${acc.email || ('#' + id)}\n\n会调用 auth.openai.com 注册 agent_identity，并保存到本地账号记录。`)) return;
+  if (!await appConfirm(`确定为该账号生成 Codex Agent Token 吗？\n\n${acc.email || ('#' + id)}\n\n会调用 auth.openai.com 注册 agent_identity，并保存到本地账号记录。`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '生成中…';
@@ -1953,7 +2251,7 @@ async function generateSelectedCodexAgents() {
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const eligible = selected.filter(a => a.has_access_token);
   if (!eligible.length) { showToast('选中账号里没有可用 access_token'); return; }
-  if (!confirm(`确定批量生成 ${eligible.length} 个 Codex Agent Token 吗？\n\n缺少 access_token 的账号会自动跳过。`)) return;
+  if (!await appConfirm(`确定批量生成 ${eligible.length} 个 Codex Agent Token 吗？\n\n缺少 access_token 的账号会自动跳过。`)) return;
   const btn = $('#btnGenerateSelectedAgent');
   const old = btn.textContent;
   btn.disabled = true;
@@ -1979,7 +2277,7 @@ async function uploadOneCodexAgentSub2(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
   if ((acc.codex_agent_status || '') !== 'success') { showToast('该账号还没有生成 Agent Token'); return; }
-  if (!confirm(`确定上传该账号 Agent Token 到 sub2api 吗？\n\n${acc.email || ('#' + id)}`)) return;
+  if (!await appConfirm(`确定上传该账号 Agent Token 到 sub2api 吗？\n\n${acc.email || ('#' + id)}`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '上传中…';
@@ -2000,7 +2298,7 @@ async function uploadSelectedCodexAgentSub2() {
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const ready = selected.filter(a => (a.codex_agent_status || '') === 'success');
   if (!ready.length) { showToast('选中账号里没有已生成的 Agent Token'); return; }
-  if (!confirm(`确定上传选中的 ${ready.length} 个 Agent Token 到 sub2api 吗？\n\n未生成成功的账号会自动跳过。`)) return;
+  if (!await appConfirm(`确定上传选中的 ${ready.length} 个 Agent Token 到 sub2api 吗？\n\n未生成成功的账号会自动跳过。`)) return;
   const btn = $('#btnUploadSelectedAgentSub2');
   const old = btn.textContent;
   btn.disabled = true;
@@ -2048,13 +2346,13 @@ function downloadOneCodexAgent(id) {
   showToast('已提交 Agent Token 下载');
 }
 
-function downloadSelectedCodexAgents() {
+async function downloadSelectedCodexAgents() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const ready = selected.filter(a => (a.codex_agent_status || '') === 'success');
   if (!ready.length) { showToast('选中账号里没有已生成的 Agent Token'); return; }
-  if (!confirm(`确定下载选中的 ${ready.length} 个 Codex Agent Token 吗？\n\n未生成成功的账号会自动跳过，文件会打包 ZIP。`)) return;
+  if (!await appConfirm(`确定下载选中的 ${ready.length} 个 Codex Agent Token 吗？\n\n未生成成功的账号会自动跳过，文件会打包 ZIP。`)) return;
   const btn = $('#btnDownloadSelectedAgent');
   const old = btn.textContent;
   btn.disabled = true;
@@ -2119,10 +2417,12 @@ async function checkSelectedLive(idsArg = null, btnArg = null) {
   const workers = getCodexBulkWorkers();
   const msg = idsArg ? `确定查活这个账号并刷新最新 AT/accessToken 吗？` : `确定查活选中的 ${ids.length} 个账号吗？
 
-会重新登录邮箱 OTP；登录成功且未封号则标记正常，并刷新最新 AT/accessToken。
+会依次尝试现有 AT、保存 Session、协议账号密码与 2FA；只有未保存密码的旧账号才使用邮箱验证码。
+
+登录成功且账号正常则刷新最新 AT/accessToken。
 
 并发线程数：${workers}`;
-  if (!confirm(msg)) return;
+  if (!await appConfirm(msg)) return;
   const firstAcc = ACCOUNTS.find(a => Number(a.id) === Number(ids[0]));
   const btn = btnArg || $('#btnCheckSelectedLive') || $('#btnCheckSelectedLiveTop');
   const old = btn ? btn.textContent : '';
@@ -2155,7 +2455,7 @@ async function checkSelectedLive(idsArg = null, btnArg = null) {
 }
 
 async function deleteAccount(id, email, btn) {
-  if (!confirm(`确定删除账号 #${id}？\n\n${email || ''}\n\n会从本地账号列表、注册成功邮箱和 token 文件中移除。`)) return;
+  if (!await appConfirm(`确定删除账号 #${id}？\n\n${email || ''}\n\n会从本地账号列表、注册成功邮箱和 token 文件中移除。`)) return;
   btn.disabled = true;
   try {
     await api(`/api/accounts/${id}/delete`, { method:'POST', headers:{'Content-Type':'application/json'}, body: '{}' });
@@ -2172,7 +2472,7 @@ async function archiveOneAccount(id, archived, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   const email = acc?.email || '';
   const action = archived ? '归档' : '恢复';
-  if (!confirm(`确定${action}账号 #${id}？\n\n${email}\n\n${archived ? '归档后默认账号列表不会查询/显示它，可勾选“查看归档”单独查看。' : '恢复后会回到默认账号列表。'}`)) return;
+  if (!await appConfirm(`确定${action}账号 #${id}？\n\n${email}\n\n${archived ? '归档后默认账号列表不会查询/显示它，可勾选“查看归档”单独查看。' : '恢复后会回到默认账号列表。'}`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = `${action}中…`;
@@ -2197,7 +2497,7 @@ async function archiveSelectedAccounts() {
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const archived = !SHOW_ARCHIVED_ACCOUNTS;
   const action = archived ? '归档' : '恢复';
-  if (!confirm(`确定${action}选中的 ${ids.length} 个账号吗？\n\n${archived ? '归档后默认账号列表不会查询/显示这些账号，可勾选“查看归档”单独查看。' : '恢复后这些账号会回到默认账号列表。'}`)) return;
+  if (!await appConfirm(`确定${action}选中的 ${ids.length} 个账号吗？\n\n${archived ? '归档后默认账号列表不会查询/显示这些账号，可勾选“查看归档”单独查看。' : '恢复后这些账号会回到默认账号列表。'}`)) return;
   const btn = $('#btnArchiveSelectedAccounts');
   const old = btn.textContent;
   btn.disabled = true;
@@ -2223,7 +2523,7 @@ async function archiveSelectedAccounts() {
 async function deleteSelectedAccounts() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
-  if (!confirm(`确定删除选中的 ${ids.length} 个账号吗？\n\n会从本地账号列表、注册成功邮箱和 token 文件中移除。`)) return;
+  if (!await appConfirm(`确定删除选中的 ${ids.length} 个账号吗？\n\n会从本地账号列表、注册成功邮箱和 token 文件中移除。`)) return;
   $('#btnDeleteSelectedAccounts').disabled = true;
   try {
     const r = await api('/api/accounts/delete-bulk', {
@@ -2244,7 +2544,7 @@ async function deleteSelectedAccounts() {
 async function editAccountNote(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
-  const note = prompt(`设置账号备注（留空可清空）\n\n${acc.email || ('#' + id)}`, acc.note || '');
+  const note = await appPrompt(`设置账号备注（留空可清空）\n\n${acc.email || ('#' + id)}`, acc.note || '');
   if (note === null) return;
   if (note.length > 2000) { showToast('备注最多 2000 个字符'); return; }
   btn.disabled = true;
@@ -2265,7 +2565,7 @@ async function editAccountNote(id, btn) {
 async function noteSelectedAccounts() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const note = prompt(`给选中的 ${ids.length} 个账号设置统一备注（留空可清空）`, '');
+  const note = await appPrompt(`给选中的 ${ids.length} 个账号设置统一备注（留空可清空）`, '');
   if (note === null) return;
   if (note.length > 2000) { showToast('备注最多 2000 个字符'); return; }
   const btn = $('#btnNoteSelectedAccounts');
@@ -2285,6 +2585,33 @@ async function noteSelectedAccounts() {
   }
 }
 
+async function injectSelectedSessions() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  if (!await appConfirm(`确定为选中的 ${ids.length} 个账号植入登录状态吗？\n\n每个账号会启动一个新的本地指纹浏览器环境，随机使用代理池出口；成功后浏览器窗口保持打开。`)) return;
+  const btn = $('#btnInjectSelectedSessions');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '植入中…';
+  try {
+    const workers = Math.max(1, Math.min(8, Number($('#codexBulkWorkers')?.value || 3)));
+    const result = await api('/api/accounts/inject-session-bulk', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids, workers}),
+    });
+    const success = result.success || [];
+    const failed = result.failed || [];
+    const skipped = result.skipped || [];
+    showToast(`登录态植入完成：成功 ${success.length}，失败 ${failed.length + skipped.length}`);
+  } catch(err) {
+    showToast('植入登录状态失败: ' + err.message);
+  } finally {
+    btn.textContent = old;
+    updateAccountSelectionUi();
+  }
+}
+
 
 async function stopSelectedCodex() {
   const ids = Array.from(ACCOUNT_SELECTED);
@@ -2292,7 +2619,7 @@ async function stopSelectedCodex() {
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const retrying = selectedAccounts.filter(a => (a.codex_status || '') === 'retrying');
   if (retrying.length === 0) { showToast('选中账号里没有正在补跑的 Codex'); return; }
-  if (!confirm(`确定停止选中的 ${retrying.length} 个 Codex 补跑吗？\n\n会发送停止信号，并将状态标记为“已停止”。`)) return;
+  if (!await appConfirm(`确定停止选中的 ${retrying.length} 个 Codex 补跑吗？\n\n会发送停止信号，并将状态标记为“已停止”。`)) return;
   const btn = $('#btnStopSelectedCodex');
   btn.disabled = true;
   try {
@@ -2328,7 +2655,7 @@ async function retrySelectedCodex() {
   if (retryingCount || deactivatedCount) msg += `
 
 其中：补跑中 ${retryingCount} 个、已废号 ${deactivatedCount} 个会自动跳过。`;
-  if (!confirm(msg)) return;
+  if (!await appConfirm(msg)) return;
   const btn = $('#btnRetrySelectedCodex');
   btn.disabled = true;
   try {
@@ -2351,17 +2678,6 @@ async function retrySelectedCodex() {
 }
 
 $('#qAccounts').addEventListener('input', debounce(() => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); }, 250));
-$('#copyAllTokens').addEventListener('click', async () => {
-  const ids = ACCOUNTS.filter(r => r.has_access_token).map(r => Number(r.id));
-  if (!ids.length) { showToast('当前页没有 Token'); return; }
-  try { copyText((await fetchAccountSecrets(ids, 'access_token')).join('\n')); } catch(e) { showToast('复制失败: ' + e.message); }
-});
-$('#copyAllLines').addEventListener('click', async () => {
-  const ids = ACCOUNTS.map(r => Number(r.id));
-  if (!ids.length) { showToast('当前页没有账号'); return; }
-  try { copyText((await fetchAccountSecrets(ids, 'copy_line')).join('\n')); } catch(e) { showToast('复制失败: ' + e.message); }
-});
-
 // ---------- 邮箱池 ----------
 function poolKey(r) { return `${r.source || $('#poolSource')?.value || 'outlook'}|${r.email || ''}`; }
 function poolLabel(src) {
@@ -2463,7 +2779,7 @@ $('#outlookBody').addEventListener('click', async (e) => {
   const source = t.dataset.source || $('#poolSource').value;
   try {
     if (poolAct === 'delete') {
-      if (!confirm(`确定从邮箱池删除 ${email}？此操作不可撤销。`)) return;
+      if (!await appConfirm(`确定从邮箱池删除 ${email}？此操作不可撤销。`)) return;
       await api('/api/outlook/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, source}) });
       OUTLOOK_SELECTED.delete(`${source}|${email}`);
       showToast('已删除');
@@ -2494,7 +2810,7 @@ async function bulkMarkOutlookStatus(status) {
   if (items.length === 0) { showToast('请先选择邮箱'); return; }
   const labelMap = {available:'未使用/可用', disabled:'停用', failed:'失败'};
   const label = labelMap[status] || status;
-  if (!confirm(`确定把选中的 ${items.length} 个邮箱标记为${label}吗？`)) return;
+  if (!await appConfirm(`确定把选中的 ${items.length} 个邮箱标记为${label}吗？`)) return;
   const btn = status === 'disabled' ? $('#btnDisableSelectedOutlook') : status === 'failed' ? $('#btnFailSelectedOutlook') : $('#btnMarkSelectedOutlookAvailable');
   if (btn) btn.disabled = true;
   try {
@@ -2519,7 +2835,7 @@ async function deleteSelectedOutlook() {
     return {source, email: rest.join('|')};
   });
   if (items.length === 0) { showToast('请先选择邮箱'); return; }
-  if (!confirm(`确定从邮箱池删除选中的 ${items.length} 个邮箱吗？\n\n此操作不可撤销。`)) return;
+  if (!await appConfirm(`确定从邮箱池删除选中的 ${items.length} 个邮箱吗？\n\n此操作不可撤销。`)) return;
   $('#btnDeleteSelectedOutlook').disabled = true;
   try {
     const r = await api('/api/outlook/delete-bulk', {
@@ -2645,7 +2961,7 @@ $('#btnCodexDownloadBulk').addEventListener('click', async () => {
   const note = `选中 ${filenames.length} 个凭证，打包到一个 JSON 文件下载。\n\n` +
                `⚠ 这个聚合格式 CPA 不能直接读，主要用于备份/迁移。\n` +
                `要给 CPA 用请用每行的"下载 JSON"单个下载。\n\n继续？`;
-  if (!confirm(note)) return;
+  if (!await appConfirm(note)) return;
   $('#btnCodexDownloadBulk').disabled = true;
   try {
     const resp = await fetch('/api/codex/download-bulk', {
@@ -2683,7 +2999,7 @@ $('#btnCodexDownloadBulkCpa').addEventListener('click', async () => {
   const note = `选中 ${filenames.length} 个本地记录，将按邮箱到 CPA auth-files 查找并下载真实 Codex JSON。\n\n` +
                `下载结果会打包成 ZIP，解压后每个 JSON 可直接放入 CPA auth-dir。\n` +
                `如 CPA 中找不到对应邮箱，会在 zip 的 manifest.json 记录错误。\n\n继续？`;
-  if (!confirm(note)) return;
+  if (!await appConfirm(note)) return;
   const btn = $('#btnCodexDownloadBulkCpa');
   btn.disabled = true;
   try {
@@ -2719,7 +3035,7 @@ $('#btnCodexDownloadBulkCpa').addEventListener('click', async () => {
 $('#btnCodexDeleteBulk').addEventListener('click', async () => {
   if (CODEX_SELECTED.size === 0) return;
   const filenames = Array.from(CODEX_SELECTED);
-  if (!confirm(`确定删除选中的 ${filenames.length} 个 Codex 凭证吗？\n\n会删除本地 codex_accounts/ 下的 JSON 文件，并清理导出标记。此操作不可撤销。`)) return;
+  if (!await appConfirm(`确定删除选中的 ${filenames.length} 个 Codex 凭证吗？\n\n会删除本地 codex_accounts/ 下的 JSON 文件，并清理导出标记。此操作不可撤销。`)) return;
   $('#btnCodexDeleteBulk').disabled = true;
   try {
     const r = await api('/api/codex/delete-bulk', {
@@ -2775,7 +3091,7 @@ $('#codexBody').addEventListener('click', async (e) => {
   const del = e.target.closest('[data-codex-delete]');
   if (del) {
     const fname = del.dataset.codexDelete;
-    if (!confirm(`确定删除 Codex 凭证？\n\n${fname}\n\n会删除本地 JSON 文件，并清理导出标记。此操作不可撤销。`)) return;
+    if (!await appConfirm(`确定删除 Codex 凭证？\n\n${fname}\n\n会删除本地 JSON 文件，并清理导出标记。此操作不可撤销。`)) return;
     del.disabled = true;
     try {
       await api('/api/codex/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename: fname}) });
@@ -2791,7 +3107,7 @@ $('#codexBody').addEventListener('click', async (e) => {
   const rs = e.target.closest('[data-codex-reset]');
   if (rs) {
     const fname = rs.dataset.codexReset;
-    if (!confirm(`把 ${fname} 标记重置为未导出？`)) return;
+    if (!await appConfirm(`把 ${fname} 标记重置为未导出？`)) return;
     try {
       await api('/api/codex/reset-export', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({filename: fname}) });
       showToast('已重置');

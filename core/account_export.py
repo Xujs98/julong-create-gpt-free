@@ -10,11 +10,12 @@
 """
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
 import threading
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import pyotp
 
@@ -30,15 +31,21 @@ _BATCH_ARCHIVE_LOCK = threading.RLock()
 
 
 def _account_material_line(email: str, row: dict | None = None) -> str:
-    """优先输出 Outlook 原始素材；没有素材时退回邮箱地址。"""
-    if row:
-        return row.get("original_email_line") or row.get("email") or email
-    return email
+    """输出 邮箱----账号密码----2FA查看器；邮箱池凭据不混入账号密码。"""
+    row = row or {}
+    parts = [str(row.get("email") or email)]
+    password = str(row.get("registration_password") or "").strip()
+    secret = str(row.get("totp_secret") or "").strip()
+    if password:
+        parts.append(password)
+    if secret:
+        parts.append(f"https://2fa.fb.tools/{quote(secret, safe='')}")
+    return "----".join(parts)
 
 
 def _account_copy_line(material_line: str, access_token: str, totp_secret: str | None = None) -> str:
     """生成包含 token 的整行归档，方便从批次汇总文件里复制。"""
-    return f"{material_line}----{access_token}----{totp_secret}" if totp_secret else f"{material_line}----{access_token}"
+    return f"{material_line}----{access_token}" if access_token else material_line
 
 
 def create_batch_archive_dir(count: int, workers: int = 1) -> Path:
@@ -175,6 +182,100 @@ def fetch_session(session: BrowserSession) -> dict:
         f"plan={account.get('planType')}, mfa={user.get('mfa')}"
     )
     return data
+
+
+def browser_session_from_driver(driver, proxy: str | None = None) -> BrowserSession:
+    """把 Playwright/Selenium 浏览器登录态复制到协议会话，供注册后 2FA 使用。"""
+    session = BrowserSession(proxy=proxy, detect_exit_geo=False)
+    cookies = []
+    context = getattr(driver, "context", None)
+    page = getattr(driver, "page", None)
+    try:
+        if context is not None and callable(getattr(context, "cookies", None)):
+            cookies = list(context.cookies() or [])
+        elif page is not None and callable(getattr(getattr(page, "context", None), "cookies", None)):
+            cookies = list(page.context.cookies() or [])
+        elif callable(getattr(driver, "get_cookies", None)):
+            cookies = list(driver.get_cookies() or [])
+    except Exception:
+        session.session.close()
+        raise
+    if not cookies:
+        session.session.close()
+        raise RuntimeError("浏览器未返回可同步的登录 Cookie")
+
+    for item in cookies:
+        name = str(item.get("name") or "")
+        value = str(item.get("value") or "")
+        if not name:
+            continue
+        domain = str(item.get("domain") or "")
+        path = str(item.get("path") or "/") or "/"
+        session.session.cookies.set(name, value, domain=domain, path=path, secure=bool(item.get("secure")))
+        if name == "oai-did" and value:
+            session.device_id = value
+
+    try:
+        env = driver.execute_script(
+            "return {userAgent:navigator.userAgent,language:navigator.language,"
+            "languages:Array.from(navigator.languages || []),"
+            "acceptLanguage:navigator.languages?.join(',') || navigator.language,"
+            "platform:navigator.platform,vendor:navigator.vendor,"
+            "userAgentData:navigator.userAgentData ? navigator.userAgentData.toJSON() : null,"
+            "screenWidth:screen.width,screenHeight:screen.height,"
+            "devicePixelRatio:window.devicePixelRatio,"
+            "hardwareConcurrency:navigator.hardwareConcurrency,"
+            "deviceMemory:navigator.deviceMemory,"
+            "timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,"
+            "timezoneOffset:new Date().getTimezoneOffset()};"
+        ) or {}
+        if env.get("userAgent"):
+            user_agent = str(env["userAgent"])
+            session.browser_profile["user_agent"] = user_agent
+            # 让协议层 Chrome 版本与真实浏览器 UA 保持同一主版本/完整版本。
+            match = re.search(r"(?:Chrome|Chromium)/([0-9][0-9.]*)", user_agent)
+            if match:
+                full_version = match.group(1)
+                session.browser_profile["chrome_full_version"] = full_version
+                session.browser_profile["chrome_major"] = full_version.split(".", 1)[0]
+        if env.get("language"):
+            session.browser_profile["navigator_language"] = str(env["language"])
+        if env.get("languages"):
+            session.browser_profile["navigator_languages"] = [str(x) for x in env["languages"] if str(x)]
+        if env.get("acceptLanguage"):
+            session.browser_profile["accept_language"] = str(env["acceptLanguage"])
+        if env.get("platform"):
+            session.browser_profile["navigator_platform"] = str(env["platform"])
+        if env.get("vendor"):
+            session.browser_profile["navigator_vendor"] = str(env["vendor"])
+        ua_data = env.get("userAgentData") or {}
+        if ua_data.get("platform"):
+            session.browser_profile["user_agent_data_platform"] = str(ua_data["platform"])
+            session.browser_profile["sec_ch_ua_platform"] = f'"{ua_data["platform"]}"'
+        if "mobile" in ua_data:
+            session.browser_profile["sec_ch_ua_mobile"] = "?1" if ua_data["mobile"] else "?0"
+        if ua_data.get("brands"):
+            session.browser_profile["sec_ch_ua"] = ", ".join(
+                f'"{item.get("brand", "")}";v="{item.get("version", "")}"'
+                for item in ua_data["brands"]
+                if item.get("brand") and item.get("version")
+            )
+        runtime_map = {
+            "screenWidth": "screen_width",
+            "screenHeight": "screen_height",
+            "devicePixelRatio": "device_pixel_ratio",
+            "hardwareConcurrency": "hardware_concurrency",
+            "deviceMemory": "device_memory",
+            "timezone": "timezone_iana",
+            "timezoneOffset": "timezone_offset_minutes",
+        }
+        for source, target in runtime_map.items():
+            if env.get(source) is not None:
+                session.browser_profile[target] = env[source]
+    except Exception:
+        pass
+    logger.info("[2FA] 已从浏览器同步登录态：cookies=%s proxy=%s", len(cookies), "已配置" if session.proxy else "直连")
+    return session
 
 
 def _trigger_reauth(session: BrowserSession, email: str) -> str:
@@ -323,7 +424,12 @@ def _activate_totp(
     return True
 
 
-def setup_2fa(session: BrowserSession, email: str, otp_code: str | None = None) -> str:
+def setup_2fa(
+    session: BrowserSession,
+    email: str,
+    otp_code: str | None = None,
+    previous_otp: str | None = None,
+) -> str:
     """
     完整的 2FA 设置流程。
     会触发再发一份邮箱验证码：
@@ -334,6 +440,7 @@ def setup_2fa(session: BrowserSession, email: str, otp_code: str | None = None) 
         session: 已完成注册的会话
         email: 账号邮箱（用作 login_hint）
         otp_code: 邮箱验证码（None 则按上述策略获取）
+        previous_otp: 注册阶段已经使用过的邮箱验证码；自动取码时必须排除
 
     Returns:
         TOTP secret（Base32 字符串），可直接用于 pyotp.TOTP() 生成 6 位动态码
@@ -356,7 +463,14 @@ def setup_2fa(session: BrowserSession, email: str, otp_code: str | None = None) 
         if _email_cfg.USE_EMAIL_SERVICE:
             from core.email_provider import wait_for_otp
             logger.info("[2FA] 自动等待邮箱重认证 OTP...")
-            otp_code = wait_for_otp(email, after_ts=reauth_otp_after_ts)
+            excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
+            if excluded:
+                logger.info("[2FA] 排除注册阶段已使用 OTP，等待邮箱出现新验证码")
+            otp_code = wait_for_otp(
+                email,
+                after_ts=reauth_otp_after_ts,
+                exclude_codes=excluded,
+            )
         else:
             logger.info("")
             logger.info("[2FA] 请检查邮箱，输入新收到的 6 位验证码")
@@ -377,6 +491,21 @@ def setup_2fa(session: BrowserSession, email: str, otp_code: str | None = None) 
     logger.info(f"✅ 2FA 设置完成! Secret: {secret[:4]}...{secret[-4:]}")
     logger.info("=" * 60)
     return secret
+
+
+def setup_2fa_from_browser(
+    driver,
+    email: str,
+    proxy: str | None = None,
+    previous_otp: str | None = None,
+) -> str:
+    """复用当前浏览器登录 Cookie 和代理出口执行既有 2FA 流程。"""
+    session = browser_session_from_driver(driver, proxy=proxy)
+    try:
+        fetch_session(session)
+        return setup_2fa(session, email, previous_otp=previous_otp)
+    finally:
+        session.session.close()
 
 
 def save_account_data(

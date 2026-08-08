@@ -12,7 +12,7 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 
 > 项目说明：本项目基于 [xiaoguzuiniu/gpt-free-register](https://github.com/xiaoguzuiniu/gpt-free-register) 进行改造与扩展。
 
-- TG 交流群：[https://t.me/+gu_cvEKq_vcyZWRl](https://t.me/+gu_cvEKq_vcyZWRl)
+- 矩龙 API：[https://api.julongkj.top](https://api.julongkj.top)
 
 > 开源版说明：仓库只保留源码、配置模板和文档；运行时账号、Token、邮箱池、Codex 凭证、日志等真实数据均已通过 `.gitignore` 排除。
 
@@ -48,6 +48,7 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 - Cloudflare 域名邮箱 + QQ 邮箱 IMAP 收信（`cloudflare_domain`）
 - Cloudflare Worker 临时邮箱：自动创建 + JWT 取码（`cloudflare`，兼容 cloudflare_temp_email）
 - 通用 API 邮箱：`email----取码地址`
+- iCloud 邮箱池：`email----HTML取码地址`，自动读取页面中的六位验证码
 - GPTMail 临时邮箱 API：运行时随机生成邮箱并自动收取验证码
 - `EMAIL_SOURCE` 支持多个来源组合，例如：
 
@@ -188,6 +189,22 @@ EMAIL_SOURCE = "generic_api"
 EMAIL_SOURCE = "outlook,generic_api,mailnest"
 ```
 
+#### iCloud 邮箱池
+
+在 WebUI「邮箱池 → 导入」选择「iCloud 邮箱池」，每行格式：
+
+```text
+email@icloud.com----https://取码服务地址/token/email@icloud.com
+```
+
+取码地址应返回 HTML 页面；系统会轮询页面并提取最新六位验证码。然后在「配置 → 邮箱 / OTP → 通用邮箱 / OTP」把来源设为 `icloud`，或加入多来源组合：
+
+```python
+EMAIL_SOURCE = "outlook,icloud,generic_api"
+```
+
+「iCloud 邮箱」子页可设置单次 HTML 请求超时与 TLS 证书校验。
+
 #### GPTMail 临时邮箱
 
 在 WebUI 的「配置 → 邮箱 / OTP」填写 `GPTMail API Key`，然后将邮箱来源设置为：
@@ -299,6 +316,7 @@ CLOAK_TIMEZONE = ""             # 留空自动；也可强制如 Asia/Tokyo
 CLOAK_LICENSE_KEY = ""          # 留空使用免费 binary；填 Pro key 使用最新版
 CLOAK_FINGERPRINT_SEED = ""     # 留空每次随机；固定值=固定指纹
 CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 profile
+CLOAK_KEEP_BROWSER_OPEN_ON_ERROR = True  # 注册失败时保留窗口查看实际页面
 ```
 
 说明：
@@ -307,6 +325,20 @@ CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 pro
 - 如果你通过项目代理池使用代理，请在 `config/proxy.py` 的 `PROXY_POOL` 填写代理；如果你使用系统代理/VPN，也会按当前实际出口 IP 自动定位。
 - 免费版没有在项目侧限制窗口数；本项目每个注册任务会启动一个 CloakBrowser 实例，即一个实例一套指纹。
 - WebUI 中，`Codex授权驱动` 位于「CPA / Codex」分组，对应 `config/codex.py` 的 `CODEX_OAUTH_DRIVER`。
+
+#### 账号列表批量植入登录状态
+
+注册成功后，协议、RoxyBrowser、CloakBrowser 和 Browser Use 流程会把
+`https://chatgpt.com/api/auth/session` 的完整 JSON 与浏览器 cookies 一起保存到账号的
+`extra_json.session`。在 WebUI「账号列表」勾选一个或多个账号，点击「植入登录状态」即可：
+
+- 每个账号独立启动一个可见的 CloakBrowser 窗口；
+- 从 `PROXY_POOL` 独立随机选择代理，并生成新的指纹 seed；
+- 写入 cookies 后重新打开 ChatGPT，通过 `/api/auth/session` 校验 accessToken；
+- 校验成功的窗口保持打开，可直接继续使用；重复植入同一账号会先关闭旧窗口。
+
+旧账号若只有 accessToken、没有 `extra_json.session.cookies`，列表操作会标记为缺少浏览器
+cookies；重新完成一次注册即可生成可植入的登录态。
 
 #### 使用协议注册
 

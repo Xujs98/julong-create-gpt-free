@@ -186,7 +186,7 @@ def network_preflight(session: BrowserSession) -> None:
             raise last_exc if last_exc else RuntimeError(f"[预检] {label} 未完成")
 
 
-def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
+def follow_authorize(session: BrowserSession, authorize_url: str, *, allow_password_page: bool = False) -> str:
     """
     步骤4: 跟随 authorize URL 重定向。
     GET auth.openai.com/api/accounts/authorize?...
@@ -207,7 +207,9 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
             resp = session.get(authorize_url, headers=headers, allow_redirects=True)
             resp.raise_for_status()
             final_url = str(getattr(resp, "url", "") or "")
-            if "/api/accounts/user/register" in final_url or "/create-account/password" in final_url:
+            if not allow_password_page and (
+                "/api/accounts/user/register" in final_url or "/create-account/password" in final_url
+            ):
                 raise RuntimeError(f"[步骤4] 落入旧密码注册路径，已拒绝继续烧邮箱: {final_url}")
             logger.info(f"[步骤4] 重定向完成, 最终URL: {final_url}")
             return final_url
@@ -334,7 +336,7 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
 
 
 # ============================================================
-# 密码分支专用函数（已停用，保留作备用）
+# 密码分支专用函数：创建账号密码后继续邮箱 OTP 验证。
 # 当前 OpenAI 主流程：follow_authorize 自动跳到 /email-verification 并发 OTP，
 # 不再走密码注册路径。如未来需要恢复密码注册（点击"使用密码继续"按钮的分支），
 # 可参考下方实现解封即可。
@@ -405,6 +407,176 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
 #     logger.info("[步骤8] 触发发送邮箱验证码...")
 #     resp = session.get(url, headers=headers, allow_redirects=True)
 #     logger.info(f"[步骤8] 验证码发送请求完成, 状态码: {resp.status_code}")
+
+
+def get_create_account_page(session: BrowserSession) -> str:
+    """进入创建密码页，建立服务端 password signup 状态。"""
+    url = "https://auth.openai.com/create-account/password"
+    headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/email-verification")
+    headers["sec-fetch-site"] = "same-origin"
+    logger.info("[密码注册] 进入创建账号密码页")
+    resp = session.get(url, headers=headers, allow_redirects=True)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"创建密码页访问失败 status={resp.status_code}: {(resp.text or '')[:240]}")
+    final_url = str(getattr(resp, "url", "") or url)
+    if "/create-account/password" not in final_url:
+        raise RuntimeError(f"创建密码页状态未建立，实际落点: {final_url}")
+    logger.info("[密码注册] 创建密码页状态已建立")
+    return final_url
+
+
+def register_user_with_password(
+    session: BrowserSession,
+    email: str,
+    password: str,
+    sentinel_header: str,
+    so_header: str | None = None,
+) -> dict:
+    """提交邮箱和账号密码，返回邮箱 OTP 发送步骤。"""
+    url = "https://auth.openai.com/api/accounts/user/register"
+    headers = session.get_auth_headers(referer="https://auth.openai.com/create-account/password")
+    headers["openai-sentinel-token"] = sentinel_header
+    if so_header:
+        headers["openai-sentinel-so-token"] = so_header
+    body = json.dumps({"password": password, "username": email})
+    logger.info("[密码注册] 提交账号密码：%s", email)
+    resp = session.post(url, headers=headers, data=body)
+    if resp.status_code != 200:
+        logger.error("[密码注册] 提交失败 status=%s body=%s", resp.status_code, (resp.text or "")[:300])
+        resp.raise_for_status()
+    data = resp.json()
+    page = data.get("page") if isinstance(data, dict) else {}
+    page_type = str((page or {}).get("type") or "")
+    continue_url = str(data.get("continue_url") or "") if isinstance(data, dict) else ""
+    if not continue_url and page_type not in {"email_otp_send", "email_verification"}:
+        raise RuntimeError(f"密码注册响应缺少 OTP 后续步骤: {data}")
+    logger.info("[密码注册] 密码已提交，下一步=%s", page_type or continue_url or "email_otp_send")
+    return data
+
+
+def verify_login_password(session: BrowserSession, password: str) -> dict:
+    """协议提交已注册账号密码，返回下一步页面或 MFA 因子。"""
+    password = str(password or "").strip()
+    if not password:
+        raise ValueError("登录密码为空")
+    sentinel_resp = request_sentinel_token(session, "password_verify")
+    sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, "password_verify")
+    headers = session.get_auth_headers(referer="https://auth.openai.com/log-in/password")
+    headers["openai-sentinel-token"] = sentinel_header
+    if so_header:
+        headers["openai-sentinel-so-token"] = so_header
+    url = "https://auth.openai.com/api/accounts/password/verify"
+    logger.info("[协议登录] 提交保存的账号密码")
+    resp = session.post(url, headers=headers, data=json.dumps({"password": password}))
+    if resp.status_code != 200:
+        code = _extract_error_code(resp)
+        if code in _ACCOUNT_DEAD_CODES:
+            raise AccountUnusableError(f"账号已废（{code}）", error_code=code)
+        raise RuntimeError(f"协议密码校验失败 status={resp.status_code}: {(resp.text or '')[:300]}")
+    data = resp.json()
+    logger.info("[协议登录] 密码校验完成 page=%s", ((data.get("page") or {}).get("type") if isinstance(data, dict) else "-"))
+    return data if isinstance(data, dict) else {}
+
+
+def continue_authorize_with_email(session: BrowserSession, email: str) -> dict:
+    """协议提交登录邮箱，把 authorize 会话推进到密码、MFA 或邮箱验证步骤。"""
+    email = str(email or "").strip()
+    if not email:
+        raise ValueError("登录邮箱为空")
+    sentinel_resp = request_sentinel_token(session, "authorize_continue")
+    sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, "authorize_continue")
+    headers = session.get_auth_headers(referer="https://auth.openai.com/log-in")
+    headers["openai-sentinel-token"] = sentinel_header
+    if so_header:
+        headers["openai-sentinel-so-token"] = so_header
+    url = "https://auth.openai.com/api/accounts/authorize/continue"
+    body = {"username": {"kind": "email", "value": email}}
+    logger.info("[协议登录] 提交账号邮箱，推进到密码登录步骤：%s", email)
+    resp = session.post(url, headers=headers, data=json.dumps(body))
+    if resp.status_code not in (200, 204):
+        code = _extract_error_code(resp)
+        if code in _ACCOUNT_DEAD_CODES:
+            raise AccountUnusableError(f"账号已废（{code}）", error_code=code)
+        raise RuntimeError(f"协议邮箱提交失败 status={resp.status_code}: {(resp.text or '')[:300]}")
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def issue_mfa_challenge(session: BrowserSession, factor: dict, *, force_fresh: bool = False) -> dict:
+    """协议为指定 MFA 因子建立挑战；TOTP 也走该步骤保持服务端状态一致。"""
+    factor_id = str((factor or {}).get("id") or "").strip()
+    factor_type = str((factor or {}).get("factor_type") or (factor or {}).get("type") or "").strip()
+    if not factor_id or not factor_type:
+        raise ValueError(f"MFA 因子字段缺失: {factor}")
+    url = "https://auth.openai.com/api/accounts/mfa/issue_challenge"
+    headers = session.get_auth_headers(referer="https://auth.openai.com/mfa-challenge")
+    body = {
+        "id": factor_id,
+        "type": factor_type,
+        "force_fresh_challenge": bool(force_fresh),
+    }
+    metadata = factor.get("metadata") if isinstance(factor, dict) else None
+    if isinstance(metadata, dict) and metadata.get("mfa_request_id"):
+        body["mfa_request_id"] = metadata["mfa_request_id"]
+    logger.info("[协议登录] 发起 MFA challenge type=%s", factor_type)
+    resp = session.post(url, headers=headers, data=json.dumps(body))
+    if resp.status_code not in (200, 204):
+        raise RuntimeError(f"协议 MFA challenge 失败 status={resp.status_code}: {(resp.text or '')[:300]}")
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def verify_mfa_code(session: BrowserSession, factor: dict, code: str) -> dict:
+    """协议提交 TOTP/MFA 验证码，返回 OAuth continue_url 或下一页面。"""
+    factor_id = str((factor or {}).get("id") or "").strip()
+    factor_type = str((factor or {}).get("factor_type") or (factor or {}).get("type") or "").strip()
+    code = str(code or "").strip()
+    if not factor_id or not factor_type or not code:
+        raise ValueError(f"MFA 验证参数不完整: factor={factor}, code_present={bool(code)}")
+    body = {"id": factor_id, "type": factor_type, "code": code}
+    metadata = factor.get("metadata") if isinstance(factor, dict) else None
+    if isinstance(metadata, dict) and metadata.get("mfa_request_id"):
+        body["mfa_request_id"] = metadata["mfa_request_id"]
+    url = "https://auth.openai.com/api/accounts/mfa/verify"
+    headers = session.get_auth_headers(referer="https://auth.openai.com/mfa-challenge")
+    logger.info("[协议登录] 提交 MFA code type=%s", factor_type)
+    resp = session.post(url, headers=headers, data=json.dumps(body))
+    if resp.status_code != 200:
+        code_name = _extract_error_code(resp)
+        if code_name in _ACCOUNT_DEAD_CODES:
+            raise AccountUnusableError(f"账号已废（{code_name}）", error_code=code_name)
+        raise RuntimeError(f"协议 MFA 验证失败 status={resp.status_code}: {(resp.text or '')[:300]}")
+    data = resp.json()
+    return data if isinstance(data, dict) else {}
+
+
+def extract_totp_factor(payload: dict) -> dict | None:
+    """从密码校验响应的多种页面包装结构中提取 TOTP 因子。"""
+    candidates: list[dict] = []
+    if isinstance(payload, dict):
+        candidates.append(payload)
+        page = payload.get("page")
+        if isinstance(page, dict):
+            candidates.append(page)
+            if isinstance(page.get("payload"), dict):
+                candidates.append(page["payload"])
+        for key in ("oai-client-auth-session", "oai_client_auth_session", "session"):
+            if isinstance(payload.get(key), dict):
+                candidates.append(payload[key])
+    for candidate in candidates:
+        factors = candidate.get("mfa_factors") or candidate.get("factors") or []
+        if not isinstance(factors, list):
+            continue
+        for factor in factors:
+            if isinstance(factor, dict) and str(factor.get("factor_type") or factor.get("type") or "").lower() == "totp":
+                return factor
+    return None
 
 
 def navigate_about_you(session: BrowserSession, about_url: str | None = None) -> str:

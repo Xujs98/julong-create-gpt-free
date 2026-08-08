@@ -12,6 +12,7 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 
 from config import roxybrowser as _cfg
+from core.proxy_utils import masked_proxy_url, normalize_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,7 @@ def _join_url(base: str, path: str) -> str:
 
 
 def _mask_proxy(proxy_url: str) -> str:
-    parsed = urlparse(str(proxy_url or "").strip())
-    if parsed.username or parsed.password:
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        return f"{parsed.scheme}://***:***@{host}{port}"
-    return str(proxy_url or "").strip()
+    return masked_proxy_url(proxy_url)
 
 
 def _proxy_url_to_roxy_info(proxy_url: str) -> dict:
@@ -53,7 +49,7 @@ def _proxy_url_to_roxy_info(proxy_url: str) -> dict:
       socks5://user:pass@host:port
       socks5h://user:pass@host:port  -> Roxy 侧按 SOCKS5 处理
     """
-    text = str(proxy_url or "").strip()
+    text = normalize_proxy_url(proxy_url, default_scheme="auto") or ""
     if not text:
         raise ValueError("代理为空")
     parsed = urlparse(text)

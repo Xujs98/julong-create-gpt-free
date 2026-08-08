@@ -25,6 +25,7 @@ from core.account_export import save_account_data
 from core.browser_use_client import BrowserUseClient
 from core.email_provider import resolve_email_source, wait_for_otp
 from core.humanize import delay as human_delay
+from core.session_state import build_saved_session, capture_browser_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,44 @@ def _registration_password() -> str:
     except Exception:
         pass
     return _generate_password()
+
+
+def _create_password_enabled() -> bool:
+    try:
+        from config import register as _register_cfg
+        return bool(getattr(_register_cfg, "ENABLE_CREATE_PASSWORD", False))
+    except Exception:
+        return False
+
+
+def _require_password_if_enabled(password: str | None, email: str) -> None:
+    """开关开启时拒绝把未设置密码的浏览器注册标记为成功。"""
+    if _create_password_enabled() and not str(password or "").strip():
+        raise RuntimeError(
+            f"创建密码已启用，但 BrowserUse 注册未检测到创建密码页：{email}；"
+            "请检查该邮箱是否已注册或页面是否仍停留在邮箱 OTP 流程"
+        )
+
+
+def _needs_email_otp_after_password(page, initial_state: str, password_set: bool, context=None, timeout: int = 8) -> bool:
+    """Only fetch mailbox OTP when the post-password page explicitly requires it."""
+    if initial_state == "email_verification":
+        return True
+    if initial_state in ("profile", "chatgpt"):
+        return False
+    if not password_set:
+        return True
+
+    end = time.time() + timeout
+    while time.time() < end:
+        page = _browser_use_heartbeat(page, context=context, label="post-password-state")
+        state = str(_quick_auth_state(page).get("state") or "other")
+        if state == "email_verification":
+            return True
+        if state in ("profile", "chatgpt"):
+            return False
+        time.sleep(0.2 if _fast_mode() else 0.5)
+    return True
 
 
 def _timeout_ms(seconds: int | None = None) -> int:
@@ -614,7 +653,8 @@ def _fill_password_if_present(page, email: str, timeout: int = 25, context=None)
                 return None
             time.sleep(0.15 if _fast_mode() else 0.4)
             continue
-        if _click_passwordless_signup_if_present(page):
+        create_password = _create_password_enabled()
+        if (state == "login_password" or not create_password) and _click_passwordless_signup_if_present(page):
             logger.info("[BrowserUse] 检测到密码页，已点击一次性验证码入口：state=%s email=%s", state, email)
             wait_end = time.time() + 20
             while time.time() < wait_end:
@@ -876,13 +916,16 @@ def _wait_after_otp(page, timeout: int = 12) -> str:
 
 def _fill_birthday_fields(page, birthday: str) -> None:
     # birthday: YYYY-MM-DD
+    from core.profile_utils import validate_registration_birthday, calculate_age
+    birthday = validate_registration_birthday(birthday)
     try:
         year, month, day = [int(x) for x in birthday.split("-")]
     except Exception as exc:
         raise RuntimeError(f"生日格式应为 YYYY-MM-DD: {birthday}") from exc
 
     # 年龄数字页
-    age = max(18, min(60, 2026 - year))
+    # 使用当前日期计算周岁，且最低值固定为 19，满足严格大于 18 岁。
+    age = min(60, calculate_age(birthday))
     if _fill_first(
         page,
         [
@@ -1029,12 +1072,14 @@ def _fill_spinbutton_birthday(page, birthday: str) -> bool:
 
 def _js_complete_profile(page, name: str, birthday: str) -> dict:
     """JS 兜底处理 about-you/profile：填 name/age/生日/checkbox 并提交。"""
+    from core.profile_utils import validate_registration_birthday, calculate_age
+    birthday = validate_registration_birthday(birthday)
     try:
         year, month, day = [int(x) for x in birthday.split("-")]
     except Exception:
         year, month, day = 1995, 1, 1
     today = date.today()
-    age = max(18, min(60, today.year - year - ((today.month, today.day) < (month, day))))
+    age = min(60, calculate_age(birthday, today=today))
     script = r"""
     ({name, birthday, year, month, day, age}) => {
       const month2 = String(month).padStart(2, '0');
@@ -1713,7 +1758,7 @@ def run_browser_use_registration(
             # OpenAI 可能在点击提交后立刻发 OTP，甚至邮件 ReceivedDateTime 早于 Playwright
             # 点击函数返回的本地时间；先记录时间戳，配合 _is_after 的时钟容忍，避免过滤掉首次验证码。
             otp_after_ts = time.time()
-            _submit_email_until_transition(page, context, email, attempts=2, timeout_ms=20000)
+            email_next_state = _submit_email_until_transition(page, context, email, attempts=2, timeout_ms=20000)
             _t_email.done()
             logger.info("[BrowserUse] 已提交邮箱：%s", email)
             _assert_not_external_idp(page, "提交邮箱后")
@@ -1726,6 +1771,7 @@ def run_browser_use_registration(
             except Exception as exc:
                 _t_pwd.done(f"failed={type(exc).__name__}: {str(exc)[:160]}")
                 raise
+            _require_password_if_enabled(openai_password, email)
             _check_manual_stop()
 
             def _restart_email_otp_flow(reason: str) -> None:
@@ -1770,7 +1816,15 @@ def run_browser_use_registration(
                     logger.warning("[BrowserUse][OTP] 重新触发邮箱 OTP 失败，继续按当前页面处理：%s: %s", type(restart_exc).__name__, str(restart_exc)[:180])
 
             current_otp = otp_code
-            max_otp_attempts = 3
+            needs_email_otp = _needs_email_otp_after_password(
+                page,
+                email_next_state,
+                password_set=bool(openai_password),
+                context=context,
+            )
+            max_otp_attempts = 3 if needs_email_otp else 0
+            if not needs_email_otp:
+                logger.info("[BrowserUse][OTP] 密码提交后已进入资料页/登录态，跳过邮箱 URL 取码")
             for otp_attempt in range(1, max_otp_attempts + 1):
                 # 等验证码页出现
                 wait_end = time.time() + (20 if _fast_mode() else 45)
@@ -1850,6 +1904,8 @@ def run_browser_use_registration(
                 raise RuntimeError("注册流程结束但未拿到 accessToken")
             create_acknowledged = True
             logger.info("[BrowserUse] 已拿到 accessToken：%s", email)
+            # 在后置 Codex/2FA 可能关闭或清理远端浏览器前，冻结本次注册的完整登录态。
+            saved_session = build_saved_session(session_info, capture_browser_cookies(page))
 
             if _twofa_cfg.ENABLE_2FA:
                 logger.warning("[BrowserUse] 当前路径暂不自动设置 2FA，已跳过")
@@ -1904,6 +1960,7 @@ def run_browser_use_registration(
                     "user": session_info.get("user"),
                     "account": session_info.get("account"),
                     "expires": session_info.get("expires"),
+                    "session": saved_session,
                     provider_prefix: {
                         "proxy_country_code": session_info_open.proxy_country_code,
                         "profile_id": session_info_open.profile_id,

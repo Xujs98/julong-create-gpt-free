@@ -38,16 +38,18 @@ class GPTMailWebUiTests(unittest.TestCase):
         submit_registration.assert_called_once_with(count=1, workers=1)
 
     @patch("webui.app.db.domain_email_pool_summary", return_value={"total": 0, "available": 0, "used": 0, "failed": 0})
+    @patch("webui.app.db.icloud_email_pool_summary", return_value={"total": 0, "available": 0, "used": 0, "failed": 0})
+    @patch("webui.app.db.generic_api_email_pool_summary", return_value={"total": 0, "available": 0, "used": 0, "failed": 0})
     @patch("webui.app.db.outlook_pool_summary")
     @patch("webui.app.db.count_accounts", return_value=0)
-    def test_summary_does_not_count_gptmail_as_outlook_pool(self, count_accounts, outlook_pool_summary, domain_pool_summary):
+    def test_summary_does_not_count_gptmail_as_local_pool(self, count_accounts, outlook_pool_summary, *_pool_summaries):
         outlook_pool_summary.return_value = {"total": 0, "available": 0, "used": 0, "failed": 0}
         with patch.object(email_config, "EMAIL_SOURCE", "gptmail"):
             response = self.client.get("/api/summary")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["outlook_total"], 0)
-        outlook_pool_summary.assert_not_called()
+        outlook_pool_summary.assert_called_once_with()
 
     @patch("webui.app.svc.submit_registration")
     def test_jobs_rejects_mailnest_without_api_key_before_creating_tasks(self, submit_registration):

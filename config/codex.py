@@ -53,7 +53,7 @@ ENABLE_CODEX_AUTO: bool = False
 #   "cloak"       = 调用 CloakBrowser 完成授权页面/手机验证/回调捕获
 #   "browser_use" = 调用 Browser Use Cloud 完成授权页面/手机验证/回调捕获
 #   "same_as_registration" = 跟随 REGISTRATION_DRIVER
-CODEX_OAUTH_DRIVER: str = "roxy"
+CODEX_OAUTH_DRIVER: str = "same_as_registration"
 
 
 
@@ -66,7 +66,7 @@ CODEX_OAUTH_DRIVER: str = "roxy"
 #   "cpa"   = 通过 CPA 管理接口 /v0/management/codex-auth-url 生成（推荐）
 #   "sub2"  = 通过 sub2 管理接口生成，并把 callback 上传到 sub2
 #   "local" = 使用本模块保留的本地 PKCE 生成逻辑（兼容旧方案）
-CODEX_AUTH_URL_SOURCE: str = "cpa"
+CODEX_AUTH_URL_SOURCE: str = "local"
 
 # CPA 管理页面或服务地址，例如 http://localhost:8317/admin/oauth
 # 实际请求会取 origin，调用：

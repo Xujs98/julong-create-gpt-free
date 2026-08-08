@@ -4,13 +4,27 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from config import cloakbrowser as _cfg
+from core.proxy_utils import masked_proxy_url, normalize_proxy_url
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_cloak_launch_identity() -> tuple[str, str]:
+    """解析本次启动的指纹 seed 与用户目录；默认每次使用全新临时画像。"""
+    randomize = bool(getattr(_cfg, "CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH", True))
+    configured_seed = str(getattr(_cfg, "CLOAK_FINGERPRINT_SEED", "") or "").strip()
+    configured_user_data_dir = str(getattr(_cfg, "CLOAK_USER_DATA_DIR", "") or "").strip()
+    if randomize:
+        # Cloak 的 fingerprint 参数接受字符串；使用高熵十进制 seed，避免相邻任务复用画像。
+        seed = str(secrets.randbelow(2_147_483_646) + 1)
+        return seed, ""
+    return configured_seed, configured_user_data_dir
 
 
 @dataclass
@@ -76,6 +90,14 @@ class CloakElement:
             self.page.keyboard.press("Meta+A")
             self.page.keyboard.press("Backspace")
 
+    def fill(self, value: str) -> None:
+        """原子设置受控输入框，避免逐字符输入时 React 重渲染移动光标。"""
+        value = str(value or "")
+        if self.locator is not None:
+            self.locator.fill(value, timeout=10000)
+        else:
+            self.handle.fill(value, timeout=10000)
+
     @property
     def tag_name(self) -> str:
         try:
@@ -98,11 +120,28 @@ class CloakElement:
             except Exception:
                 self.page.keyboard.press("Control+A")
             return
+        special_keys = {
+            "\ue003": "Backspace",
+            "\ue004": "Tab",
+            "\ue006": "Enter",
+            "\ue007": "Enter",
+            "\ue00c": "Escape",
+            "\ue017": "Delete",
+        }
+        if text in special_keys:
+            self.page.keyboard.press(special_keys[text])
+            return
         try:
             if self.locator is not None:
-                self.locator.fill(text, timeout=10000)
+                try:
+                    self.locator.press_sequentially(text, delay=35, timeout=10000)
+                except AttributeError:
+                    self.locator.type(text, delay=35, timeout=10000)
             else:
-                self.handle.fill(text, timeout=10000)
+                try:
+                    self.handle.press_sequentially(text, delay=35)
+                except AttributeError:
+                    self.handle.type(text, delay=35)
         except Exception:
             self.page.keyboard.type(text, delay=35)
 
@@ -126,15 +165,17 @@ class _SwitchTo:
 class CloakSeleniumDriver:
     """只实现本项目 Roxy Selenium 流程实际用到的 WebDriver 子集。"""
 
-    def __init__(self, browser: Any, context: Any | None, page: Any):
+    def __init__(self, browser: Any, context: Any | None, page: Any, proxy_bridge: Any | None = None):
         self.browser = browser
         self.context = context
         self.page = page
+        self.proxy_bridge = proxy_bridge
         self._page_load_timeout_ms = int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90) * 1000
         self.switch_to = _SwitchTo(self)
 
     @property
     def current_url(self) -> str:
+        self._ensure_live_page()
         return str(getattr(self.page, "url", "") or "")
 
     @property
@@ -157,6 +198,27 @@ class CloakSeleniumDriver:
         except Exception:
             return [self.page]
 
+    @staticmethod
+    def _page_is_closed(page: Any) -> bool:
+        """兼容 Playwright Page.is_closed；Selenium/Mock 页面按未关闭处理。"""
+        try:
+            return page.is_closed() is True
+        except Exception:
+            return False
+
+    def _ensure_live_page(self) -> None:
+        """Cloudflare 验证后若旧 Page 被导航关闭，自动切到当前活动页面。"""
+        if not self._page_is_closed(self.page):
+            return
+        pages = [page for page in self._pages() if not self._page_is_closed(page)]
+        if not pages:
+            return
+        self.page = pages[-1]
+        try:
+            self.page.bring_to_front()
+        except Exception:
+            pass
+
     def _switch_window(self, handle: str) -> None:
         pages = self._pages()
         idx = int(handle)
@@ -175,6 +237,7 @@ class CloakSeleniumDriver:
             pass
 
     def get(self, url: str) -> None:
+        self._ensure_live_page()
         self.page.goto(url, wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
 
     def back(self) -> None:
@@ -182,6 +245,34 @@ class CloakSeleniumDriver:
 
     def refresh(self) -> None:
         self.page.reload(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
+
+    def delete_all_cookies(self) -> None:
+        """清空当前指纹环境 cookies。"""
+        try:
+            if self.context is not None:
+                self.context.clear_cookies()
+        except Exception:
+            pass
+
+    def get_cookies(self, urls: list[str] | None = None) -> list[dict]:
+        """读取当前指纹环境 cookies，兼容 Playwright Context。"""
+        try:
+            if self.context is not None:
+                return list(self.context.cookies(urls or ["https://chatgpt.com/"]) or [])
+        except TypeError:
+            try:
+                return list(self.context.cookies() or [])
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return []
+
+    def add_cookie(self, cookie: dict) -> None:
+        """向当前指纹环境写入单个 cookie。"""
+        if self.context is None:
+            raise RuntimeError("CloakBrowser 当前没有可用 browser context")
+        self.context.add_cookies([cookie])
 
     def quit(self) -> None:
         try:
@@ -193,8 +284,15 @@ class CloakSeleniumDriver:
             self.browser.close()
         except Exception:
             pass
+        try:
+            if self.proxy_bridge is not None:
+                self.proxy_bridge.close()
+                self.proxy_bridge = None
+        except Exception:
+            pass
 
     def find_elements(self, by: Any, selector: str) -> list[CloakElement]:
+        self._ensure_live_page()
         loc = self._locator(by, selector)
         try:
             count = min(int(loc.count()), 200)
@@ -215,9 +313,11 @@ class CloakSeleniumDriver:
         return self.page.locator(selector)
 
     def execute_script(self, script: str, *args: Any) -> Any:
+        self._ensure_live_page()
         return self._evaluate(script, args=args, async_mode=False)
 
     def execute_async_script(self, script: str, *args: Any) -> Any:
+        self._ensure_live_page()
         return self._evaluate(script, args=args, async_mode=True)
 
     def execute_cdp_cmd(self, cmd: str, params: dict | None = None) -> Any:
@@ -317,10 +417,11 @@ class CloakSeleniumDriver:
 
 
 def _normalize_proxy(proxy: str | None) -> str | None:
-    proxy = str(proxy or "").strip()
-    if not proxy:
-        return None
-    return proxy.replace("socks5h://", "socks5://")
+    """兼容代理池的四段格式，并转换为 CloakBrowser 接受的 URL。"""
+    normalized = normalize_proxy_url(proxy, default_scheme="auto")
+    if normalized and normalized.lower().startswith("socks5://"):
+        return f"socks5h://{normalized.split('://', 1)[1]}"
+    return normalized
 
 
 def _detect_cloak_exit_geo(proxy_url: str | None = None) -> dict:
@@ -392,12 +493,17 @@ def _build_cloak_locale_options(proxy_url: str | None = None) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
-def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, CloakOpenResult]:
+def build_cloak_driver(
+    proxy: str | None = None,
+    *,
+    headless: bool | None = None,
+) -> tuple[CloakSeleniumDriver, CloakOpenResult]:
     """启动 CloakBrowser 并返回 Selenium 风格 driver。
 
     proxy=None  时按 config.proxy.PROXY_POOL 随机抽取；
     proxy=""    时显式禁用代理；
     proxy="..." 时使用指定代理。
+    headless=None 使用配置值；显式传 False 可保证登录态植入打开可见窗口。
     """
     if proxy is None and bool(getattr(_cfg, "CLOAK_USE_PROXY", True)):
         try:
@@ -410,18 +516,28 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     except ImportError as exc:
         raise RuntimeError("未安装 cloakbrowser，请执行：pip install cloakbrowser") from exc
 
-    launch_args = list(getattr(_cfg, "CLOAK_EXTRA_ARGS", []) or [])
-    seed = str(getattr(_cfg, "CLOAK_FINGERPRINT_SEED", "") or "").strip()
+    launch_args = [
+        str(arg) for arg in (getattr(_cfg, "CLOAK_EXTRA_ARGS", []) or [])
+        if not str(arg).startswith("--fingerprint=")
+    ]
+    seed, user_data_dir = _resolve_cloak_launch_identity()
     if seed:
         launch_args.append(f"--fingerprint={seed}")
 
     proxy_url = _normalize_proxy(proxy) if bool(getattr(_cfg, "CLOAK_USE_PROXY", True)) else None
     locale_opts = _build_cloak_locale_options(proxy_url)
+    browser_proxy_url = proxy_url
+    proxy_bridge = None
+    if proxy_url:
+        from core.socks_bridge import AuthenticatedSocksBridge, needs_authenticated_socks_bridge
+        if needs_authenticated_socks_bridge(proxy_url):
+            proxy_bridge = AuthenticatedSocksBridge(proxy_url).start()
+            browser_proxy_url = proxy_bridge.proxy_url
     # geoip=True 交给 CloakBrowser 根据当前出口 IP 自动匹配 timezone/locale/WebRTC。
     # 之前只有显式 proxy_url 时才开启；如果用户走系统代理/VPN/透明代理，代码层面
     # 看不到 proxy_url，会误关 geoip，导致语言/时区不跟随出口。这里改为完全尊重配置。
     opts = {
-        "headless": bool(getattr(_cfg, "CLOAK_HEADLESS", False)),
+        "headless": bool(getattr(_cfg, "CLOAK_HEADLESS", False)) if headless is None else bool(headless),
         "humanize": bool(getattr(_cfg, "CLOAK_HUMANIZE", True)),
         "geoip": bool(getattr(_cfg, "CLOAK_GEOIP", True)),
     }
@@ -429,42 +545,64 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         opts["locale"] = locale_opts["locale"]
     if locale_opts.get("timezone"):
         opts["timezone"] = locale_opts["timezone"]
-    if proxy_url:
-        opts["proxy"] = proxy_url
+    if browser_proxy_url:
+        opts["proxy"] = browser_proxy_url
     if launch_args:
         opts["args"] = launch_args
     license_key = str(getattr(_cfg, "CLOAK_LICENSE_KEY", "") or "").strip()
     if license_key:
         opts["license_key"] = license_key
 
-    user_data_dir = str(getattr(_cfg, "CLOAK_USER_DATA_DIR", "") or "").strip()
+    randomize_fingerprint = bool(getattr(_cfg, "CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH", True))
     logger.info(
-        "[Cloak] 启动 CloakBrowser：headless=%s humanize=%s geoip=%s proxy=%s locale=%s timezone=%s accept_language=%s persistent=%s",
+        "[Cloak] 启动 CloakBrowser：headless=%s humanize=%s geoip=%s proxy=%s locale=%s timezone=%s accept_language=%s random_fingerprint=%s fingerprint_seed_tail=%s persistent=%s",
         opts.get("headless"), opts.get("humanize"), opts.get("geoip"),
-        proxy_url or "无", opts.get("locale") or "自动/默认", opts.get("timezone") or "自动/默认",
-        locale_opts.get("accept_language") or "自动/默认", bool(user_data_dir),
+        masked_proxy_url(proxy_url) or "无", opts.get("locale") or "自动/默认", opts.get("timezone") or "自动/默认",
+        locale_opts.get("accept_language") or "自动/默认", randomize_fingerprint,
+        seed[-6:] if seed else "自动/默认", bool(user_data_dir),
     )
+    if randomize_fingerprint and str(getattr(_cfg, "CLOAK_USER_DATA_DIR", "") or "").strip():
+        logger.info("[Cloak] 每次随机指纹已开启，本次使用临时上下文，不复用配置中的用户目录")
     context_kwargs = {}
     if locale_opts.get("locale"):
         context_kwargs["locale"] = locale_opts["locale"]
-    if locale_opts.get("timezone"):
+    # CloakBrowser 已通过 --fingerprint-timezone 注入时区；再把同一值传给
+    # Playwright context 会在当前二进制上触发冲突，导致 Intl 时区回退到宿主机。
+    # 仅在启动参数没有时区时使用 context fallback，保持各版本兼容。
+    if locale_opts.get("timezone") and not opts.get("timezone"):
         context_kwargs["timezone_id"] = locale_opts["timezone"]
     if locale_opts.get("accept_language"):
         context_kwargs["extra_http_headers"] = {"Accept-Language": locale_opts["accept_language"]}
 
-    if user_data_dir:
-        context = launch_persistent_context(user_data_dir, **opts)
-        page = context.new_page()
-        browser = getattr(context, "browser", None) or context
-        # persistent context 的 locale/timezone 已通过 launch_persistent_context 参数传入。
-    else:
-        browser = launch(**opts)
-        context = browser.new_context(**context_kwargs)
-        page = context.new_page()
+    try:
+        if user_data_dir:
+            context = launch_persistent_context(user_data_dir, **opts)
+            page = context.new_page()
+            browser = getattr(context, "browser", None) or context
+            # persistent context 的 locale/timezone 已通过 launch_persistent_context 参数传入。
+        else:
+            browser = launch(**opts)
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+    except Exception:
+        if proxy_bridge is not None:
+            proxy_bridge.close()
+        raise
 
-    driver = CloakSeleniumDriver(browser=browser, context=context, page=page)
+    driver = CloakSeleniumDriver(browser=browser, context=context, page=page, proxy_bridge=proxy_bridge)
+    driver.upstream_proxy_url = proxy_url
     # Roxy/Cloak 共用部分页面操作函数；给共享函数一个显式日志前缀，
     # 避免 Cloak 注册流程里出现 `[Roxy注册]`。
     driver._registration_log_prefix = "[Cloak注册]"
     driver.set_page_load_timeout(int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90))
-    return driver, CloakOpenResult(raw={"driver": "cloakbrowser", "proxy": proxy_url, "locale": locale_opts, "options": {k: v for k, v in opts.items() if k != "license_key"}})
+    return driver, CloakOpenResult(raw={
+        "driver": "cloakbrowser",
+        "proxy": masked_proxy_url(proxy_url),
+        "proxy_bridge": bool(proxy_bridge),
+        "locale": locale_opts,
+        "headless_override": headless is not None,
+        "random_fingerprint": randomize_fingerprint,
+        "fingerprint_seed_tail": seed[-6:] if seed else "",
+        "persistent": bool(user_data_dir),
+        "options": {k: v for k, v in opts.items() if k not in {"license_key", "proxy"}},
+    })

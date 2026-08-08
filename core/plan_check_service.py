@@ -12,6 +12,7 @@ from datetime import datetime
 from config import proxy as proxy_cfg
 from core import db
 from core.chatgpt_plan import check_account_plan
+from core.session_state import extract_saved_session
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,45 @@ def _registration_recheck_delay() -> float:
     return _float_setting("PLAN_CHECK_REGISTRATION_RECHECK_DELAY", 2.0, 0.0, 30.0)
 
 
+def _check_plan_with_account_context(
+    account: dict,
+    token: str,
+    *,
+    proxy: str | None,
+    timezone_offset_min: str,
+    max_attempts: int | None = None,
+) -> dict:
+    """使用账号保存的 device_id 与 Session Cookie 查询套餐，避免随机新环境触发 401。"""
+    saved_session = extract_saved_session(account) or {}
+    return check_account_plan(
+        token,
+        proxy=proxy,
+        timezone_offset_min=timezone_offset_min,
+        max_attempts=max_attempts,
+        account_id=str(account.get("account_id") or "") or None,
+        device_id=str(account.get("device_id") or "") or None,
+        session_cookies=list(saved_session.get("cookies") or []),
+    )
+
+
+def _refresh_login_for_plan(account: dict, *, proxy: str | None) -> dict | None:
+    """套餐接口认证失败时，对有保存密码的账号执行一次协议查活并返回最新登录态。"""
+    if not str(account.get("registration_password") or "").strip():
+        return None
+    from core.account_liveness import check_account_liveness
+
+    email = str(account.get("email") or "").strip()
+    logger.info("[Plan] 套餐接口认证失败，使用保存密码协议刷新登录态后重试：%s", email)
+    result = check_account_liveness(
+        email,
+        proxy=proxy,
+        clear_log=False,
+        account=account,
+    )
+    db.update_account_liveness(int(account.get("id") or 0), result)
+    return result
+
+
 def _run_plan_check(
     *,
     account_id: int,
@@ -71,12 +111,56 @@ def _run_plan_check(
         if not db.mark_account_plan_check_running(account_id):
             return {"ok": False, "error": "账号已删除或套餐查询状态已被重置"}
 
+        # 任务可能在队列中等待；执行时重新读取数据库，始终使用查活刚刷新的最新 AT。
+        account = db.get_account(account_id) or {}
+        current_token = str(account.get("access_token") or access_token or "").strip()
         _wait_for_rate_slot()
-        result = check_account_plan(
-            access_token,
+        result = _check_plan_with_account_context(
+            account,
+            current_token,
             proxy=proxy,
             timezone_offset_min=timezone_offset_min,
         )
+
+        if result.get("needs_live_check") or result.get("token_expired") is True:
+            # 查活与套餐查询并发时，先检查数据库是否已经写入另一枚新 AT。
+            latest_account = db.get_account(account_id) or account
+            latest_token = str(latest_account.get("access_token") or "").strip()
+            if latest_token and latest_token != current_token:
+                logger.info("[Plan] 检测到查活已写入新 AT，直接使用最新 AT 重试：%s", email)
+                _wait_for_rate_slot()
+                result = _check_plan_with_account_context(
+                    latest_account,
+                    latest_token,
+                    proxy=proxy,
+                    timezone_offset_min=timezone_offset_min,
+                    max_attempts=1,
+                )
+                current_token = latest_token
+                account = latest_account
+
+        if result.get("needs_live_check") or result.get("token_expired") is True:
+            live_result = _refresh_login_for_plan(account, proxy=proxy)
+            if live_result and live_result.get("ok") and live_result.get("access_token"):
+                refreshed_account = db.get_account(account_id) or {
+                    **account,
+                    "access_token": live_result.get("access_token"),
+                    "device_id": live_result.get("device_id") or account.get("device_id"),
+                }
+                _wait_for_rate_slot()
+                result = _check_plan_with_account_context(
+                    refreshed_account,
+                    str(live_result.get("access_token") or ""),
+                    proxy=proxy,
+                    timezone_offset_min=timezone_offset_min,
+                    max_attempts=1,
+                )
+                result["live_refresh_performed"] = True
+                current_token = str(live_result.get("access_token") or "")
+                account = refreshed_account
+            elif live_result:
+                result["live_refresh_performed"] = True
+                result["live_refresh_error"] = live_result.get("error") or "协议刷新登录态失败"
 
         recheck_delay = _registration_recheck_delay()
         should_recheck = (
@@ -91,10 +175,13 @@ def _run_plan_check(
             time.sleep(recheck_delay)
             _wait_for_rate_slot()
             recheck_result = check_account_plan(
-                access_token,
+                current_token,
                 proxy=proxy,
                 timezone_offset_min=timezone_offset_min,
                 max_attempts=1,
+                account_id=str(account.get("account_id") or "") or None,
+                device_id=str(account.get("device_id") or "") or None,
+                session_cookies=list((extract_saved_session(account) or {}).get("cookies") or []),
             )
             if recheck_result.get("ok"):
                 result = recheck_result

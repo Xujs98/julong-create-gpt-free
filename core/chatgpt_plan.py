@@ -13,6 +13,7 @@ from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
 from core.session import BrowserSession
+from core.proxy_utils import rotate_proxy_session
 
 logger = logging.getLogger(__name__)
 
@@ -172,21 +173,66 @@ def token_claims(token: str) -> dict:
     }
 
 
-def _common_headers(env: BrowserSession, token: str) -> dict[str, str]:
-    headers = env._get_common_headers()
+def _common_headers(
+    env: BrowserSession,
+    token: str,
+    *,
+    account_id: str | None = None,
+    device_id: str | None = None,
+) -> dict[str, str]:
+    """构造已登录 accounts/check 请求头，补齐账号与设备上下文。"""
+    claims = token_claims(token)
+    active_account_id = str(account_id or claims.get("account_id") or "").strip()
+    active_device_id = str(device_id or env.device_id or "").strip()
+    headers = env.get_chatgpt_headers(referer="https://chatgpt.com/")
     headers.update({
         "accept": "*/*",
         "authorization": f"Bearer {normalize_token(token)}",
-        "oai-device-id": env.device_id,
+        "oai-device-id": active_device_id,
         "oai-language": env.navigator_language(),
         "referer": "https://chatgpt.com/",
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
         "x-openai-target-path": ACCOUNTS_CHECK_PATH,
-        "x-openai-target-route": ACCOUNTS_CHECK_PATH,
+        "x-openai-target-route": "/backend-api/accounts/check/{version}",
     })
+    if active_account_id:
+        headers["chatgpt-account-id"] = active_account_id
     return headers
+
+
+def _restore_plan_session_context(
+    env: BrowserSession,
+    *,
+    device_id: str | None = None,
+    session_cookies: list[dict] | None = None,
+) -> None:
+    """复用查活保存的 oai-did 与 Session Cookie，避免套餐查询变成全新匿名环境。"""
+    active_device_id = str(device_id or "").strip()
+    if active_device_id:
+        env.device_id = active_device_id
+    for item in session_cookies or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        value = str(item.get("value") or "")
+        domain = str(item.get("domain") or ".chatgpt.com")
+        path = str(item.get("path") or "/") or "/"
+        env.session.cookies.set(
+            name,
+            value,
+            domain=domain,
+            path=path,
+            secure=bool(item.get("secure")),
+        )
+        if name.lower() == "oai-did" and value and not active_device_id:
+            env.device_id = value
+    if env.device_id:
+        for domain in ("chatgpt.com", "auth.openai.com", "sentinel.openai.com"):
+            env.session.cookies.set("oai-did", env.device_id, domain=domain, path="/")
 
 
 def parse_accounts_check(data: dict, *, token: str = "") -> dict:
@@ -314,6 +360,10 @@ def check_account_plan(
     timeout: float | None = None,
     max_attempts: int | None = None,
     retry_delay: float | None = None,
+    account_id: str | None = None,
+    device_id: str | None = None,
+    session_cookies: list[dict] | None = None,
+    session: BrowserSession | None = None,
 ) -> dict:
     token = normalize_token(token)
     if not token:
@@ -356,14 +406,26 @@ def check_account_plan(
 
     last_result: dict | None = None
     for attempt in range(1, attempts + 1):
-        env = None
+        env = session
+        owns_session = session is None
         resp = None
         try:
-            # 套餐查询只需要稳定的请求头，不需要额外访问 IP 地理信息接口。
-            env = BrowserSession(proxy=route["proxy"], detect_exit_geo=False)
-            resp = env.session.get(
+            # 独立查询创建协议会话；查活后的即时校验可借用原会话保持 Cookie/IP 连续性。
+            if env is None:
+                env = BrowserSession(proxy=rotate_proxy_session(route["proxy"]), detect_exit_geo=False)
+            _restore_plan_session_context(
+                env,
+                device_id=device_id,
+                session_cookies=session_cookies,
+            )
+            resp = env.get(
                 url,
-                headers=_common_headers(env, token),
+                headers=_common_headers(
+                    env,
+                    token,
+                    account_id=account_id,
+                    device_id=device_id,
+                ),
                 allow_redirects=False,
                 timeout=timeout_seconds,
             )
@@ -371,15 +433,28 @@ def check_account_plan(
             http_status = int(resp.status_code)
             if not (200 <= http_status < 300):
                 is_auth_expired = http_status == 401
+                server_error_code = ""
+                try:
+                    error_payload = resp.json()
+                    error_obj = error_payload.get("error") if isinstance(error_payload, dict) else None
+                    if isinstance(error_obj, dict):
+                        server_error_code = str(error_obj.get("code") or "")
+                    if not server_error_code and isinstance(error_payload, dict):
+                        detail = error_payload.get("detail")
+                        if isinstance(detail, dict):
+                            server_error_code = str(detail.get("code") or "")
+                except Exception:
+                    pass
                 last_result = {
                     "ok": False,
                     "checked_at": now_iso(),
                     "http_status": http_status,
-                    "error": "AT已过期/失效，请手动查活刷新" if is_auth_expired else f"HTTP {http_status}",
+                    "error": "套餐接口认证失败（401），需要刷新登录态后重试" if is_auth_expired else f"HTTP {http_status}",
                     "response_preview": response_text[:500],
                     "retryable": _retryable_plan_error(http_status),
                     "token_expired": True if is_auth_expired else claims.get("token_expired"),
                     "needs_live_check": True if is_auth_expired else False,
+                    "server_error_code": server_error_code or None,
                 }
             else:
                 try:
@@ -414,7 +489,7 @@ def check_account_plan(
                 "retryable": True,
             }
         finally:
-            if env is not None:
+            if owns_session and env is not None:
                 try:
                     env.session.close()
                 except Exception:

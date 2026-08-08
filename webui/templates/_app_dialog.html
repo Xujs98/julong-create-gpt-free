@@ -1,0 +1,265 @@
+<style>
+  body.app-dialog-open { overflow: hidden; }
+  .app-dialog-root {
+    position: fixed; inset: 0; z-index: 7000;
+    display: grid; place-items: center; padding: 24px;
+  }
+  .app-dialog-root[hidden] { display: none !important; }
+  .app-dialog-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(20, 27, 39, .48);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+    animation: app-dialog-fade .16s ease-out;
+  }
+  .app-dialog {
+    position: relative; width: min(480px, calc(100vw - 32px));
+    max-height: min(680px, calc(100vh - 40px)); overflow: auto;
+    border: 1px solid #e4e7ed; border-radius: 8px;
+    background: #fff; color: #303133;
+    box-shadow: 0 20px 55px rgba(20, 27, 39, .22), 0 3px 12px rgba(20, 27, 39, .1);
+    animation: app-dialog-enter .2s cubic-bezier(.2,.75,.3,1);
+  }
+  .app-dialog-head {
+    display: grid; grid-template-columns: 38px minmax(0, 1fr) 32px;
+    gap: 12px; align-items: start; padding: 22px 22px 0;
+  }
+  .app-dialog-icon {
+    width: 38px; height: 38px; border-radius: 8px;
+    display: grid; place-items: center;
+    color: #377DFF; background: #edf4ff;
+  }
+  .app-dialog-icon svg {
+    width: 20px; height: 20px; fill: none; stroke: currentColor;
+    stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+  }
+  .app-dialog[data-tone="danger"] .app-dialog-icon { color: #e5484d; background: #fff0f0; }
+  .app-dialog[data-tone="warning"] .app-dialog-icon { color: #b86800; background: #fff6e5; }
+  .app-dialog-title {
+    margin: 1px 0 0; color: #1f2937;
+    font-size: 18px; font-weight: 700; line-height: 1.45; letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }
+  .app-dialog-close {
+    width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px;
+    display: grid; place-items: center;
+    color: #909399; background: transparent; cursor: pointer;
+  }
+  .app-dialog-close:hover { color: #303133; background: #f2f4f7; }
+  .app-dialog-close:focus-visible,
+  .app-dialog-action:focus-visible,
+  .app-dialog-input:focus-visible {
+    outline: 2px solid rgba(55, 125, 255, .32); outline-offset: 2px;
+  }
+  .app-dialog-close svg {
+    width: 18px; height: 18px; fill: none; stroke: currentColor;
+    stroke-width: 2; stroke-linecap: round;
+  }
+  .app-dialog-body {
+    margin: 16px 22px 0 72px; color: #606266;
+    font-size: 14px; line-height: 1.7; white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .app-dialog-body:empty { display: none; }
+  .app-dialog-input-wrap { display: none; margin: 17px 22px 0 72px; }
+  .app-dialog.is-prompt .app-dialog-input-wrap { display: block; }
+  .app-dialog-input-label {
+    display: block; margin-bottom: 7px;
+    color: #606266; font-size: 13px; font-weight: 600;
+  }
+  .app-dialog-input {
+    width: 100%; min-height: 92px; max-height: 220px; resize: vertical;
+    padding: 10px 12px; border: 1px solid #dcdfe6; border-radius: 6px;
+    background: #fff; color: #303133; box-sizing: border-box;
+    font: inherit; font-size: 14px; line-height: 1.55;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .app-dialog-input:hover { border-color: #b8c2d1; }
+  .app-dialog-input:focus {
+    border-color: #377DFF; box-shadow: 0 0 0 3px rgba(55, 125, 255, .1);
+  }
+  .app-dialog-actions {
+    display: flex; justify-content: flex-end; gap: 10px;
+    padding: 22px; margin-top: 2px;
+  }
+  .app-dialog-action {
+    min-width: 84px; height: 36px; padding: 0 17px;
+    border: 1px solid #dcdfe6; border-radius: 6px;
+    background: #fff; color: #606266;
+    font: inherit; font-size: 14px; font-weight: 600; line-height: 1;
+    cursor: pointer; transition: background-color .15s ease, border-color .15s ease,
+      color .15s ease, box-shadow .15s ease, transform .15s ease;
+  }
+  .app-dialog-action:hover { background: #f5f7fa; border-color: #c7cdd6; color: #303133; }
+  .app-dialog-action:active { transform: translateY(1px); }
+  .app-dialog-action--confirm {
+    border-color: #377DFF; background: #377DFF; color: #fff;
+    box-shadow: 0 4px 10px rgba(55, 125, 255, .2);
+  }
+  .app-dialog-action--confirm:hover { border-color: #2869df; background: #2869df; color: #fff; }
+  .app-dialog[data-tone="danger"] .app-dialog-action--confirm {
+    border-color: #e5484d; background: #e5484d;
+    box-shadow: 0 4px 10px rgba(229, 72, 77, .18);
+  }
+  .app-dialog[data-tone="danger"] .app-dialog-action--confirm:hover {
+    border-color: #cf3f44; background: #cf3f44;
+  }
+  .app-dialog[data-tone="warning"] .app-dialog-action--confirm {
+    border-color: #b86800; background: #b86800;
+    box-shadow: 0 4px 10px rgba(184, 104, 0, .18);
+  }
+  .app-dialog[data-tone="warning"] .app-dialog-action--confirm:hover {
+    border-color: #9c5900; background: #9c5900;
+  }
+  @keyframes app-dialog-fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes app-dialog-enter {
+    from { opacity: 0; transform: translateY(8px) scale(.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (max-width: 560px) {
+    .app-dialog-root { padding: 16px; align-items: end; }
+    .app-dialog { width: 100%; max-height: calc(100vh - 24px); }
+    .app-dialog-head { padding: 18px 18px 0; grid-template-columns: 36px minmax(0, 1fr) 32px; gap: 10px; }
+    .app-dialog-icon { width: 36px; height: 36px; }
+    .app-dialog-title { font-size: 17px; }
+    .app-dialog-body, .app-dialog-input-wrap { margin-left: 18px; margin-right: 18px; }
+    .app-dialog-actions { padding: 18px; }
+    .app-dialog-action { flex: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .app-dialog, .app-dialog-backdrop { animation: none; }
+    .app-dialog-action { transition: none; }
+  }
+</style>
+
+<div class="app-dialog-root" id="appDialogRoot" hidden aria-hidden="true">
+  <div class="app-dialog-backdrop" data-app-dialog-cancel></div>
+  <section class="app-dialog" id="appDialog" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle" aria-describedby="appDialogBody">
+    <header class="app-dialog-head">
+      <span class="app-dialog-icon" id="appDialogIcon" aria-hidden="true"></span>
+      <h2 class="app-dialog-title" id="appDialogTitle">请确认操作</h2>
+      <button type="button" class="app-dialog-close" data-app-dialog-cancel aria-label="关闭">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="app-dialog-body" id="appDialogBody"></div>
+    <label class="app-dialog-input-wrap" id="appDialogInputWrap">
+      <span class="app-dialog-input-label" id="appDialogInputLabel">输入内容</span>
+      <textarea class="app-dialog-input" id="appDialogInput" rows="4"></textarea>
+    </label>
+    <footer class="app-dialog-actions">
+      <button type="button" class="app-dialog-action" data-app-dialog-cancel>取消</button>
+      <button type="button" class="app-dialog-action app-dialog-action--confirm" id="appDialogConfirm">确认</button>
+    </footer>
+  </section>
+</div>
+
+<script>
+(() => {
+  const root = document.getElementById('appDialogRoot');
+  const dialog = document.getElementById('appDialog');
+  const titleEl = document.getElementById('appDialogTitle');
+  const bodyEl = document.getElementById('appDialogBody');
+  const iconEl = document.getElementById('appDialogIcon');
+  const inputEl = document.getElementById('appDialogInput');
+  const inputLabelEl = document.getElementById('appDialogInputLabel');
+  const confirmBtn = document.getElementById('appDialogConfirm');
+  let active = null;
+
+  const icons = {
+    confirm: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 0 1 4.4.9c0 1.8-2.2 2-2.2 3.6"/><path d="M12 17h.01"/></svg>',
+    warning: '<svg viewBox="0 0 24 24"><path d="M10.3 4.2L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+    prompt: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>',
+  };
+
+  function splitMessage(message, options) {
+    const blocks = String(message ?? '').trim().split(/\n\s*\n/).map(x => x.trim()).filter(Boolean);
+    const title = String(options.title || blocks.shift() || '请确认操作').trim();
+    return {title, body: String(options.body ?? blocks.join('\n\n')).trim()};
+  }
+
+  function inferTone(text, options) {
+    if (options.tone) return options.tone;
+    if (/删除|停止|停用|不可撤销|清空/.test(text)) return 'danger';
+    if (/消耗|重试|重新|上传|下载|提链|生成|取消.*任务/.test(text)) return 'warning';
+    return 'confirm';
+  }
+
+  function inferConfirmLabel(text, options) {
+    if (options.confirmText) return options.confirmText;
+    const choices = [
+      [/删除/, '删除'], [/停止/, '停止'], [/停用/, '停用'], [/重试|重新跑/, '重试'],
+      [/归档/, '归档'], [/恢复/, '恢复'], [/下载/, '下载'], [/上传/, '上传'],
+      [/提链/, '开始提链'], [/生成/, '开始生成'], [/查活/, '开始查活'], [/取消.*任务/, '取消任务'],
+    ];
+    return choices.find(([pattern]) => pattern.test(text))?.[1] || '确认';
+  }
+
+  function settle(confirmed) {
+    if (!active) return;
+    const current = active;
+    active = null;
+    root.hidden = true;
+    root.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('app-dialog-open');
+    const result = current.mode === 'prompt' ? (confirmed ? inputEl.value : null) : Boolean(confirmed);
+    current.resolve(result);
+    if (current.previousFocus?.isConnected) current.previousFocus.focus({preventScroll: true});
+  }
+
+  function openDialog(mode, message, defaultValue, options = {}) {
+    if (active) settle(false);
+    const content = splitMessage(message, options);
+    const text = `${content.title}\n${content.body}`;
+    const isPrompt = mode === 'prompt';
+    const tone = isPrompt ? (options.tone || 'confirm') : inferTone(text, options);
+    dialog.dataset.tone = tone;
+    dialog.classList.toggle('is-prompt', isPrompt);
+    titleEl.textContent = content.title;
+    bodyEl.textContent = content.body;
+    iconEl.innerHTML = icons[isPrompt ? 'prompt' : (tone === 'confirm' ? 'confirm' : 'warning')];
+    inputLabelEl.textContent = options.inputLabel || (/备注/.test(text) ? '备注' : '输入内容');
+    inputEl.value = String(defaultValue ?? '');
+    inputEl.placeholder = String(options.placeholder || '');
+    confirmBtn.textContent = isPrompt ? (options.confirmText || '保存') : inferConfirmLabel(text, options);
+    root.hidden = false;
+    root.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('app-dialog-open');
+    return new Promise(resolve => {
+      active = {mode, resolve, previousFocus: document.activeElement};
+      requestAnimationFrame(() => {
+        if (isPrompt) {
+          inputEl.focus({preventScroll: true});
+          inputEl.select();
+        } else {
+          confirmBtn.focus({preventScroll: true});
+        }
+      });
+    });
+  }
+
+  root.querySelectorAll('[data-app-dialog-cancel]').forEach(el => el.addEventListener('click', () => settle(false)));
+  confirmBtn.addEventListener('click', () => settle(true));
+  root.addEventListener('keydown', event => {
+    if (!active) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      settle(false);
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]), textarea:not([disabled]), input:not([disabled])')]
+      .filter(el => el.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus();
+    }
+  });
+
+  window.appConfirm = (message, options = {}) => openDialog('confirm', message, '', options);
+  window.appPrompt = (message, defaultValue = '', options = {}) => openDialog('prompt', message, defaultValue, options);
+})();
+</script>

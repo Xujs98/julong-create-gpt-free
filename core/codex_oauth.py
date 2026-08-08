@@ -169,7 +169,7 @@ def _ensure_oai_context_url(auth_url: str, session: BrowserSession) -> str:
 # ============================================================
 
 def _codex_auth_url_source() -> str:
-    return str(getattr(_cfg, "CODEX_AUTH_URL_SOURCE", "cpa") or "cpa").strip().lower()
+    return str(getattr(_cfg, "CODEX_AUTH_URL_SOURCE", "local") or "local").strip().lower()
 
 
 def _cpa_management_origin() -> str:
@@ -1335,25 +1335,33 @@ def run_codex_oauth(
         if oauth_driver in ("cloak", "cloakbrowser"):
             from config import cloakbrowser as _cloak_cfg
             from core.cloakbrowser_driver import build_cloak_driver
+            from core.cloakbrowser_registration import _run_in_isolated_thread
             from core.roxy_codex_oauth import run_roxy_codex_oauth
-            driver, opened = build_cloak_driver(proxy=proxy)
-            try:
-                return run_roxy_codex_oauth(
-                    email,
-                    otp_provider=otp_provider,
-                    proxy=proxy,
-                    force=True,
-                    existing_driver=driver,
-                    existing_opened=opened,
-                    reuse_existing_profile=True,
-                    clear_existing_state=True,
-                )
-            finally:
-                if not bool(getattr(_cloak_cfg, "CLOAK_KEEP_BROWSER_OPEN", False)):
-                    try:
-                        driver.quit()
-                    except Exception:
-                        pass
+
+            def _run_cloak_oauth_in_one_thread():
+                # Keep the CloakBrowser object and every Playwright call on the
+                # same thread; returning only the final dict avoids cross-thread
+                # use of Playwright greenlets.
+                driver, opened = build_cloak_driver(proxy=proxy)
+                try:
+                    return run_roxy_codex_oauth(
+                        email,
+                        otp_provider=otp_provider,
+                        proxy=proxy,
+                        force=True,
+                        existing_driver=driver,
+                        existing_opened=opened,
+                        reuse_existing_profile=True,
+                        clear_existing_state=True,
+                    )
+                finally:
+                    if not bool(getattr(_cloak_cfg, "CLOAK_KEEP_BROWSER_OPEN", False)):
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
+
+            return _run_in_isolated_thread(_run_cloak_oauth_in_one_thread)
         if oauth_driver not in ("protocol", "api", "http"):
             raise RuntimeError(f"[Codex] 不支持的 CODEX_OAUTH_DRIVER={oauth_driver!r}，可选 protocol / roxy / cloak / browser_use / skyvern")
     except ImportError:

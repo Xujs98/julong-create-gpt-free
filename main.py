@@ -6,6 +6,7 @@ ChatGPT 协议注册全流程入口
 import sys
 import argparse
 import logging
+import secrets
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -14,11 +15,14 @@ from config import REGISTER_EMAIL, REGISTER_NAME  # 这两个一般不在 WebUI 
 from config import twofa as _twofa_cfg
 from config import email as _email_cfg
 from config import roxybrowser as _roxy_cfg
+from config import register as _register_cfg
 from config import openai_protocol as _protocol_cfg
 from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
 from core.openai_auth import (
     follow_authorize,
+    get_create_account_page,
+    register_user_with_password,
     request_sentinel_token,
     build_sentinel_header,
     validate_email_otp,
@@ -38,7 +42,8 @@ from core.account_export import (
 from core.email_provider import acquire_email, wait_for_otp
 from core.humanize import delay as human_delay
 from core.name_samples import random_display_name
-from core.profile_utils import generate_random_birthday
+from core.profile_utils import generate_random_birthday, validate_registration_birthday
+from core.session_state import build_saved_session, capture_http_cookies
 
 # 配置日志
 logging.basicConfig(
@@ -50,6 +55,36 @@ logger = logging.getLogger(__name__)
 
 _FINALIZE_SESSION_MAX_ATTEMPTS = 5
 _FINALIZE_SESSION_BACKOFF_BASE = 2.0
+
+
+def _protocol_create_password_enabled() -> bool:
+    return bool(getattr(_register_cfg, "ENABLE_CREATE_PASSWORD", False))
+
+
+def _protocol_registration_password(length: int = 14) -> str:
+    configured = str(getattr(_register_cfg, "REGISTER_PASSWORD", "") or "").strip()
+    if configured:
+        return configured
+    groups = (
+        "ABCDEFGHJKLMNPQRSTUVWXYZ",
+        "abcdefghjkmnpqrstuvwxyz",
+        "23456789",
+        "!@#$%^&*?_-+=",
+    )
+    chars = [secrets.choice(group) for group in groups]
+    pool = "".join(groups)
+    chars.extend(secrets.choice(pool) for _ in range(max(0, length - len(chars))))
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def _require_protocol_password(password: str | None, email: str) -> None:
+    """密码开关开启时，阻止协议流程静默回退为 OTP-only。"""
+    if _protocol_create_password_enabled() and not str(password or "").strip():
+        raise RuntimeError(
+            f"创建密码已启用，但协议注册流程未保存账号密码：{email}；"
+            "请检查注册页是否进入 create-account/password"
+        )
 
 
 def configure_logging(verbose: bool = False) -> None:
@@ -163,7 +198,7 @@ def run_registration(
     batch_dir=None,
 ):
     """
-    执行完整的 ChatGPT 注册流程（OTP-only，无密码）。
+    执行完整的 ChatGPT 注册流程；按 ENABLE_CREATE_PASSWORD 选择密码或 OTP-only 分支。
 
     OpenAI 当前默认流程：signin 时携带 login_hint+screen_hint=login_or_signup
     → follow_authorize 重定向链自动落到 /email-verification 并触发 OTP 发送
@@ -176,19 +211,23 @@ def run_registration(
         proxy: 代理地址（不传则从 PROXY_POOL 随机抽）
         otp_code: 邮箱验证码（如果为None，会等待手动输入）
     """
+    # 所有驱动统一校验生日；传入空值时生成至少 19 岁的随机生日。
+    birthday = validate_registration_birthday(birthday or generate_random_birthday())
+
     # 可选注册驱动：
     #   protocol     = 原有纯协议（curl_cffi）
     #   roxy         = RoxyBrowser 指纹浏览器 + Selenium
     #   cloak        = CloakBrowser + Playwright/Selenium 适配层
     #   browser_use  = Browser Use Cloud stealth Chromium + Playwright
     #   skyvern      = Skyvern Browser Sessions + Playwright
-    driver_mode = str(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol") or "protocol").strip().lower()
+    from core.registration_driver_health import normalize_registration_driver
+    driver_mode = normalize_registration_driver(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol"))
     if driver_mode in ("roxy", "roxybrowser", "fingerprint", "browser"):
         from core.roxy_registration import run_roxy_registration
         return run_roxy_registration(
             email=email,
             name=name,
-            birthday=birthday or generate_random_birthday(),
+            birthday=birthday,
             proxy=proxy,
             otp_code=otp_code,
             batch_dir=batch_dir,
@@ -198,7 +237,7 @@ def run_registration(
         return run_cloak_registration(
             email=email,
             name=name,
-            birthday=birthday or generate_random_birthday(),
+            birthday=birthday,
             proxy=proxy,
             otp_code=otp_code,
             batch_dir=batch_dir,
@@ -208,7 +247,7 @@ def run_registration(
         return run_browser_use_registration(
             email=email,
             name=name,
-            birthday=birthday or generate_random_birthday(),
+            birthday=birthday,
             proxy=proxy,
             otp_code=otp_code,
             batch_dir=batch_dir,
@@ -218,7 +257,7 @@ def run_registration(
         return run_skyvern_registration(
             email=email,
             name=name,
-            birthday=birthday or generate_random_birthday(),
+            birthday=birthday,
             proxy=proxy,
             otp_code=otp_code,
             batch_dir=batch_dir,
@@ -244,14 +283,12 @@ def run_registration(
         except Exception:
             proxy_label = "已配置"
 
-    if not birthday:
-        birthday = generate_random_birthday()
-
     logger.info(f"[注册] 开始：{email}，代理={proxy_label}")
     logger.info(f"[注册] 本次随机生日: {birthday}")
     logger.debug(f"[注册] 设备ID={session.device_id}，会话日志ID={session.auth_session_logging_id}")
 
     create_acknowledged = False
+    openai_password: str | None = None
     try:
         # 网络预检必须在 signin/follow_authorize 之前完成；预检不带邮箱，不会触发 OTP。
         network_preflight(session)
@@ -284,12 +321,38 @@ def run_registration(
         otp_after_ts = time.time()
 
         # ==================== 阶段2: OpenAI Auth ====================
-        # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）
-        # 由于步骤3已携带 login_hint + screen_hint=login_or_signup，
-        # 重定向链会直接走到 /email-verification 并自动触发 OTP 发送，
-        # 不需要 /create-account/password、register_user、单独 send_email_otp 调用。
-        follow_authorize(session, authorize_url)
+        # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）。
+        # 创建密码开关开启时显式建立 password signup 状态并提交账号密码；
+        # 关闭时保持原有 passwordless OTP 流程。
+        create_password = _protocol_create_password_enabled()
+        follow_authorize(session, authorize_url, allow_password_page=create_password)
         human_delay("navigate")
+
+        if create_password:
+            get_create_account_page(session)
+            human_delay("navigate")
+            openai_password = _protocol_registration_password()
+            sentinel_resp_password = request_sentinel_token(session, "username_password_create")
+            sentinel_header_password, so_header_password = build_sentinel_header(
+                session,
+                sentinel_resp_password,
+                "username_password_create",
+            )
+            human_delay("challenge")
+            register_user_with_password(
+                session,
+                email,
+                openai_password,
+                sentinel_header_password,
+                so_header_password,
+            )
+            # register 接口只声明下一步，统一显式触发 OTP，并把取信时间窗
+            # 重置到本次密码提交之后，避免读到 authorize 阶段的旧邮件。
+            otp_after_ts = time.time()
+            send_email_otp(session, referer="https://auth.openai.com/create-account/password")
+            logger.info("[密码注册] 已创建并保存本次账号密码：%s", email)
+            human_delay("api")
+            _require_protocol_password(openai_password, email)
 
         # ==================== 阶段3: 验证码验证 ====================
         # Sentinel Token 不提前生成；等 OTP 到手后紧贴 validate 请求生成，
@@ -441,7 +504,7 @@ def run_registration(
         if _twofa_cfg.ENABLE_2FA:
             # 步骤14-20: 重认证（要再收一次邮箱 OTP）→ enroll TOTP → activate
             try:
-                totp_secret = setup_2fa(session, email)
+                totp_secret = setup_2fa(session, email, previous_otp=current_otp)
             except Exception as exc:
                 logger.error(f"2FA 设置失败: {exc}")
                 logger.debug("2FA 错误详情:", exc_info=True)
@@ -491,9 +554,11 @@ def run_registration(
                 "user": session_info.get("user"),
                 "account": session_info.get("account"),
                 "expires": session_info.get("expires"),
+                "session": build_saved_session(session_info, capture_http_cookies(session)),
                 "device_id": session.device_id,
                 "sentinel_sid": getattr(session, "sentinel_sid", None),
                 "browser_profile": getattr(session, "browser_profile", None),
+                "registration_password": openai_password,
                 "codex": codex_result,
             },
         )
@@ -537,6 +602,7 @@ def run_registration(
 
         return {"success": task_success, "email": email, "account_id": account_id,
                 "access_token": access_token, "totp_secret": totp_secret,
+                "registration_password": openai_password,
                 "flow": flow_result, "codex": codex_result,
                 "error": task_error}
 

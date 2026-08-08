@@ -7,6 +7,7 @@ EMAIL_SOURCE 支持单个或多个来源：
     "cloudflare_domain"   # 自有域名 + QQ IMAP
     "cloudflare"          # Cloudflare Worker 临时邮箱
     "generic_api"
+    "icloud"
     "gptmail"
     "mailnest"
     "cloudmail"
@@ -18,7 +19,7 @@ from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
-_VALID_SOURCES = ("outlook", "generic_api", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail")
+_VALID_SOURCES = ("outlook", "generic_api", "icloud", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail")
 
 
 def parse_email_sources(value=None) -> list[str]:
@@ -59,6 +60,9 @@ def _pick_from_source(source: str) -> str:
     if source == "generic_api":
         from core.generic_api_mail_client import pick_account
         return pick_account().email
+    if source == "icloud":
+        from core.icloud_client import pick_account
+        return pick_account().email
     if source == "mailnest":
         from core.mailnest_client import pick_account
         return pick_account().email
@@ -69,9 +73,9 @@ def _pick_from_source(source: str) -> str:
     return pick_account().email
 
 
-def acquire_email() -> str:
-    """根据 EMAIL_SOURCE 领取一个用于注册的邮箱地址；多个来源时按顺序兜底。"""
-    sources = parse_email_sources()
+def acquire_email(value=None) -> str:
+    """按显式来源或全局 EMAIL_SOURCE 领取邮箱；多个来源时按顺序兜底。"""
+    sources = parse_email_sources(value)
     last_exc: Exception | None = None
     for source in sources:
         try:
@@ -93,6 +97,9 @@ def resolve_email_source(email: str) -> str:
     from core.cf_temp_mail_client import get_account_context as get_cf_context
     if get_cf_context(email):
         return "cloudflare"
+    from core.icloud_client import get_account_context as get_icloud_context
+    if get_icloud_context(email):
+        return "icloud"
     from core.mailnest_client import get_account_context as get_mailnest_context
     if get_mailnest_context(email):
         return "mailnest"
@@ -124,8 +131,9 @@ def wait_for_otp(
     max_wait: int | None = None,
     poll_interval: int | None = None,
     settle_seconds: int | None = None,
+    exclude_codes: Iterable[str] | None = None,
 ) -> str:
-    """等待并返回该邮箱最新的 ChatGPT OTP（6 位数字字符串）。
+    """等待并返回该邮箱最新且未被排除的 ChatGPT OTP（6 位数字字符串）。
 
     USE_EMAIL_SERVICE=False 时走手动验证码通道（WebUI 提交 / CLI 输入），
     不再强制要求 Outlook clientId/refreshToken。
@@ -169,6 +177,10 @@ def wait_for_otp(
     if source == "generic_api":
         from core.generic_api_mail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
+    if source == "icloud":
+        from core.icloud_client import fetch_latest_otp
+        excluded = {str(code or "").strip() for code in (exclude_codes or []) if str(code or "").strip()}
+        return fetch_latest_otp(email, after_ts=after_ts, exclude_codes=excluded, **extra_kwargs)
     if source == "mailnest":
         from core.mailnest_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
@@ -194,6 +206,9 @@ def release_email(email: str, status: str = "available", note: str | None = None
     elif source == "generic_api":
         from core.generic_api_mail_client import release_account
         release_account(email, status=status, note=note)
+    elif source == "icloud":
+        from core.icloud_client import release_account
+        release_account(email, status=status, note=note)
     elif source == "mailnest":
         from core.mailnest_client import release_account
         release_account(email, status=status, note=note)
@@ -218,6 +233,8 @@ def release_email_if_unconsumed(email: str, note: str | None = None) -> bool:
         changed = db.release_unconsumed_outlook(email, note=note)
     elif source == "generic_api":
         changed = db.release_unconsumed_generic_api_email(email, note=note)
+    elif source == "icloud":
+        changed = db.release_unconsumed_icloud_email(email, note=note)
     elif source == "cloudflare_domain":
         changed = db.release_unconsumed_domain_email(email, note=note)
     else:

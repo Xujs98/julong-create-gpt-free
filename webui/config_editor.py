@@ -84,16 +84,28 @@ EDITABLE_FIELDS = [
         "label": "Cloak指纹Seed", "help": "留空每次随机；固定值可保持同一指纹",
     },
     {
+        "key": "CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
+        "label": "每次随机Cloak指纹", "help": "每次启动显式生成新指纹并使用临时上下文，不复用固定 cookies/cache",
+    },
+    {
         "key": "CLOAK_USER_DATA_DIR", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
-        "label": "Cloak用户目录", "help": "留空使用临时上下文；填写路径则持久化 cookies/cache",
+        "label": "Cloak用户目录", "help": "仅关闭“每次随机Cloak指纹”时生效；填写路径可持久化 cookies/cache",
     },
     {
         "key": "CLOAK_SELENIUM_TIMEOUT", "file": "cloakbrowser.py", "type": "int", "group": "CloakBrowser",
         "label": "Cloak超时", "help": "页面和元素等待超时时间，秒",
     },
     {
+        "key": "CLOAK_CHALLENGE_TIMEOUT", "file": "cloakbrowser.py", "type": "int", "group": "CloakBrowser",
+        "label": "验证盾等待(秒)", "help": "出现 Cloudflare 人机验证时保持可见窗口，完成验证后自动续跑",
+    },
+    {
         "key": "CLOAK_KEEP_BROWSER_OPEN", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
         "label": "保留Cloak浏览器", "help": "调试时开启，任务结束后不自动关闭",
+    },
+    {
+        "key": "CLOAK_KEEP_BROWSER_OPEN_ON_ERROR", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
+        "label": "失败时保留Cloak窗口", "help": "注册异常时保留当前页面，便于查看失败原因",
     },
 
     # ---- Browser Use Cloud ----
@@ -264,7 +276,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "CODEX_OAUTH_DRIVER", "file": "codex.py", "type": "str", "group": "Codex",
-        "label": "Codex授权驱动", "help": "默认推荐 roxy；protocol=原协议授权；roxy=用 RoxyBrowser；cloak=用 CloakBrowser；browser_use=用 Browser Use Cloud；skyvern=用 Skyvern；same_as_registration=跟随注册驱动",
+        "label": "Codex授权驱动", "help": "默认跟随注册驱动；protocol=原协议授权；roxy=用 RoxyBrowser；cloak=用 CloakBrowser；browser_use=用 Browser Use Cloud；skyvern=用 Skyvern；same_as_registration=跟随注册驱动",
     },
     {
         "key": "ROXY_CODEX_CALLBACK_TIMEOUT", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
@@ -273,6 +285,10 @@ EDITABLE_FIELDS = [
     {
         "key": "ENABLE_2FA", "file": "twofa.py", "type": "bool", "group": "功能开关",
         "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
+    },
+    {
+        "key": "ENABLE_CREATE_PASSWORD", "file": "register.py", "type": "bool", "group": "功能开关",
+        "label": "创建账号密码", "help": "开启后，邮箱验证码页先点击“使用密码继续”并提交密码，再验证邮箱验证码；关闭时直接走验证码分支",
     },
     {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
@@ -313,7 +329,15 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail",
+        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,icloud,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail",
+    },
+    {
+        "key": "ICLOUD_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "iCloud HTML请求超时(秒)", "help": "读取每个邮箱导入 URL 的单次超时；总等待时间由 OTP 最长等待控制",
+    },
+    {
+        "key": "ICLOUD_VERIFY_TLS", "file": "email.py", "type": "bool", "group": "邮箱 / OTP",
+        "label": "iCloud校验TLS证书", "help": "HTTPS 取码地址默认开启证书校验；自签名的内网地址可关闭",
     },
     {
         "key": "GPTMAIL_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",

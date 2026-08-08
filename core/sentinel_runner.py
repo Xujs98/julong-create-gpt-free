@@ -13,6 +13,8 @@ Sentinel Runner 适配层
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,8 +72,34 @@ def _resolve_node_executable() -> str:
     """
     override = os.environ.get("NODE_EXECUTABLE")
     if override:
-        return override
-    return "node.exe" if sys.platform.startswith("win") else "node"
+        return str(Path(override).expanduser())
+
+    executable_name = "node.exe" if sys.platform.startswith("win") else "node"
+    for name in (executable_name, "nodejs"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    # WebUI 从桌面应用/launchd 启动时 PATH 往往没有加载 shell 的 nvm 配置，
+    # 按常见安装目录寻找最高版本 Node，保证后台协议刷新和终端运行行为一致。
+    home = Path.home()
+    candidates = list((home / ".nvm" / "versions" / "node").glob("v*/bin/node"))
+    candidates.extend([
+        home / ".volta" / "bin" / "node",
+        Path("/opt/homebrew/bin/node"),
+        Path("/usr/local/bin/node"),
+        Path("/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node"),
+        Path("/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node"),
+    ])
+
+    def version_key(path: Path) -> tuple[int, ...]:
+        match = re.search(r"/v(\d+(?:\.\d+)*)/", str(path))
+        return tuple(int(part) for part in match.group(1).split(".")) if match else ()
+
+    for candidate in sorted(candidates, key=version_key, reverse=True):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return executable_name
 
 
 def _ensure_runner_environment() -> None:

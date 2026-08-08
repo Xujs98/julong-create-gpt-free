@@ -18,6 +18,7 @@ from config import (
     ACCEPT_LANGUAGE, IMPERSONATE, OAI_CLIENT_BUILD_NUMBER, OAI_CLIENT_VERSION,
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
 )
+from core.proxy_utils import normalize_proxy_url
 
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,13 @@ class BrowserSession:
         # proxy=""    → 禁用代理（直连）
         # proxy="..." → 使用指定代理
         if proxy is None:
-            self.proxy = pick_proxy()
+            selected_proxy = pick_proxy()
         else:
-            self.proxy = proxy
+            selected_proxy = proxy
+        self.proxy = normalize_proxy_url(selected_proxy, default_scheme="auto") if selected_proxy else selected_proxy
+        if self.proxy and self.proxy.lower().startswith("socks5://"):
+            # curl_cffi 的 socks5:// 使用本机 DNS；注册请求统一交给代理端解析。
+            self.proxy = f"socks5h://{self.proxy.split('://', 1)[1]}"
 
         # 生成设备ID（oai-did），整个注册流程复用
         self.device_id = str(uuid.uuid4())

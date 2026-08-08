@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>GPT Registrator · 授权码登录</title>
+  <title>矩龙 搞号 · 授权码登录</title>
+  <link rel="icon" type="image/png" href="/static/brand/julong-favicon.png">
+  <link rel="shortcut icon" href="/favicon.ico">
   <style>
     * { box-sizing: border-box; }
 
@@ -93,15 +95,16 @@
     }
 
     .brand-icon {
-      width: 40px;
-      height: 44px;
+      width: 48px;
+      height: 48px;
       flex-shrink: 0;
+      object-fit: contain;
     }
 
     .brand-title {
       font-size: 22px;
       font-weight: 800;
-      letter-spacing: -0.01em;
+      letter-spacing: 0;
       color: #0f172a;
     }
 
@@ -268,17 +271,8 @@
 
   <div class="page">
     <div class="brand">
-      <svg class="brand-icon" viewBox="0 0 44 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="logoGrad" x1="10" y1="4" x2="34" y2="44" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#3b66f5"/>
-            <stop offset="1" stop-color="#7c3aed"/>
-          </linearGradient>
-        </defs>
-        <path d="M22 3L38.928 12.75V35.25L22 45L5.072 35.25V12.75L22 3Z" fill="url(#logoGrad)"/>
-        <path d="M22 13L30.928 18.25V29.75L22 35L13.072 29.75V18.25L22 13Z" fill="white" fill-opacity="0.92"/>
-      </svg>
-      <span class="brand-title">GPT Registrator</span>
+      <img class="brand-icon" src="/static/brand/julong-logo.png" alt="">
+      <span class="brand-title">矩龙 搞号</span>
     </div>
 
     <form class="card" method="post" action="{{ login_url }}">

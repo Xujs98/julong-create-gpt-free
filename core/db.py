@@ -11,6 +11,7 @@
 """
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -18,6 +19,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -30,6 +32,8 @@ _OUTLOOK_JSON = _PROJECT_ROOT / "用于注册的邮箱.json"
 _OUTLOOK_TXT = _PROJECT_ROOT / "用于注册的邮箱.txt"
 _GENERIC_API_EMAIL_JSON = _PROJECT_ROOT / "用于注册的API邮箱.json"
 _GENERIC_API_EMAIL_TXT = _PROJECT_ROOT / "用于注册的API邮箱.txt"
+_ICLOUD_EMAIL_JSON = _PROJECT_ROOT / "用于注册的iCloud邮箱.json"
+_ICLOUD_EMAIL_TXT = _PROJECT_ROOT / "用于注册的iCloud邮箱.txt"
 _ACCOUNTS_JSON = _PROJECT_ROOT / "注册成功的邮箱.json"
 _ACCOUNTS_TXT = _PROJECT_ROOT / "注册成功的邮箱.txt"
 _TOKENS_TXT = _PROJECT_ROOT / "注册成功的token.txt"
@@ -97,16 +101,41 @@ def _generic_api_email_line(row: dict) -> str:
     ])
 
 
+def _icloud_email_line(row: dict) -> str:
+    """生成 iCloud 邮箱池文本行：邮箱----HTML 取码地址。"""
+    return "----".join([
+        row.get("email") or "",
+        row.get("code_url") or "",
+    ])
+
+
+def _totp_viewer_url(secret: str | None) -> str:
+    secret = str(secret or "").strip()
+    return f"https://2fa.fb.tools/{quote(secret, safe='')}" if secret else ""
+
+
+def _registered_account_parts(row: dict) -> list[str]:
+    parts = [str(row.get("email") or "").strip()]
+    password = str(row.get("registration_password") or "").strip()
+    viewer = _totp_viewer_url(row.get("totp_secret"))
+    if password:
+        parts.append(password)
+    if viewer:
+        parts.append(viewer)
+    return parts
+
+
 def _account_line(row: dict) -> str:
-    base = row.get("original_email_line") or row.get("email") or ""
-    token = row.get("access_token") or ""
-    totp = row.get("totp_secret") or ""
-    return f"{base}----{token}----{totp}" if totp else f"{base}----{token}"
+    parts = _registered_account_parts(row)
+    token = str(row.get("access_token") or "").strip()
+    if token:
+        parts.append(token)
+    return "----".join(parts)
 
 
 def _registered_email_line(row: dict) -> str:
-    """生成注册成功邮箱 TXT 的行内容；token 由注册成功的token.txt 单独保存。"""
-    return row.get("original_email_line") or row.get("email") or ""
+    """生成 邮箱----账号密码----2FA查看器；token 单独保存。"""
+    return "----".join(_registered_account_parts(row))
 
 
 def _sync_outlook_txt(rows: list[dict]) -> None:
@@ -119,6 +148,13 @@ def _sync_generic_api_email_txt(rows: list[dict]) -> None:
     available_rows = [r for r in rows if r.get("status") == "available"]
     lines = [_generic_api_email_line(r) for r in sorted(available_rows, key=lambda x: int(x.get("id") or 0))]
     _GENERIC_API_EMAIL_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
+
+
+def _sync_icloud_email_txt(rows: list[dict]) -> None:
+    """把可用 iCloud 邮箱同步到兼容文本文件。"""
+    available_rows = [r for r in rows if r.get("status") == "available"]
+    lines = [_icloud_email_line(r) for r in sorted(available_rows, key=lambda x: int(x.get("id") or 0))]
+    _ICLOUD_EMAIL_TXT.write_text(("\n".join(lines) + ("\n" if lines else "")), encoding="utf-8")
 
 
 def _sync_accounts_txt(rows: list[dict]) -> None:
@@ -483,6 +519,20 @@ def _save_generic_api_emails(rows: list[dict]) -> None:
     _sync_generic_api_email_txt(rows)
 
 
+def _load_icloud_emails() -> list[dict]:
+    """读取独立 iCloud 邮箱池。"""
+    rows = _read_json(_ICLOUD_EMAIL_JSON, [])
+    return rows if isinstance(rows, list) else []
+
+
+def _save_icloud_emails(rows: list[dict]) -> None:
+    """持久化 iCloud 邮箱池并刷新文本镜像。"""
+    for row in rows:
+        row["copy_line"] = _icloud_email_line(row)
+    _write_json(_ICLOUD_EMAIL_JSON, rows)
+    _sync_icloud_email_txt(rows)
+
+
 def _load_accounts() -> list[dict]:
     rows = _read_json(_ACCOUNTS_JSON, None)
     if not isinstance(rows, list):
@@ -515,10 +565,146 @@ def _find_by_email(rows: list[dict], email: str) -> dict | None:
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
 
 
+def _country_code_from_value(value: Any) -> str:
+    """从 GeoIP/代理池常见格式中提取两位出口国家码。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    # 仅接受 ISO 3166-1 alpha-2，避免把代理用户名、节点标签里的任意
+    # 两个字母误显示成国家（例如 ``ab.proxy.example``）。
+    valid_codes = _ISO_ALPHA2_CODES
+    if re.fullmatch(r"[A-Za-z]{2}", raw):
+        return _normalize_country_code(raw)
+    match = re.search(
+        r"(?:region|country|location)[-_:=/ ]*([A-Za-z]{2})(?=[-_.:/]|$)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return _normalize_country_code(match.group(1))
+    try:
+        parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+        host = parsed.hostname or ""
+    except ValueError:
+        host = ""
+    first_label = host.split(".", 1)[0]
+    if re.fullmatch(r"[A-Za-z]{2}", first_label):
+        return _normalize_country_code(first_label)
+    # Browser Use / Skyvern 保存的 provider:country 形式。
+    tail = re.split(r"[:/_-]", raw.rsplit("@", 1)[-1])[-1]
+    return _normalize_country_code(tail) if re.fullmatch(r"[A-Za-z]{2}", tail) else ""
+
+
+# ISO 3166-1 alpha-2 codes used by GeoIP providers and proxy pools. Keeping
+# this local avoids a runtime dependency just for a small display badge.
+_ISO_ALPHA2_CODES = frozenset("""
+AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+""".split())
+_COUNTRY_CODE_ALIASES = {"UK": "GB"}  # 常见代理供应商写法，ISO 正式码为 GB。
+
+
+def _normalize_country_code(value: str) -> str:
+    code = str(value or "").strip().upper()
+    code = _COUNTRY_CODE_ALIASES.get(code, code)
+    return code if code in _ISO_ALPHA2_CODES else ""
+
+
+def _account_proxy_geo(row: dict) -> dict:
+    """返回账号落库的真实出口 GeoIP；兼容旧的嵌套 extra_json 记录。"""
+    candidates: list[dict] = []
+    direct = row.get("proxy_geo")
+    if isinstance(direct, dict):
+        candidates.append(direct)
+    try:
+        extra = json.loads(str(row.get("extra_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        extra = {}
+
+    def walk(value: Any, key_hint: str = "") -> None:
+        if isinstance(value, dict):
+            hint = key_hint.lower()
+            if any(marker in hint for marker in ("geo", "locale", "location", "open_result")):
+                candidates.append(value)
+            for key, child in value.items():
+                if isinstance(child, (dict, list)):
+                    walk(child, str(key))
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, key_hint)
+
+    walk(extra)
+    for geo in candidates:
+        code = ""
+        for key in ("country_code", "countryCode", "country"):
+            code = _country_code_from_value(geo.get(key))
+            if code:
+                break
+        if code:
+            return {
+                "country_code": code,
+                "country": str(geo.get("country_name") or geo.get("country") or "").strip(),
+                "region": str(geo.get("region") or geo.get("regionName") or "").strip(),
+                "city": str(geo.get("city") or "").strip(),
+                "ip": str(geo.get("ip") or geo.get("query") or "").strip(),
+            }
+    return {}
+
+
+def _account_proxy_country_code(row: dict) -> str:
+    """返回账号注册代理出口国家码，优先使用落库 GeoIP，兼容旧代理字符串。"""
+    geo = _account_proxy_geo(row)
+    if geo.get("country_code"):
+        return geo["country_code"]
+    for key in ("proxy_country_code", "proxy_country"):
+        code = _country_code_from_value(row.get(key))
+        if code:
+            return code
+    try:
+        extra = json.loads(str(row.get("extra_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        extra = {}
+    if isinstance(extra, dict):
+        profile = extra.get("browser_profile")
+        if isinstance(profile, dict):
+            profile_geo = profile.get("geo")
+            if isinstance(profile_geo, dict):
+                for key in ("country_code", "countryCode", "country"):
+                    code = _country_code_from_value(profile_geo.get(key))
+                    if code:
+                        return code
+        for value in extra.values():
+            if isinstance(value, dict):
+                for key in ("proxy_country_code", "country_code", "country"):
+                    code = _country_code_from_value(value.get(key))
+                    if code:
+                        return code
+    return _country_code_from_value(row.get("proxy_used"))
+
+
 def _decorate_account(row: dict) -> dict:
     out = dict(row)
     out["note"] = out.get("note") or ""
     out["note_updated_at"] = out.get("note_updated_at") or ""
+    out["link_completed"] = (
+        bool(out.get("link_completed"))
+        if "link_completed" in out
+        else bool(out.get("extract_link_ok")) or out.get("extract_link_status") == "success"
+    )
+    out["sms_completed"] = (
+        bool(out.get("sms_completed"))
+        if "sms_completed" in out
+        else out.get("codex_status") == "success"
+    )
+    out["proxy_country_code"] = _account_proxy_country_code(out)
+    proxy_geo = _account_proxy_geo(out)
+    if proxy_geo:
+        out["proxy_country_name"] = proxy_geo.get("country") or ""
+        out["proxy_region"] = proxy_geo.get("region") or ""
+        out["proxy_city"] = proxy_geo.get("city") or ""
+        out["proxy_exit_ip"] = proxy_geo.get("ip") or ""
+    if str(out.get("email_source") or "").strip().lower() == "icloud":
+        icloud_row = _find_by_email(_load_icloud_emails(), str(out.get("email") or ""))
+        out["icloud_code_url_available"] = bool(str((icloud_row or {}).get("code_url") or "").strip())
     plan_status = out.get("plan_check_status")
     if plan_status in {"queued", "running"}:
         try:
@@ -550,6 +736,18 @@ def _account_matches_plan_filter(row: dict, plan_filter: str | None = None) -> b
     if f == "free":
         return plan == "free"
     return plan == f
+
+
+def _account_matches_status_filter(row: dict, status_filter: str | None = None) -> bool:
+    """账号完成状态过滤；空值返回全部，link/sms 只返回对应已完成账号。"""
+    value = str(status_filter or "").strip().lower()
+    if not value or value in {"all", "any"}:
+        return True
+    if value in {"link", "linked"}:
+        return bool(row.get("link_completed"))
+    if value in {"sms", "phone"}:
+        return bool(row.get("sms_completed"))
+    return True
 
 
 def _decorate_outlook(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
@@ -593,6 +791,22 @@ def _decorate_generic_api_email(row: dict, account_by_email: dict[str, dict] | N
     return out
 
 
+def _decorate_icloud_email(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
+    """补充 iCloud 行的复制内容和关联账号信息。"""
+    out = dict(row)
+    out["copy_line"] = _icloud_email_line(out)
+    account = None
+    if account_by_email is not None:
+        account = account_by_email.get((out.get("email") or "").lower())
+    if account:
+        out["registered_account_id"] = account.get("id")
+        out["access_token"] = account.get("access_token")
+        out["access_token_preview"] = ((account.get("access_token") or "")[:40] + "..." if account.get("access_token") else "")
+        out["account_copy_line"] = _account_line(account)
+        out["totp_secret"] = account.get("totp_secret")
+    return out
+
+
 def _get_conn() -> None:
     """兼容旧入口：初始化文件存储目录。"""
     _ensure_storage()
@@ -627,8 +841,10 @@ def insert_account(
     with _LOCK:
         accounts = _load_accounts()
         outlook_rows = _load_outlook()
+        icloud_rows = _load_icloud_emails()
         existing = _find_by_email(accounts, email)
         outlook_row = _find_by_email(outlook_rows, email)
+        icloud_row = _find_by_email(icloud_rows, email)
         extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
 
         if existing is None:
@@ -653,11 +869,20 @@ def insert_account(
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
             "email_source": email_source if email_source is not None else row.get("email_source"),
+            "registration_password": (
+                str((extra or {}).get("registration_password") or "").strip()
+                or row.get("registration_password")
+            ),
             "extra_json": extra_json if extra_json is not None else row.get("extra_json"),
             "codex_status": codex_status if codex_status is not None else row.get("codex_status"),
             "codex_error": codex_error if codex_error is not None else row.get("codex_error"),
             "updated_at": _now(),
         })
+        if codex_status == "success":
+            row["sms_completed"] = True
+            row["sms_completed_at"] = row.get("sms_completed_at") or _now()
+            row["sms_status_source"] = "codex"
+            row["sms_status_updated_at"] = _now()
 
         if outlook_row:
             row["password"] = outlook_row.get("password")
@@ -672,9 +897,20 @@ def insert_account(
             if totp_secret:
                 outlook_row["totp_secret"] = totp_secret
 
+        if icloud_row:
+            # iCloud 素材没有密码字段，只需关联账号状态和 Token。
+            icloud_row["status"] = "used"
+            icloud_row["used_at"] = icloud_row.get("used_at") or _now()
+            icloud_row["registered_account_id"] = row_id
+            icloud_row["access_token"] = access_token
+            icloud_row["completed_at"] = _now()
+            if totp_secret:
+                icloud_row["totp_secret"] = totp_secret
+
         row["copy_line"] = _account_line(row)
         _save_accounts(accounts)
         _save_outlook(outlook_rows)
+        _save_icloud_emails(icloud_rows)
         return row_id
 
 
@@ -690,6 +926,11 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
             return False
         row["codex_status"] = codex_status
         row["codex_error"] = codex_error
+        if codex_status == "success":
+            row["sms_completed"] = True
+            row["sms_completed_at"] = row.get("sms_completed_at") or _now()
+            row["sms_status_source"] = "codex"
+            row["sms_status_updated_at"] = _now()
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
@@ -755,7 +996,7 @@ def update_account_codex_agent(acc_id: int, result: dict | None = None) -> bool:
         row["codex_agent_status"] = status
         row["codex_agent_ok"] = ok
         row["codex_agent_checked_at"] = result.get("checked_at") or _now()
-        if status in {"success", "failed", "stopped"}:
+        if status in {"success", "failed", "stopped", "unsupported"}:
             row["codex_agent_completed_at"] = _now()
         row["codex_agent_error"] = None if ok or status == "running" else result.get("error")
         if result.get("message") is not None:
@@ -1048,6 +1289,11 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
             if payload.get("cdk_remaining") is not None:
                 row["extract_link_cdk_remaining"] = payload.get("cdk_remaining")
             row["extract_link_result_json"] = json.dumps(payload, ensure_ascii=False)
+        if ok:
+            row["link_completed"] = True
+            row["link_completed_at"] = row.get("link_completed_at") or _now()
+            row["link_status_source"] = "extract"
+            row["link_status_updated_at"] = _now()
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
@@ -1083,7 +1329,12 @@ def _account_matches_query(row: dict, q: str | None) -> bool:
         return False
 
 
-def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def _filtered_decorated_accounts(
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    status_filter: str | None = None,
+) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
         rows = [r for r in rows if bool(r.get("archived"))]
@@ -1093,22 +1344,35 @@ def _filtered_decorated_accounts(archived: str | bool | None = False, plan_filte
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
+    decorated = [r for r in decorated if _account_matches_status_filter(r, status_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
     return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
 
 
-def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_account_plan_check_statuses(
+    limit: int = 5000,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    status_filter: str | None = None,
+) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
-        "id", "email", "archived",
+        "id", "email", "archived", "link_completed", "sms_completed",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
-        "expires_at", "plan_expires_at", "plan_renews_at", "renews_at",
-        "billing_period", "billing_currency", "discount_amount", "discount_type",
-        "discount_expires_at", "discount_promo_campaign_id",
+        "live_check_status", "live_check_ok", "live_check_error",
+        "live_check_trigger", "live_check_queued_at", "live_check_started_at",
+        "live_checked_at", "live_check_proxy_used",
+        "subscription_plan", "has_active_subscription", "is_delinquent",
+        "expires_at", "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
+        "billing_period", "billing_currency", "last_purchase_origin_platform", "last_will_renew",
+        "discount_amount", "discount_type", "discount_duration_num_periods",
+        "discount_expires_at", "discount_cancellation_policy", "discount_promo_campaign_id",
         "extract_link_status", "extract_link_ok", "extract_link_type",
         "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste",
@@ -1120,7 +1384,12 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
     )
     with _LOCK:
-        all_rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        all_rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            status_filter=status_filter,
+        )
         total = len(all_rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -1132,7 +1401,9 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                 value = row.get(key)
                 if key in ("id", "email"):
                     continue
-                if value is not None and value != "":
+                # 查活/套餐状态需要把 null 一并传给前端，用于清除上一轮失败原因和时间；
+                # 否则轻量轮询 Object.assign 会把旧 plan_check_error 永久留在表格里。
+                if key.startswith(("live_check_", "plan_check_")) or (value is not None and value != ""):
                     item[key] = value
             plan = str(row.get("current_plan_type") or row.get("plan_type") or "").lower()
             if not any(x in plan for x in ("plus", "pro", "team", "go")):
@@ -1153,10 +1424,39 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
                     "plan_check_status": row.get("plan_check_status"),
                     "plan_check_ok": row.get("plan_check_ok"),
                     "plan_check_error": row.get("plan_check_error"),
+                    "plan_checked_at": row.get("plan_checked_at"),
+                    "plan_check_network_route": row.get("plan_check_network_route"),
+                    "plan_check_proxy_used": row.get("plan_check_proxy_used"),
+                    "plan_check_proxy_fallback_reason": row.get("plan_check_proxy_fallback_reason"),
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
+                    # 悬浮卡详情也纳入轻量轮询签名，避免同秒完成查询时沿用旧详情。
+                    "subscription_plan": row.get("subscription_plan"),
+                    "has_active_subscription": row.get("has_active_subscription"),
+                    "is_delinquent": row.get("is_delinquent"),
+                    "plan_expires_at": row.get("plan_expires_at"),
+                    "plan_renews_at": row.get("plan_renews_at"),
+                    "plan_cancels_at": row.get("plan_cancels_at"),
+                    "billing_period": row.get("billing_period"),
+                    "billing_currency": row.get("billing_currency"),
+                    "discount_amount": row.get("discount_amount"),
+                    "discount_type": row.get("discount_type"),
+                    "discount_duration_num_periods": row.get("discount_duration_num_periods"),
+                    "discount_expires_at": row.get("discount_expires_at"),
+                    "discount_cancellation_policy": row.get("discount_cancellation_policy"),
+                    "discount_promo_campaign_id": row.get("discount_promo_campaign_id"),
+                    "last_purchase_origin_platform": row.get("last_purchase_origin_platform"),
+                    "last_will_renew": row.get("last_will_renew"),
+                    "live_check_status": row.get("live_check_status"),
+                    "live_check_ok": row.get("live_check_ok"),
+                    "live_check_error": row.get("live_check_error"),
+                    "live_check_queued_at": row.get("live_check_queued_at"),
+                    "live_check_started_at": row.get("live_check_started_at"),
+                    "live_checked_at": row.get("live_checked_at"),
                     "extract_link_status": row.get("extract_link_status"),
+                    "link_completed": row.get("link_completed"),
+                    "sms_completed": row.get("sms_completed"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
                 }
@@ -1170,15 +1470,39 @@ def list_account_plan_check_statuses(limit: int = 5000, offset: int = 0, archive
         return {"items": items, "total": total, "offset": offset, "limit": limit, "revision": f"{total}:{latest}:{revision_sig}"}
 
 
-def list_accounts(limit: int = 500, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> list[dict]:
+def list_accounts(
+    limit: int = 500,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    status_filter: str | None = None,
+) -> list[dict]:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            status_filter=status_filter,
+        )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
 
-def list_accounts_page(limit: int = 50, offset: int = 0, archived: str | bool | None = False, plan_filter: str | None = None, q: str | None = None) -> dict:
+def list_accounts_page(
+    limit: int = 50,
+    offset: int = 0,
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    status_filter: str | None = None,
+) -> dict:
     with _LOCK:
-        rows = _filtered_decorated_accounts(archived=archived, plan_filter=plan_filter, q=q)
+        rows = _filtered_decorated_accounts(
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            status_filter=status_filter,
+        )
         total = len(rows)
         limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
@@ -1212,6 +1536,70 @@ def update_account_note(acc_id: int, note: str) -> bool:
         row["updated_at"] = now
         _save_accounts(rows)
         return True
+
+
+def update_account_completion_status(
+    acc_id: int,
+    status_name: str,
+    enabled: bool,
+    source: str = "manual",
+) -> dict | None:
+    """人工更新账号提链/接码完成状态，返回更新后的轻量状态。"""
+    name = str(status_name or "").strip().lower()
+    if name not in {"link", "sms"}:
+        raise ValueError("status_name 必须是 link 或 sms")
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return None
+        now = _now()
+        field = f"{name}_completed"
+        row[field] = bool(enabled)
+        row[f"{name}_completed_at"] = now if enabled else None
+        row[f"{name}_status_source"] = str(source or "manual")
+        row[f"{name}_status_updated_at"] = now
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return {
+            "id": int(row.get("id") or 0),
+            "email": row.get("email"),
+            "link_completed": _decorate_account(row)["link_completed"],
+            "sms_completed": _decorate_account(row)["sms_completed"],
+        }
+
+
+def sync_account_link_status(emails: list[str]) -> tuple[list[dict], list[dict]]:
+    """按邮箱批量点亮提链状态，返回 (updated, missing)。"""
+    normalized = []
+    seen = set()
+    for raw in emails or []:
+        email = str(raw or "").strip().lower()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        normalized.append(email)
+
+    with _LOCK:
+        rows = _load_accounts()
+        by_email = {(str(row.get("email") or "").strip().lower()): row for row in rows}
+        updated = []
+        missing = []
+        now = _now()
+        for email in normalized:
+            row = by_email.get(email)
+            if row is None:
+                missing.append({"email": email, "reason": "账号不存在"})
+                continue
+            row["link_completed"] = True
+            row["link_completed_at"] = row.get("link_completed_at") or now
+            row["link_status_source"] = "manual_sync"
+            row["link_status_updated_at"] = now
+            row["updated_at"] = now
+            updated.append({"id": int(row.get("id") or 0), "email": row.get("email")})
+        if updated:
+            _save_accounts(rows)
+        return updated, missing
 
 
 def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
@@ -1255,6 +1643,17 @@ def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
                 row["device_id"] = result.get("device_id")
             if result.get("proxy_used"):
                 row["live_check_proxy_used"] = result.get("proxy_used")
+            # 仅刷新流程返回真实 cookies 时更新登录态；现有 AT 在线校验生成的
+            # 精简 session 不覆盖注册时保存的完整 Session/Cookie。
+            if isinstance(session, dict) and isinstance(session.get("cookies"), list) and session.get("cookies"):
+                try:
+                    extra = json.loads(str(row.get("extra_json") or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    extra = {}
+                if not isinstance(extra, dict):
+                    extra = {}
+                extra["session"] = session
+                row["extra_json"] = json.dumps(extra, ensure_ascii=False)
             row["live_check_error"] = None
 
         row["copy_line"] = _account_line(row)
@@ -1498,18 +1897,19 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
 
     source:
       - outlook: records 元素 {email,password,client_id,refresh_token[,access_token,totp_secret]}
-      - generic_api: records 元素 {email,code_url[,access_token,totp_secret]}
+      - generic_api / icloud: records 元素 {email,code_url[,access_token,totp_secret]}
 
     返回 (新增账号数, 跳过数)。已存在账号会跳过；邮箱池中已存在的素材会复用并标记 used。
     """
     source = (source or "").strip().lower()
-    if source not in ("outlook", "generic_api"):
-        raise ValueError("source 必须显式传入 outlook / generic_api")
+    if source not in ("outlook", "generic_api", "icloud"):
+        raise ValueError("source 必须显式传入 outlook / generic_api / icloud")
 
     with _LOCK:
         accounts = _load_accounts()
         outlook_rows = _load_outlook()
         generic_rows = _load_generic_api_emails()
+        icloud_rows = _load_icloud_emails()
         inserted = skipped = 0
 
         for raw in records:
@@ -1525,15 +1925,16 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
             original_line = email
             pool_row = None
 
-            if source == "generic_api":
+            if source in ("generic_api", "icloud"):
                 code_url = (raw.get("code_url") or raw.get("url") or "").strip()
                 if not code_url:
                     skipped += 1
                     continue
-                pool_row = _find_by_email(generic_rows, email)
+                pool_rows = generic_rows if source == "generic_api" else icloud_rows
+                pool_row = _find_by_email(pool_rows, email)
                 if pool_row is None:
                     pool_row = {
-                        "id": _next_id(generic_rows),
+                        "id": _next_id(pool_rows),
                         "email": email,
                         "code_url": code_url,
                         "status": "used",
@@ -1541,15 +1942,15 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                         "note": "导入为已注册账号，用于 Codex 授权",
                         "imported_at": now,
                     }
-                    generic_rows.append(pool_row)
+                    pool_rows.append(pool_row)
                 else:
                     pool_row["code_url"] = code_url or pool_row.get("code_url")
                 pool_row["status"] = "used"
                 pool_row["used_at"] = pool_row.get("used_at") or now
                 pool_row["completed_at"] = pool_row.get("completed_at") or now
                 pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
-                pool_row["copy_line"] = _generic_api_email_line(pool_row)
-                original_line = _generic_api_email_line(pool_row)
+                pool_row["copy_line"] = _generic_api_email_line(pool_row) if source == "generic_api" else _icloud_email_line(pool_row)
+                original_line = pool_row["copy_line"]
             else:
                 password = (raw.get("password") or "").strip()
                 client_id = (raw.get("client_id") or raw.get("clientId") or "").strip()
@@ -1619,6 +2020,7 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
 
         _save_outlook(outlook_rows)
         _save_generic_api_emails(generic_rows)
+        _save_icloud_emails(icloud_rows)
         _save_accounts(accounts)
         return inserted, skipped
 
@@ -1837,6 +2239,129 @@ def get_generic_api_email_by_email(email: str) -> dict | None:
     with _LOCK:
         row = _find_by_email(_load_generic_api_emails(), email)
         return _decorate_generic_api_email(row) if row else None
+
+
+# ============================================================
+# iCloud email pool
+# ============================================================
+
+def import_icloud_emails(records: list[dict]) -> tuple[int, int]:
+    """批量导入 iCloud 邮箱，记录格式为 {email, code_url}。"""
+    with _LOCK:
+        rows = _load_icloud_emails()
+        inserted = skipped = 0
+        for raw in records:
+            email = (raw.get("email") or "").strip()
+            code_url = (raw.get("code_url") or raw.get("url") or "").strip()
+            if not email or not code_url:
+                skipped += 1
+                continue
+            if _find_by_email(rows, email):
+                skipped += 1
+                continue
+            row = {
+                "id": _next_id(rows),
+                "email": email,
+                "code_url": code_url,
+                "status": "available",
+                "used_at": None,
+                "note": None,
+                "imported_at": _now(),
+            }
+            row["copy_line"] = _icloud_email_line(row)
+            rows.append(row)
+            inserted += 1
+        _save_icloud_emails(rows)
+        return inserted, skipped
+
+
+def claim_next_icloud_email() -> dict | None:
+    """原子领取一个可用 iCloud 邮箱并标记为 used。"""
+    with _LOCK:
+        rows = sorted(_load_icloud_emails(), key=lambda x: int(x.get("id") or 0))
+        row = next((r for r in rows if r.get("status") == "available"), None)
+        if row is None:
+            return None
+        row["status"] = "used"
+        row["used_at"] = _now()
+        row["note"] = None
+        _save_icloud_emails(rows)
+        return _decorate_icloud_email(row)
+
+
+def release_icloud_email(email: str, status: str = "available", note: str | None = None) -> None:
+    """把 iCloud 邮箱状态改为 available/used/failed/disabled。"""
+    with _LOCK:
+        rows = _load_icloud_emails()
+        row = _find_by_email(rows, email)
+        if row is None:
+            return
+        row["status"] = status
+        if status == "available":
+            row["used_at"] = None
+        elif status in ("used", "failed", "disabled"):
+            row["used_at"] = row.get("used_at") or _now()
+        if note is not None:
+            row["note"] = note
+        _save_icloud_emails(rows)
+
+
+def release_unconsumed_icloud_email(email: str, note: str | None = None) -> bool:
+    """回收尚未生成本地账号且仍为 used 的 iCloud 邮箱。"""
+    with _LOCK:
+        if _find_by_email(_load_accounts(), email) is not None:
+            return False
+        rows = _load_icloud_emails()
+        row = _find_by_email(rows, email)
+        if row is None or row.get("status") != "used":
+            return False
+        row["status"] = "available"
+        row["used_at"] = None
+        if note is not None:
+            row["note"] = note
+        _save_icloud_emails(rows)
+        return True
+
+
+def delete_icloud_email(email: str) -> bool:
+    """从 iCloud 邮箱池删除一个邮箱。"""
+    with _LOCK:
+        rows = _load_icloud_emails()
+        target = (email or "").lower()
+        new_rows = [r for r in rows if (r.get("email") or "").lower() != target]
+        if len(new_rows) == len(rows):
+            return False
+        _save_icloud_emails(new_rows)
+        return True
+
+
+def list_icloud_email_pool(status: str | None = None, limit: int = 500) -> list[dict]:
+    """列出 iCloud 邮箱池，附带关联注册账号的 Token 摘要。"""
+    with _LOCK:
+        account_by_email = {(a.get("email") or "").lower(): a for a in _load_accounts()}
+        rows = _load_icloud_emails()
+        if status:
+            rows = [r for r in rows if r.get("status") == status]
+        rows = sorted(rows, key=lambda x: int(x.get("id") or 0), reverse=True)
+        return [_decorate_icloud_email(r, account_by_email) for r in rows[:limit]]
+
+
+def icloud_email_pool_summary() -> dict:
+    """统计 iCloud 邮箱池各状态数量。"""
+    with _LOCK:
+        out = {"available": 0, "used": 0, "failed": 0}
+        for row in _load_icloud_emails():
+            status = row.get("status") or "available"
+            out[status] = out.get(status, 0) + 1
+        out["total"] = sum(v for k, v in out.items() if k != "total")
+        return out
+
+
+def get_icloud_email_by_email(email: str) -> dict | None:
+    """按邮箱查找 iCloud 池记录。"""
+    with _LOCK:
+        row = _find_by_email(_load_icloud_emails(), email)
+        return _decorate_icloud_email(row) if row else None
 
 
 # ============================================================
