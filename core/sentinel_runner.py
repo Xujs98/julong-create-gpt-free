@@ -184,6 +184,12 @@ def generate_sentinel_token(
         flow, "https://auth.openai.com/create-account/password"
     )
 
+    # challenge 内的 dx 使用发起 /sentinel/req 时的 p 作为密钥。该值由
+    # request_sentinel_token 以私有字段带入，只传给 runner，不写进题目 JSON。
+    challenge_proof = str((challenge or {}).get("_requirements_proof") or "")
+    challenge_payload = dict(challenge or {})
+    challenge_payload.pop("_requirements_proof", None)
+
     # 把 challenge 写入临时文件，避免命令行长度 / 转义问题
     tmp = tempfile.NamedTemporaryFile(
         mode="w",
@@ -193,7 +199,7 @@ def generate_sentinel_token(
         encoding="utf-8",
     )
     try:
-        json.dump(challenge, tmp, ensure_ascii=False)
+        json.dump(challenge_payload, tmp, ensure_ascii=False)
         tmp.flush()
         tmp.close()
 
@@ -248,6 +254,11 @@ def generate_sentinel_token(
         env = os.environ.copy()
         env.pop("SENTINEL_CONFIG", None)
         env["SENTINEL_CONFIG"] = "__none__"  # 故意指向不存在的文件，跳过 fallback 列表
+        if challenge_proof:
+            # proof 不放命令行，避免 debug 日志/进程列表泄露；Node 通过环境变量读取。
+            env["SENTINEL_CHALLENGE_PROOF"] = challenge_proof
+        else:
+            env.pop("SENTINEL_CHALLENGE_PROOF", None)
         env["TZ"] = timezone_iana  # 让 Node VM 里的 Date.toString() 与 Python p 指纹时区一致
 
         try:

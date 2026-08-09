@@ -32,6 +32,11 @@ class CloakElementTests(unittest.TestCase):
         self.page.keyboard.press.assert_called_once_with("Meta+A")
         self.locator.press_sequentially.assert_not_called()
 
+    def test_text_reads_playwright_inner_text_for_selenium_compatibility(self):
+        self.locator.inner_text.return_value = "メールを再送信する"
+        self.assertEqual(self.element.text, "メールを再送信する")
+        self.locator.inner_text.assert_called_once_with(timeout=1000)
+
 
 class CloakFingerprintIdentityTests(unittest.TestCase):
     def test_random_mode_generates_new_seed_and_disables_persistent_context(self):

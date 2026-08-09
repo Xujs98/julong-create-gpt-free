@@ -132,6 +132,43 @@ def test_create_password_entry_waits_until_html_is_loaded():
     click.assert_called_once_with(driver, password_link, label="create_password_entry_href")
 
 
+def test_create_password_entry_matches_japanese_password_button_without_href():
+    """日语页面用 button 渲染“密码继续”时，不依赖固定中文文案或 href。"""
+    driver = Mock()
+    password_button = Mock()
+    password_button.is_displayed.return_value = True
+    password_button.is_enabled.return_value = True
+    # 三个固定 href 选择器均为空，第四次调用才返回无 href 的日语按钮标记。
+    driver.find_elements.side_effect = [[], [], [], [password_button]]
+    driver.execute_script.side_effect = [
+        {
+            "readyState": "complete",
+            "url": "https://auth.example.test/email-verification",
+            "passwordHrefCount": 0,
+        },
+        {
+            "ok": True,
+            "href": "",
+            "selector": '[data-codex-create-password-entry="marker"]',
+            "text": "パスワードで続行",
+        },
+    ]
+
+    with patch(
+        "core.roxy_registration._is_signup_password_page",
+        side_effect=[False, False, True],
+    ), patch("core.roxy_registration._has_access_token", return_value=False), patch(
+        "core.roxy_registration._human_click"
+    ) as click, patch("core.roxy_registration.time.sleep"):
+        from core.roxy_registration import _click_create_password_entry_if_present
+
+        result = _click_create_password_entry_if_present(driver, timeout=3)
+
+    assert result["ok"] is True
+    assert result["reason"] == "clicked_create_password_entry"
+    click.assert_called_once_with(driver, password_button, label="create_password_entry")
+
+
 def test_password_branch_is_completed_before_otp_fetch():
     from core.roxy_registration import _ensure_password_before_otp
 
@@ -215,6 +252,22 @@ def test_password_page_uses_real_elements_without_language_copy():
     assert result == "Universal1!Password"
     type_text.assert_called_once_with(driver, password_input, "Universal1!Password", clear=True)
     click.assert_called_once_with(driver, submit_button, label="password_submit")
+
+
+def test_otp_single_input_uses_atomic_fill_and_verifies_six_digits():
+    from core.roxy_registration import _type_otp
+
+    driver = Mock()
+    otp_input = Mock()
+    otp_input.is_displayed.return_value = True
+    otp_input.is_enabled.return_value = True
+    driver.find_elements.return_value = [otp_input]
+    driver.execute_script.side_effect = [None, "603241"]
+
+    _type_otp(driver, "603241")
+
+    otp_input.fill.assert_called_once_with("603241")
+    assert driver.execute_script.call_count == 2
 
 
 def test_cloak_flow_isolated_from_asyncio_loop_and_inherits_job_context():

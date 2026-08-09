@@ -153,6 +153,19 @@ class CloakElement:
         except Exception:
             return None
 
+    @property
+    def text(self) -> str:
+        """兼容 Selenium WebElement.text，供共享页面状态/日志逻辑读取按钮文案。"""
+        try:
+            if self.locator is not None:
+                try:
+                    return str(self.locator.inner_text(timeout=1000) or "")
+                except Exception:
+                    return str(self.locator.text_content(timeout=1000) or "")
+            return str(self.handle.inner_text() or self.handle.text_content() or "")
+        except Exception:
+            return ""
+
 
 class _SwitchTo:
     def __init__(self, driver: "CloakSeleniumDriver"):

@@ -97,6 +97,12 @@ def test_protocol_password_setting_prefers_configured_password():
         assert main._protocol_registration_password() == "ConfiguredPassword"
 
 
+def test_protocol_password_branch_requires_real_password_landing():
+    assert main._is_protocol_password_landing("https://auth.openai.com/create-account/password")
+    assert main._is_protocol_password_landing("https://auth.openai.com/api/accounts/user/register")
+    assert not main._is_protocol_password_landing("https://auth.openai.com/email-verification")
+
+
 def test_protocol_password_setting_generates_policy_compliant_value():
     with patch.object(main._register_cfg, "REGISTER_PASSWORD", ""):
         value = main._protocol_registration_password()
@@ -159,7 +165,7 @@ def test_run_registration_protocol_password_branch_persists_password():
             ("get_providers", {"side_effect": lambda *_: mark("providers") or {}}),
             ("get_csrf_token", {"side_effect": lambda *_: mark("csrf") or "csrf"}),
             ("signin_openai", {"side_effect": lambda *_: mark("signin") or "authorize"}),
-            ("follow_authorize", {"side_effect": lambda *args, **kw: mark("authorize", kw.get("allow_password_page"))}),
+            ("follow_authorize", {"side_effect": lambda *args, **kw: mark("authorize", kw.get("allow_password_page")) or "https://auth.openai.com/create-account/password"}),
             ("get_create_account_page", {"side_effect": lambda *_: mark("password_page") or "https://auth.openai.com/create-account/password"}),
             ("request_sentinel_token", {"side_effect": lambda *args: mark("sentinel", args[-1]) or {"token": "x"}}),
             ("build_sentinel_header", {"side_effect": lambda *args: mark("sentinel_header", args[-1]) or ("sentinel", "so")}),

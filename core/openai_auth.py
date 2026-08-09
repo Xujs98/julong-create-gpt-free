@@ -261,6 +261,12 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
     resp.raise_for_status()
 
     data = resp.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Sentinel 响应不是 JSON 对象: {type(data).__name__}")
+    # turnstile.dx / so.collector_dx / so.snapshot_dx 都使用本次请求的 p
+    # 作为解码密钥。Node runner 必须复用同一个 p；重新生成一份相似指纹会
+    # 解码成短错误串，最终表现为 create_account 长时间无响应。
+    data["_requirements_proof"] = p
     logger.info(f"[Sentinel] 获取 sentinel token 成功, persona={data.get('persona')}")
 
     if data.get("proofofwork", {}).get("required"):
@@ -295,7 +301,7 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
 
     Returns:
         (sentinel_header, so_header) 元组
-        sentinel_header: openai-sentinel-token 请求头的值（runner 直接产出的 JSON 字符串）
+        sentinel_header: openai-sentinel-token 请求头的值
         so_header: openai-sentinel-so-token 请求头的值（若 SDK 输出含 so 字段则填充，否则为 None）
     """
     from config import USER_AGENT
@@ -313,26 +319,39 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
         cookie=session.auth_cookie_header() if hasattr(session, "auth_cookie_header") else f"oai-did={session.device_id}",
     )
 
-    # 解析 runner 输出，单独抽出 so 字段填充 openai-sentinel-so-token
-    so_header = None
     try:
         parsed = json.loads(header_value)
-        so_value = parsed.get("so")
-        if so_value:
-            so_header = json.dumps(
-                {
-                    "so": so_value,
-                    "c": parsed.get("c", sentinel_resp.get("token", "")),
-                    "id": session.device_id,
-                    "flow": flow,
-                },
-                separators=(',', ':'),
-            )
-            logger.info(f"[Sentinel] 检测到 SO 字段，已构建 so-token 头")
     except (ValueError, TypeError) as exc:
-        logger.warning(f"[Sentinel] runner 输出解析失败: {exc}")
+        raise RuntimeError(f"Sentinel runner 输出解析失败: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"Sentinel runner 输出不是 JSON 对象: {type(parsed).__name__}")
 
-    return header_value, so_header
+    turnstile_required = bool((sentinel_resp.get("turnstile") or {}).get("required"))
+    so_required = bool((sentinel_resp.get("so") or {}).get("required"))
+    if turnstile_required and not parsed.get("t"):
+        raise RuntimeError(f"Sentinel challenge 要求 turnstile，但 runner 未生成 t：flow={flow}")
+
+    # SO 只放在独立的 openai-sentinel-so-token 头；主 token 与真实浏览器
+    # 一致，只保留 p/t/c/id/flow。
+    so_value = parsed.pop("so", None)
+    if so_required and not so_value:
+        raise RuntimeError(f"Sentinel challenge 要求 SO，但 runner 未生成 so：flow={flow}")
+
+    so_header = None
+    if so_value:
+        so_header = json.dumps(
+            {
+                "so": so_value,
+                "c": parsed.get("c", sentinel_resp.get("token", "")),
+                "id": parsed.get("id") or session.device_id,
+                "flow": parsed.get("flow") or flow,
+            },
+            separators=(',', ':'),
+        )
+        logger.info("[Sentinel] 已生成独立 SO token 头")
+
+    sentinel_header = json.dumps(parsed, separators=(',', ':'))
+    return sentinel_header, so_header
 
 
 # ============================================================

@@ -1274,7 +1274,35 @@ def _type_otp(driver, code: str) -> None:
     ]:
         els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
         if len(els) == 1:
-            _human_type_text(driver, els[0], code, clear=True)
+            target = els[0]
+            # Cloak 的 React OTP 输入框偶尔丢失逐字符 key event，造成 6 位码只剩 5 位。
+            # 优先使用 Playwright fill 原子写入，再派发 input/change；普通 Selenium 元素
+            # 仍走原有人工化输入并回读校验。
+            fill = getattr(target, "fill", None)
+            if callable(fill):
+                try:
+                    fill(str(code))
+                    driver.execute_script(
+                        "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                        "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                        target,
+                    )
+                except Exception:
+                    _human_type_text(driver, target, code, clear=True)
+            else:
+                _human_type_text(driver, target, code, clear=True)
+            try:
+                observed = str(driver.execute_script("return String(arguments[0].value || '');", target) or "")
+            except Exception:
+                observed = ""
+            if observed != str(code):
+                _set_element_value(driver, target, str(code))
+                try:
+                    observed = str(driver.execute_script("return String(arguments[0].value || '');", target) or "")
+                except Exception:
+                    observed = ""
+            if observed != str(code):
+                raise RuntimeError(f"OTP 输入值校验失败：expected={code!r}, observed={observed!r}")
             return
 
     # 6 个分格输入框
@@ -1882,6 +1910,7 @@ def _click_create_password_entry_if_present(driver, timeout: int = 30) -> dict:
     clicked = False
     last = {}
     last_wait_log = 0.0
+    target_marker = f"codex-create-password-entry-{uuid.uuid4().hex}"
     while time.time() < end:
         if _is_signup_password_page(driver):
             return {"ok": True, "reason": "already_password_page"}
@@ -1946,6 +1975,7 @@ def _click_create_password_entry_if_present(driver, timeout: int = 30) -> dict:
 
         try:
             result = driver.execute_script(r"""
+            const marker = String(arguments[0] || '');
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
               && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
               && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
@@ -1972,23 +2002,29 @@ def _click_create_password_entry_if_present(driver, timeout: int = 30) -> dict:
               ].filter(Boolean).join(' ').toLowerCase();
               const text = String(el.textContent || el.getAttribute('value') || '')
                 .replace(/\s+/g, '').toLowerCase();
-              if (/forgot|reset|忘记|重置/.test(`${attrs}${text}`)) return false;
+              const semantic = `${attrs}${text}`;
+              if (/forgot|reset|忘记|重置|パスワードを忘れた|비밀번호를 잊으셨나요/.test(semantic)) return false;
+              const passwordWord = /password|パスワード|密码|密碼|passwort|motdepasse|contraseña|senha|пароль|비밀번호|암호/.test(semantic);
+              const continueWord = /continue|proceed|next|signup|sign.?up|register|log.?in|use|続行|次へ|登録|ログイン|继续|注册|下一步|weiter|fortfahren|anmelden|inscrire|connexion|suivant|continuar|registrar|siguiente|계속|가입|다음/.test(semantic);
               return (
                 /使用密码继续|使用密码注册|密码继续|继续使用密码/.test(text)
+                || /パスワードで続行|パスワードで登録|パスワードを使用して続行/.test(text)
                 || /continuewithpassword|continueusingpassword|usepasswordtocontinue/.test(text)
                 || /password.*(continue|signup|register)|(?:continue|signup|register).*password/.test(attrs)
+                || (passwordWord && continueWord)
               );
             });
             if (!target) return {ok:false, reason:'missing_create_password_entry'};
             target.scrollIntoView({block:'center', inline:'nearest'});
+            target.setAttribute('data-codex-create-password-entry', marker);
             const href = target.getAttribute('href') || target.getAttribute('formaction') || '';
             return {
               ok:true,
               href,
-              selector: href ? `a[href="${CSS.escape(href)}"]` : '',
+              selector: `[data-codex-create-password-entry="${CSS.escape(marker)}"]`,
               text:(target.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80)
             };
-            """) or {"ok": False, "reason": "empty_result"}
+            """, target_marker) or {"ok": False, "reason": "empty_result"}
             last = result
             selector = str(result.get("selector") or "").strip()
             if result.get("ok") and selector:
@@ -1998,8 +2034,8 @@ def _click_create_password_entry_if_present(driver, timeout: int = 30) -> dict:
                     _human_click(driver, elements[0], label="create_password_entry")
                     clicked = True
                     logger.info(
-                        "%s 检测到创建密码入口，点击并等待密码页：href=%s text=%s",
-                        _log_prefix(driver), result.get("href") or "-", result.get("text") or "-",
+                        "%s 检测到创建密码入口，点击并等待密码页：href=%s selector=%s text=%s",
+                        _log_prefix(driver), result.get("href") or "-", selector, result.get("text") or "-",
                     )
         except Exception as exc:
             last = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}

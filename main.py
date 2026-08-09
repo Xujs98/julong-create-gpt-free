@@ -61,6 +61,16 @@ def _protocol_create_password_enabled() -> bool:
     return bool(getattr(_register_cfg, "ENABLE_CREATE_PASSWORD", False))
 
 
+def _is_protocol_password_landing(url: str) -> bool:
+    text = str(url or "").lower()
+    return any(path in text for path in (
+        "/create-account/password",
+        "/u/signup/password",
+        "/signup/password",
+        "/api/accounts/user/register",
+    ))
+
+
 def _protocol_registration_password(length: int = 14) -> str:
     configured = str(getattr(_register_cfg, "REGISTER_PASSWORD", "") or "").strip()
     if configured:
@@ -322,10 +332,21 @@ def run_registration(
 
         # ==================== 阶段2: OpenAI Auth ====================
         # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）。
-        # 创建密码开关开启时显式建立 password signup 状态并提交账号密码；
-        # 关闭时保持原有 passwordless OTP 流程。
-        create_password = _protocol_create_password_enabled()
-        follow_authorize(session, authorize_url, allow_password_page=create_password)
+        # 只有服务端真实落到 password signup 页时才提交 /user/register。
+        # 已落到 /email-verification 后再强行 GET 密码页不会切换 auth step，
+        # 随后的 register 会稳定返回 invalid_auth_step。
+        password_requested = _protocol_create_password_enabled()
+        authorize_landing = follow_authorize(
+            session,
+            authorize_url,
+            allow_password_page=password_requested,
+        )
+        create_password = password_requested and _is_protocol_password_landing(authorize_landing)
+        if password_requested and not create_password:
+            logger.warning(
+                "[密码注册] 当前协议会话落点不支持密码分支，保持服务端 OTP 流程：%s",
+                authorize_landing or "未知",
+            )
         human_delay("navigate")
 
         if create_password:

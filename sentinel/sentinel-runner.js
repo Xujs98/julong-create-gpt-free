@@ -48,6 +48,16 @@ function truthy(value) {
   return value === true || value === "1" || value === "true" || value === "yes";
 }
 
+function looksLikeSdkExecutionError(value) {
+  if (typeof value !== "string" || !value) return false;
+  try {
+    const decoded = atobBinary(value);
+    return /^\d+:\s*(?:Error|SyntaxError|TypeError|ReferenceError|RangeError)\b/.test(decoded);
+  } catch {
+    return false;
+  }
+}
+
 function readConfig(args) {
   const explicitPath = args.config || process.env.SENTINEL_CONFIG;
   const candidates = explicitPath
@@ -1270,6 +1280,11 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
   const sdkPath = path.resolve(pick(args["sdk"], cfg("sdk", "sdkPath"), process.env.SENTINEL_SDK_PATH, defaultSdkPath));
   const flow = pick(args.flow, cfg("flow"), process.env.SENTINEL_FLOW, "checkout_session_approval");
   const challengeFile = pick(args["challenge-file"], cfg("challengeFile", "challenge_file"), process.env.SENTINEL_CHALLENGE_FILE);
+  const challengeProof = pick(
+    args["challenge-proof"],
+    cfg("challengeProof", "challenge_proof"),
+    process.env.SENTINEL_CHALLENGE_PROOF,
+  );
   const officialMode =
     args.official === "1" ||
     truthy(cfg("official")) ||
@@ -1371,6 +1386,7 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         throw new Error(`未知 iframe 消息类型：${message.type}`);
       }
       const proof = message.p;
+      const effectiveProof = challengeFile && challengeProof ? challengeProof : proof;
       if (challengeFile) {
         cachedChallenge ||= readChallengeFile(challengeFile);
       } else {
@@ -1386,7 +1402,7 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
       }
       if (debugDx && cachedChallenge?.turnstile?.dx) {
         try {
-          const decoded = decodeDx(cachedChallenge.turnstile.dx, proof);
+          const decoded = decodeDx(cachedChallenge.turnstile.dx, effectiveProof);
           const limit = Number.isFinite(debugDxLimit) && debugDxLimit > 0 ? debugDxLimit : 80;
           process.stderr.write(`dx 前 ${limit} 条指令：${JSON.stringify(decoded.slice(0, limit))}\n`);
         } catch (error) {
@@ -1394,7 +1410,7 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         }
       }
       return {
-        cachedProof: proof,
+        cachedProof: effectiveProof,
         cachedChatReq: cachedChallenge,
       };
     },
@@ -1417,7 +1433,29 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
     throw new Error("SDK 加载后没有暴露 SentinelSDK.token");
   }
 
-  const tokenText = await context.SentinelSDK.token(flow);
+  let tokenText = await context.SentinelSDK.token(flow);
+  const tokenPayload = JSON.parse(tokenText);
+  if (cachedChallenge?.turnstile?.required) {
+    if (!tokenPayload.t || looksLikeSdkExecutionError(tokenPayload.t)) {
+      throw new Error("challenge 要求 turnstile，但 SDK 的 t 执行失败");
+    }
+  }
+  if (cachedChallenge?.so?.required) {
+    if (!context.SentinelSDK?.sessionObserverToken) {
+      throw new Error("challenge 要求 SO，但 SDK 未暴露 sessionObserverToken");
+    }
+    // collector_dx 在 token() 内启动；让同步采集指令先落地，再生成 snapshot。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const soText = await context.SentinelSDK.sessionObserverToken(flow);
+    if (!soText) throw new Error("challenge 要求 SO，但 SDK 未生成 SO token");
+    const soPayload = typeof soText === "string" ? JSON.parse(soText) : soText;
+    const soValue = soPayload?.so || (typeof soPayload === "string" ? soPayload : "");
+    if (!soValue || looksLikeSdkExecutionError(soValue)) {
+      throw new Error("challenge 要求 SO，但 SDK 的 SO snapshot 执行失败");
+    }
+    tokenPayload.so = soValue;
+    tokenText = JSON.stringify(tokenPayload);
+  }
   clearTimers();
   if (!writeOutput) return tokenText;
   if (args.pretty || process.env.SENTINEL_PRETTY === "1") {
