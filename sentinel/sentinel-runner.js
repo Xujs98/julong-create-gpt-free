@@ -588,7 +588,15 @@ function createMimeTypeArray() {
   return mimes;
 }
 
-function createCanvas(width = 300, height = 150, isSafari = false) {
+function stableDigest(seed, ...parts) {
+  return crypto.createHash("sha256").update([String(seed || ""), ...parts.map(String)].join("\u001f")).digest();
+}
+
+function createCanvas(width = 300, height = 150, isSafari = false, fingerprint = {}) {
+  const operations = [];
+  const record = (name, values = []) => operations.push(`${name}:${values.map(String).join(",")}`);
+  const seed = fingerprint.canvasSeed || "default-canvas";
+  const fontSeed = fingerprint.fontSeed || "default-font";
   const canvas = {
     tagName: "CANVAS",
     style: {},
@@ -596,7 +604,10 @@ function createCanvas(width = 300, height = 150, isSafari = false) {
     height,
     parentNode: null,
     getBoundingClientRect() { return createDomRect(this.width, this.height); },
-    toDataURL() { return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lxv8dQAAAABJRU5ErkJggg=="; },
+    toDataURL(type = "image/png") {
+      const digest = stableDigest(seed, this.width, this.height, operations.join("|"));
+      return `data:${type || "image/png"};base64,${digest.toString("base64")}`;
+    },
     getContext(type) {
       const name = String(type || "").toLowerCase();
       if (name === "2d") {
@@ -605,10 +616,29 @@ function createCanvas(width = 300, height = 150, isSafari = false) {
           fillStyle: "#000000",
           strokeStyle: "#000000",
           font: "10px sans-serif",
-          fillRect() {}, clearRect() {}, strokeRect() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {},
-          fillText() {}, strokeText() {}, measureText(text) { return { width: String(text || "").length * 6.5 }; },
-          getImageData() { return { data: new Uint8ClampedArray(canvas.width * canvas.height * 4), width: canvas.width, height: canvas.height }; },
-          putImageData() {}, createImageData(w, h) { return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h }; },
+          fillRect(...args) { record("fillRect", args); }, clearRect(...args) { record("clearRect", args); }, strokeRect(...args) { record("strokeRect", args); },
+          beginPath() { record("beginPath"); }, closePath() { record("closePath"); }, moveTo(...args) { record("moveTo", args); }, lineTo(...args) { record("lineTo", args); },
+          stroke() { record("stroke"); }, fill() { record("fill"); },
+          fillText(...args) { record("fillText", args); }, strokeText(...args) { record("strokeText", args); },
+          measureText(text) {
+            const jitter = stableDigest(fontSeed, this.font, text)[0] / 2550;
+            return { width: String(text || "").length * (6.45 + jitter) };
+          },
+          getImageData(x = 0, y = 0, w = canvas.width, h = canvas.height) {
+            const width = Math.max(0, Number(w) || 0);
+            const height = Math.max(0, Number(h) || 0);
+            const data = new Uint8ClampedArray(width * height * 4);
+            const digest = stableDigest(seed, x, y, width, height, operations.join("|"));
+            for (let i = 0; i < data.length; i += 4) {
+              data[i] = digest[i % digest.length];
+              data[i + 1] = digest[(i + 7) % digest.length];
+              data[i + 2] = digest[(i + 13) % digest.length];
+              data[i + 3] = 255;
+            }
+            return { data, width, height };
+          },
+          putImageData(...args) { record("putImageData", args.slice(1)); },
+          createImageData(w, h) { return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h }; },
         };
       }
       if (name === "webgl" || name === "experimental-webgl" || name === "webgl2") {
@@ -618,6 +648,8 @@ function createCanvas(width = 300, height = 150, isSafari = false) {
             const values = new Map([
               [0x1f00, "WebKit"],                    // VENDOR
               [0x1f01, "WebKit WebGL"],              // RENDERER
+              [0x9245, fingerprint.webglVendor || "Google Inc. (Apple)"],
+              [0x9246, fingerprint.webglRenderer || "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"],
               [0x1f02, isSafari ? "WebGL 2.0" : "WebGL 2.0 (OpenGL ES 3.0 Chromium)"],
               [0x8b8c, isSafari ? "WebGL GLSL ES 1.0" : "WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)"],
               [0x0d33, 16384],                       // MAX_TEXTURE_SIZE
@@ -642,11 +674,24 @@ function createCanvas(width = 300, height = 150, isSafari = false) {
   return canvas;
 }
 
-function createAudioContext() {
+function createAudioContext(audioSeed = "default-audio") {
   return class AudioContextMock {
     constructor() { this.sampleRate = 48000; this.state = "running"; this.destination = {}; }
     createOscillator() { return { type: "sine", frequency: { value: 440 }, connect() {}, start() {}, stop() {} }; }
-    createAnalyser() { return { fftSize: 2048, frequencyBinCount: 1024, getFloatFrequencyData() {}, getByteFrequencyData() {} }; }
+    createAnalyser() {
+      return {
+        fftSize: 2048,
+        frequencyBinCount: 1024,
+        getFloatFrequencyData(array) {
+          const digest = stableDigest(audioSeed, "float-frequency");
+          for (let i = 0; i < (array?.length || 0); i++) array[i] = -100 + digest[i % digest.length] / 16;
+        },
+        getByteFrequencyData(array) {
+          const digest = stableDigest(audioSeed, "byte-frequency");
+          for (let i = 0; i < (array?.length || 0); i++) array[i] = digest[i % digest.length];
+        },
+      };
+    }
     createGain() { return { gain: { value: 1 }, connect() {} }; }
     close() { this.state = "closed"; return Promise.resolve(); }
     resume() { this.state = "running"; return Promise.resolve(); }
@@ -744,6 +789,24 @@ function createBrowserContext(options) {
   const location = new URL(options.pageUrl);
   let iframeNode = null;
   const bodyChildren = [];
+  const fontFamilies = options.fontProfile === "macos_sonoma_default"
+    ? ["Arial", "Helvetica", "Times New Roman", "Courier New", "Georgia", "Verdana", "Monaco", "Menlo", "Apple Color Emoji"]
+    : ["Arial", "Helvetica", "Times New Roman", "Courier New"];
+  const fontSet = {
+    status: "loaded",
+    size: fontFamilies.length,
+    check(font) {
+      const text = String(font || "").toLowerCase();
+      return fontFamilies.some((family) => text.includes(family.toLowerCase()));
+    },
+    async load() { return fontFamilies.slice(); },
+    ready: Promise.resolve([]),
+    onloading: null,
+    onloadingdone: null,
+    onloadingerror: null,
+    [Symbol.iterator]: function* iterator() { yield* fontFamilies; },
+  };
+  Object.defineProperty(fontSet, Symbol.toStringTag, { value: "FontFaceSet" });
   const documentTarget = createEventTarget();
   const document = {
     currentScript,
@@ -763,6 +826,7 @@ function createBrowserContext(options) {
     readyState: "complete",
     visibilityState: "visible",
     hidden: false,
+    fonts: fontSet,
     hasFocus() { return true; },
     [reactListeningKey]: true,
     [reactContainerKey]: true,
@@ -845,7 +909,7 @@ function createBrowserContext(options) {
     createElement(tagName) {
       const lowerTag = String(tagName).toLowerCase();
       if (lowerTag === "canvas") {
-        const canvas = createCanvas(300, 150, isSafari);
+        const canvas = createCanvas(300, 150, isSafari, options);
         canvas.ownerDocument = document;
         return canvas;
       }
@@ -1121,8 +1185,8 @@ function createBrowserContext(options) {
     Math: mathObject,
     Date,
     Intl: browserIntl,
-    AudioContext: createAudioContext(),
-    webkitAudioContext: createAudioContext(),
+    AudioContext: createAudioContext(options.audioSeed),
+    webkitAudioContext: createAudioContext(options.audioSeed),
     JSON,
     Array,
     Object,
@@ -1334,7 +1398,7 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         args["user-agent"],
         cfg("userAgent", "user_agent"),
         process.env.SENTINEL_USER_AGENT,
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
       ),
     contentType,
     browserFamily: pick(args["browser-family"], cfg("browserFamily", "browser_family"), process.env.SENTINEL_BROWSER_FAMILY, "chrome"),
@@ -1355,15 +1419,21 @@ async function main(argv = process.argv.slice(2), writeOutput = true) {
         : Number.NaN,
     deviceMemory: Number(pick(args["device-memory"], cfg("deviceMemory", "device_memory"), process.env.SENTINEL_DEVICE_MEMORY, 8)),
     devicePixelRatio: Number(pick(args["device-pixel-ratio"], cfg("devicePixelRatio", "device_pixel_ratio"), process.env.SENTINEL_DEVICE_PIXEL_RATIO, 2)),
-    chromeMajor: pick(args["chrome-major"], cfg("chromeMajor", "chrome_major"), process.env.SENTINEL_CHROME_MAJOR, "149"),
-    chromeFullVersion: pick(args["chrome-full-version"], cfg("chromeFullVersion", "chrome_full_version"), process.env.SENTINEL_CHROME_FULL_VERSION, "149.0.0.0"),
-    secChUa: pick(args["sec-ch-ua"], cfg("secChUa", "sec_ch_ua"), process.env.SENTINEL_SEC_CH_UA, '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"'),
+    chromeMajor: pick(args["chrome-major"], cfg("chromeMajor", "chrome_major"), process.env.SENTINEL_CHROME_MAJOR, "146"),
+    chromeFullVersion: pick(args["chrome-full-version"], cfg("chromeFullVersion", "chrome_full_version"), process.env.SENTINEL_CHROME_FULL_VERSION, "146.0.0.0"),
+    secChUa: pick(args["sec-ch-ua"], cfg("secChUa", "sec_ch_ua"), process.env.SENTINEL_SEC_CH_UA, '"Google Chrome";v="146", "Chromium";v="146", "Not)A;Brand";v="24"'),
     secChUaPlatform: String(pick(args["sec-ch-ua-platform"], cfg("secChUaPlatform", "sec_ch_ua_platform"), process.env.SENTINEL_SEC_CH_UA_PLATFORM, "macOS")).replace(/^"|"$/g, ""),
     secChUaFullVersionList: pick(args["sec-ch-ua-full-version-list"], cfg("secChUaFullVersionList", "sec_ch_ua_full_version_list"), process.env.SENTINEL_SEC_CH_UA_FULL_VERSION_LIST, ""),
     secChUaPlatformVersion: String(pick(args["sec-ch-ua-platform-version"], cfg("secChUaPlatformVersion", "sec_ch_ua_platform_version"), process.env.SENTINEL_SEC_CH_UA_PLATFORM_VERSION, "15.7.0")).replace(/^"|"$/g, ""),
     secChUaArch: String(pick(args["sec-ch-ua-arch"], cfg("secChUaArch", "sec_ch_ua_arch"), process.env.SENTINEL_SEC_CH_UA_ARCH, "arm")).replace(/^"|"$/g, ""),
     secChUaBitness: String(pick(args["sec-ch-ua-bitness"], cfg("secChUaBitness", "sec_ch_ua_bitness"), process.env.SENTINEL_SEC_CH_UA_BITNESS, "64")).replace(/^"|"$/g, ""),
     secChUaModel: String(pick(args["sec-ch-ua-model"], cfg("secChUaModel", "sec_ch_ua_model"), process.env.SENTINEL_SEC_CH_UA_MODEL, "")).replace(/^"|"$/g, ""),
+    canvasSeed: pick(args["canvas-seed"], cfg("canvasSeed", "canvas_seed"), process.env.SENTINEL_CANVAS_SEED, "default-canvas"),
+    audioSeed: pick(args["audio-seed"], cfg("audioSeed", "audio_seed"), process.env.SENTINEL_AUDIO_SEED, "default-audio"),
+    fontSeed: pick(args["font-seed"], cfg("fontSeed", "font_seed"), process.env.SENTINEL_FONT_SEED, "default-font"),
+    fontProfile: pick(args["font-profile"], cfg("fontProfile", "font_profile"), process.env.SENTINEL_FONT_PROFILE, "macos_sonoma_default"),
+    webglVendor: pick(args["webgl-vendor"], cfg("webglVendor", "webgl_vendor"), process.env.SENTINEL_WEBGL_VENDOR, "Google Inc. (Apple)"),
+    webglRenderer: pick(args["webgl-renderer"], cfg("webglRenderer", "webgl_renderer"), process.env.SENTINEL_WEBGL_RENDERER, "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"),
     cfEdgeMsec: Number(pick(args["cf-edge-msec"], cfg("cfEdgeMsec", "cf_edge_msec"), process.env.SENTINEL_CF_EDGE_MSEC, 38)),
     cfOriginTtfbMsec: Number(pick(args["cf-origin-ttfb-msec"], cfg("cfOriginTtfbMsec", "cf_origin_ttfb_msec"), process.env.SENTINEL_CF_ORIGIN_TTFB_MSEC, 74)),
     cfTcpRttMsec: Number(pick(args["cf-tcp-rtt-msec"], cfg("cfTcpRttMsec", "cf_tcp_rtt_msec"), process.env.SENTINEL_CF_TCP_RTT_MSEC, 22)),

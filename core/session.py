@@ -8,6 +8,7 @@ import random
 import threading
 import time
 import uuid
+from copy import deepcopy
 from urllib.parse import urlparse
 from curl_cffi.requests import Session
 
@@ -33,7 +34,14 @@ class BrowserSession:
     使用 curl_cffi 的 impersonate 功能绕过 Cloudflare TLS 指纹检测。
     """
 
-    def __init__(self, proxy: str = None, *, detect_exit_geo: bool = True):
+    def __init__(
+        self,
+        proxy: str = None,
+        *,
+        detect_exit_geo: bool = True,
+        fingerprint_key: str | None = None,
+        browser_profile: dict | None = None,
+    ):
         """
         初始化会话。
 
@@ -43,6 +51,10 @@ class BrowserSession:
                    显式传 "" 表示禁用代理。
             detect_exit_geo: 是否探测出口 IP 并自动选择语言/时区画像。
                              套餐查询等短请求可关闭，避免额外网络等待。
+            fingerprint_key: 高拟真模式下用于账号级画像持久化的稳定 key，
+                             注册/登录场景应传标准化前的账号邮箱。
+            browser_profile: 显式提供已有画像时优先使用；调用方持有的 dict
+                             会被复制，不在原对象上写入会话字段。
         """
         # proxy=None  → 从池里随机抽（默认行为）
         # proxy=""    → 禁用代理（直连）
@@ -99,13 +111,43 @@ class BrowserSession:
         # 这样 Accept-Language / navigator.language / timezone 可自动跟随出口地区。
         self.exit_geo = self._detect_exit_geo() if detect_exit_geo else {}
         self._enforce_proxy_quality()
-        self.browser_profile = pick_browser_profile(self.exit_geo)
+        from config import browser as _browser_cfg
+
+        high_fidelity = bool(getattr(_browser_cfg, "ENABLE_HIGH_FIDELITY_FINGERPRINT", False))
+        self.fingerprint_persistent = False
+        self.fingerprint_key_hash = ""
+        if browser_profile is not None:
+            self.browser_profile = deepcopy(browser_profile)
+            self.fingerprint_key_hash = str(self.browser_profile.get("fingerprint_id") or "")
+        elif high_fidelity and str(fingerprint_key or "").strip():
+            from core.fingerprint_profile import fingerprint_key_hash, get_or_create_browser_profile
+
+            self.fingerprint_key_hash = fingerprint_key_hash(str(fingerprint_key))
+            self.browser_profile = get_or_create_browser_profile(
+                str(fingerprint_key),
+                geo=self.exit_geo,
+            )
+            self.fingerprint_persistent = True
+        elif high_fidelity:
+            # 非账号短请求没有稳定 key 时仍生成独享画像，避免跨会话共享；
+            # 账号注册/登录入口会显式传 fingerprint_key，因此可持久复用。
+            ephemeral_key = f"session:{uuid.uuid4()}"
+            self.browser_profile = pick_browser_profile(self.exit_geo, stable_key=ephemeral_key)
+            logger.warning("[指纹] 高拟真模式未传 fingerprint_key，本会话使用独享临时画像")
+        else:
+            self.browser_profile = pick_browser_profile(self.exit_geo)
         self.browser_profile["react_listening_key"] = self.react_listening_key
         self.browser_profile["react_container_key"] = self.react_container_key
         self.browser_profile["react_resources_key"] = self.react_resources_key
         issues = validate_browser_profile(self.browser_profile)
         if issues:
             logger.warning("[指纹] 浏览器画像存在不一致: %s", "; ".join(issues))
+        elif high_fidelity:
+            logger.info(
+                "[指纹] 高拟真画像已启用: profile=%s persistent=%s",
+                str(self.browser_profile.get("fingerprint_id") or "")[:12] or "ephemeral",
+                self.fingerprint_persistent,
+            )
 
         # 让 HTTP Cookie、OAuth 参数 ext-oai-did、Sentinel 里的 id 三者一致。
         # 浏览器里 oai-did 通常会作为一方 Cookie 存在；协议层主动补齐可减少同一会话内

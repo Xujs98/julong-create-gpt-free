@@ -138,7 +138,12 @@ def _run_generate(*, account_id: int, email: str, access_token: str, trigger: st
             attempt_count = attempt
             _wait_for_rate_slot()
             try:
-                env = BrowserSession(proxy=route["proxy"], detect_exit_geo=False)
+                from core.fingerprint_profile import session_fingerprint_kwargs
+                env = BrowserSession(
+                    proxy=route["proxy"],
+                    detect_exit_geo=False,
+                    **session_fingerprint_kwargs(email),
+                )
                 logger.info(
                     "[CodexAgent] 独立环境: %s attempt=%s/%s route=%s proxy=%s did=%s session=%s profile_ua=%s",
                     email,

@@ -1371,7 +1371,8 @@ def run_codex_oauth(
     if otp_provider is None:
         from core.email_provider import wait_for_otp as otp_provider
 
-    session = BrowserSession(proxy=proxy)
+    from core.fingerprint_profile import session_fingerprint_kwargs
+    session = BrowserSession(proxy=proxy, **session_fingerprint_kwargs(email))
     try:
         logger.info(f"[Codex] 开始授权（全新 session）：{email}")
 

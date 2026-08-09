@@ -66,6 +66,36 @@ def test_runner_omits_empty_requirement_proof_argument():
     assert "SENTINEL_CHALLENGE_PROOF" not in run.call_args.kwargs["env"]
 
 
+def test_runner_forwards_account_fingerprint_seeds():
+    completed = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"p": "pow", "c": "challenge-token", "id": "did", "flow": "flow"}),
+        stderr="",
+    )
+    profile = {
+        "canvas_seed": "canvas-1",
+        "audio_seed": "audio-1",
+        "font_seed": "font-1",
+        "font_profile": "macos_sonoma_default",
+        "webgl_vendor": "vendor-1",
+        "webgl_renderer": "renderer-1",
+    }
+    with patch.object(sentinel_runner, "_ensure_runner_environment"), patch.object(
+        sentinel_runner, "_resolve_node_executable", return_value="node"
+    ), patch.object(sentinel_runner.subprocess, "run", return_value=completed) as run:
+        sentinel_runner.generate_sentinel_token({"token": "challenge-token"}, "flow", "did", browser_profile=profile)
+    cmd = run.call_args.args[0]
+    for option, value in (
+        ("--canvas-seed", "canvas-1"),
+        ("--audio-seed", "audio-1"),
+        ("--font-seed", "font-1"),
+        ("--font-profile", "macos_sonoma_default"),
+        ("--webgl-vendor", "vendor-1"),
+        ("--webgl-renderer", "renderer-1"),
+    ):
+        assert cmd[cmd.index(option) + 1] == value
+
+
 def test_request_sentinel_token_keeps_exact_request_proof_for_runner():
     response = Mock()
     response.json.return_value = {"token": "challenge-token", "so": {"required": True}}

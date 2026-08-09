@@ -278,7 +278,8 @@ def run_registration(
         )
 
     # 创建浏览器会话（proxy=None 时自动从 config.PROXY_POOL 随机抽一个）
-    session = BrowserSession(proxy=proxy)
+    from core.fingerprint_profile import session_fingerprint_kwargs
+    session = BrowserSession(proxy=proxy, **session_fingerprint_kwargs(email))
 
     # 从代理 URL 中抽取 sid 段做日志，避免把账号密码完整打印
     proxy_label = "无"

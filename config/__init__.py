@@ -28,6 +28,8 @@ from config.browser import (
     NAVIGATOR_PLATFORM,
     NAVIGATOR_VENDOR,
     USER_AGENT_DATA_PLATFORM,
+    ENABLE_HIGH_FIDELITY_FINGERPRINT,
+    FINGERPRINT_PROFILE_SCHEMA_VERSION,
     SEC_CH_UA,
     SEC_CH_UA_PLATFORM,
     SEC_CH_UA_MOBILE,
@@ -63,6 +65,7 @@ from config.browser import (
     build_browser_environment,
     validate_browser_profile,
     BROWSER_PROFILE_POOL,
+    WEBGL_PROFILE_POOL,
     pick_browser_profile,
     IMPERSONATE,
     REQUEST_TIMEOUT,
@@ -221,6 +224,7 @@ def _refresh_top_level_constants() -> None:
 __all__ = [
     # browser
     "USER_AGENT", "CHROME_MAJOR", "CHROME_FULL_VERSION", "BROWSER_OS",
+    "ENABLE_HIGH_FIDELITY_FINGERPRINT", "FINGERPRINT_PROFILE_SCHEMA_VERSION",
     "NAVIGATOR_PLATFORM", "NAVIGATOR_VENDOR", "USER_AGENT_DATA_PLATFORM",
     "SEC_CH_UA", "SEC_CH_UA_PLATFORM", "SEC_CH_UA_MOBILE",
     "SEC_CH_UA_FULL_VERSION_LIST", "SEC_CH_UA_PLATFORM_VERSION",
@@ -232,7 +236,7 @@ __all__ = [
     "HARDWARE_CONCURRENCY", "JS_HEAP_SIZE_LIMIT", "DEVICE_MEMORY",
     "NAVIGATOR_PROTO_SAMPLES", "DOCUMENT_KEY_SAMPLES", "WINDOW_KEY_SAMPLES", "WINDOW_FEATURE_FLAGS",
     "build_browser_environment", "validate_browser_profile",
-    "BROWSER_PROFILE_POOL", "pick_browser_profile",
+    "BROWSER_PROFILE_POOL", "WEBGL_PROFILE_POOL", "pick_browser_profile",
     "IMPERSONATE", "REQUEST_TIMEOUT",
     # openai_protocol
     "OPENAI_CLIENT_ID", "OPENAI_SCOPE", "OPENAI_AUDIENCE", "OPENAI_REDIRECT_URI",

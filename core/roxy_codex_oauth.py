@@ -1455,7 +1455,8 @@ def _run_roxy_codex_oauth_once(
 
         if not code_verifier:
             raise RuntimeError("[Codex][Browser] local 模式缺少 code_verifier")
-        session = proto.BrowserSession(proxy=proxy)
+        from core.fingerprint_profile import session_fingerprint_kwargs
+        session = proto.BrowserSession(proxy=proxy, **session_fingerprint_kwargs(email))
         token_resp = proto.exchange_codex_token(session, code, code_verifier)
         id_claims = proto._parse_id_token(token_resp.get("id_token", ""))
         effective_email = id_claims.get("email") or email

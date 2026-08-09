@@ -481,6 +481,10 @@ EDITABLE_FIELDS = [
     },
     # ---- 浏览器地区画像 ----
     {
+        "key": "ENABLE_HIGH_FIDELITY_FINGERPRINT", "file": "browser.py", "type": "bool", "group": "浏览器画像",
+        "label": "最高模拟画像", "help": "开启后纯协议注册、登录和查活按账号持久化独立画像，并统一 HTTP/TLS/Sentinel 的浏览器环境字段",
+    },
+    {
         "key": "BROWSER_LOCALE_PROFILE", "file": "browser.py", "type": "str", "group": "浏览器画像",
         "label": "地区画像", "help": "应与代理出口地区一致；可选 jp/cn/us/sg。当前本地代理实测为日本东京，推荐 jp",
     },

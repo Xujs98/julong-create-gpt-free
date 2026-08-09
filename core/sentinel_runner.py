@@ -171,6 +171,15 @@ def generate_sentinel_token(
     sec_ch_ua_arch = str(profile.get("sec_ch_ua_arch", SEC_CH_UA_ARCH))
     sec_ch_ua_bitness = str(profile.get("sec_ch_ua_bitness", SEC_CH_UA_BITNESS))
     sec_ch_ua_model = str(profile.get("sec_ch_ua_model", SEC_CH_UA_MODEL))
+    canvas_seed = str(profile.get("canvas_seed") or "default-canvas")
+    audio_seed = str(profile.get("audio_seed") or "default-audio")
+    font_seed = str(profile.get("font_seed") or "default-font")
+    font_profile = str(profile.get("font_profile") or "macos_sonoma_default")
+    webgl_vendor = str(profile.get("webgl_vendor") or "Google Inc. (Apple)")
+    webgl_renderer = str(
+        profile.get("webgl_renderer")
+        or "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"
+    )
     build_id = str(profile.get("build_id", OPENAI_BUILD_ID))
     # Auth 页面 Sentinel token 的 documentElement 通常没有 data-build；
     # ChatGPT 页面 prepare/finalize 的 p 才带前端 build。
@@ -244,6 +253,12 @@ def generate_sentinel_token(
             "--sec-ch-ua-arch", sec_ch_ua_arch,
             "--sec-ch-ua-bitness", sec_ch_ua_bitness,
             "--sec-ch-ua-model", sec_ch_ua_model,
+            "--canvas-seed", canvas_seed,
+            "--audio-seed", audio_seed,
+            "--font-seed", font_seed,
+            "--font-profile", font_profile,
+            "--webgl-vendor", webgl_vendor,
+            "--webgl-renderer", webgl_renderer,
             "--cookie", runner_cookie,
         ]
 

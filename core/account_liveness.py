@@ -65,7 +65,8 @@ def _network_preflight_with_retry(email: str, proxy: str | None, max_attempts: i
             except Exception:
                 pass
         attempt_proxy = rotate_proxy_session(proxy) if proxy else proxy
-        session = BrowserSession(proxy=attempt_proxy)
+        from core.fingerprint_profile import session_fingerprint_kwargs
+        session = BrowserSession(proxy=attempt_proxy, **session_fingerprint_kwargs(email))
         logger.info(
             "[查活] 会话创建完成：proxy=%s device_id=%s（网络预检第 %s/%s 次）",
             masked_proxy_url(session.proxy) or "配置随机/直连", session.device_id, attempt, max_attempts,
@@ -148,7 +149,8 @@ def _restore_saved_session(account: dict, email: str, proxy: str | None, checked
     session: BrowserSession | None = None
     try:
         logger.info("[查活] 尝试用已保存 Session Cookie 静默刷新 AT：cookies=%s", len(cookies))
-        session = BrowserSession(proxy=proxy)
+        from core.fingerprint_profile import session_fingerprint_kwargs
+        session = BrowserSession(proxy=proxy, **session_fingerprint_kwargs(email))
         restored = 0
         for item in cookies:
             if not isinstance(item, dict):

@@ -184,9 +184,19 @@ def fetch_session(session: BrowserSession) -> dict:
     return data
 
 
-def browser_session_from_driver(driver, proxy: str | None = None) -> BrowserSession:
+def browser_session_from_driver(
+    driver,
+    proxy: str | None = None,
+    *,
+    fingerprint_key: str | None = None,
+) -> BrowserSession:
     """把 Playwright/Selenium 浏览器登录态复制到协议会话，供注册后 2FA 使用。"""
-    session = BrowserSession(proxy=proxy, detect_exit_geo=False)
+    from core.fingerprint_profile import session_fingerprint_kwargs
+    session = BrowserSession(
+        proxy=proxy,
+        detect_exit_geo=False,
+        **session_fingerprint_kwargs(fingerprint_key),
+    )
     cookies = []
     context = getattr(driver, "context", None)
     page = getattr(driver, "page", None)
@@ -500,7 +510,7 @@ def setup_2fa_from_browser(
     previous_otp: str | None = None,
 ) -> str:
     """复用当前浏览器登录 Cookie 和代理出口执行既有 2FA 流程。"""
-    session = browser_session_from_driver(driver, proxy=proxy)
+    session = browser_session_from_driver(driver, proxy=proxy, fingerprint_key=email)
     try:
         fetch_session(session)
         return setup_2fa(session, email, previous_otp=previous_otp)

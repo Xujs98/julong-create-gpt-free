@@ -16,25 +16,32 @@ from config.env_loader import apply_env_overrides
 
 import random
 import re
+import hashlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 
-def _latest_chrome_major(default: str = "149") -> str:
-    """兼容旧模块导入；默认按 2026-07-19 抓包里的 Chrome 149 画像。"""
+def _latest_chrome_major(default: str = "146") -> str:
+    """兼容旧模块导入；默认与 curl_cffi 的 Chrome 146 TLS 画像一致。"""
     return default
 
 
-CHROME_MAJOR = "149"
-CHROME_FULL_VERSION = "149.0.0.0"
+CHROME_MAJOR = "146"
+CHROME_FULL_VERSION = "146.0.0.0"
 
 SAFARI_VERSION = ""
 SAFARI_WEBKIT_VERSION = "537.36"
 MAC_OS_UA_VERSION = "10_15_7"
 
 # ---------- curl_cffi 模拟浏览器 ----------
-# curl_cffi 0.15 当前最高内置到 chrome146；HTTP/JS 画像按抓包补齐到 Chrome/149。
+# curl_cffi 0.15 当前最高内置到 chrome146；HTTP/JS 画像使用同一主版本，
+# 避免 TLS ClientHello 与 UA / Client Hints 出现跨版本矛盾。
 IMPERSONATE = "chrome146"
+
+# 高拟真账号画像：开启后，纯协议会话按账号 key 生成并持久化同一份画像。
+# 默认关闭以保持旧流程行为；可通过 WebUI 或 .env 开启。
+ENABLE_HIGH_FIDELITY_FINGERPRINT = False
+FINGERPRINT_PROFILE_SCHEMA_VERSION = 1
 
 # ---------- 桌面 Chrome 画像 ----------
 BROWSER_FAMILY = "chrome"
@@ -49,8 +56,8 @@ USER_AGENT = (
     f"Chrome/{CHROME_FULL_VERSION} Safari/{SAFARI_WEBKIT_VERSION}"
 )
 
-SEC_CH_UA = '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"'
-SEC_CH_UA_FULL_VERSION_LIST = '"Google Chrome";v="149.0.0.0", "Chromium";v="149.0.0.0", "Not)A;Brand";v="24.0.0.0"'
+SEC_CH_UA = f'"Google Chrome";v="{CHROME_MAJOR}", "Chromium";v="{CHROME_MAJOR}", "Not)A;Brand";v="24"'
+SEC_CH_UA_FULL_VERSION_LIST = f'"Google Chrome";v="{CHROME_FULL_VERSION}", "Chromium";v="{CHROME_FULL_VERSION}", "Not)A;Brand";v="24.0.0.0"'
 SEC_CH_UA_PLATFORM = '"macOS"'
 SEC_CH_UA_PLATFORM_VERSION = '"15.7.0"'
 SEC_CH_UA_MOBILE = "?0"
@@ -224,12 +231,59 @@ BROWSER_PROFILE_POOL = [
     {"screen_width": 2056, "screen_height": 1329, "hardware_concurrency": 12, "device_memory": 8, "js_heap_size_limit": 4294967296, "device_pixel_ratio": 2},
 ]
 
+# 与上面的 macOS/arm Chrome 画像配套。硬件画像允许重复，但下面的
+# canvas/audio/profile seeds 会按账号唯一派生，因此不同账号不会共享完整画像。
+WEBGL_PROFILE_POOL = [
+    {
+        "webgl_vendor": "Google Inc. (Apple)",
+        "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+    },
+    {
+        "webgl_vendor": "Google Inc. (Apple)",
+        "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)",
+    },
+    {
+        "webgl_vendor": "Google Inc. (Apple)",
+        "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)",
+    },
+    {
+        "webgl_vendor": "Google Inc. (Apple)",
+        "webgl_renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)",
+    },
+]
 
-def build_browser_environment(geo: dict | None = None, base_profile: dict | None = None) -> dict:
+
+def _rng_for_stable_key(stable_key: str | None):
+    if stable_key is None:
+        return random
+    digest = hashlib.sha256(str(stable_key).encode("utf-8")).digest()
+    return random.Random(int.from_bytes(digest, "big"))
+
+
+def build_browser_environment(
+    geo: dict | None = None,
+    base_profile: dict | None = None,
+    *,
+    stable_key: str | None = None,
+) -> dict:
     """构建完整浏览器环境画像，作为所有指纹字段的单一数据源。"""
     locale = _build_locale_from_geo(geo)
-    profile = dict(base_profile or random.choice(BROWSER_PROFILE_POOL))
+    rng = _rng_for_stable_key(stable_key)
+    profile = dict(base_profile or rng.choice(BROWSER_PROFILE_POOL))
+    webgl_profile = dict(rng.choice(WEBGL_PROFILE_POOL))
+    fingerprint_id = (
+        hashlib.sha256(str(stable_key).encode("utf-8")).hexdigest()
+        if stable_key is not None
+        else f"ephemeral-{rng.getrandbits(128):032x}"
+    )
     profile.update({
+        "fingerprint_schema_version": FINGERPRINT_PROFILE_SCHEMA_VERSION,
+        "fingerprint_id": fingerprint_id,
+        "canvas_seed": f"{rng.getrandbits(64):016x}",
+        "audio_seed": f"{rng.getrandbits(64):016x}",
+        "font_seed": f"{rng.getrandbits(64):016x}",
+        "font_profile": "macos_sonoma_default",
+        **webgl_profile,
         "locale_profile": locale.get("locale_profile", BROWSER_LOCALE_PROFILE),
         "geo": dict(geo or {}),
         "timezone_iana": locale["timezone_iana"],
@@ -263,13 +317,14 @@ def build_browser_environment(geo: dict | None = None, base_profile: dict | None
         "script_src_samples": list(SCRIPT_SRC_SAMPLES),
         "window_feature_flags": dict(WINDOW_FEATURE_FLAGS),
         "build_id": __import__("config.openai_protocol", fromlist=["OPENAI_BUILD_ID"]).OPENAI_BUILD_ID,
+        "tls_impersonate": IMPERSONATE,
     })
     return profile
 
 
-def pick_browser_profile(geo: dict | None = None) -> dict:
-    """为一个 BrowserSession 随机挑选稳定桌面画像；HAR 尺寸只是候选之一。"""
-    return build_browser_environment(geo)
+def pick_browser_profile(geo: dict | None = None, stable_key: str | None = None) -> dict:
+    """挑选桌面画像；传 stable_key 时按 key 稳定派生，否则保持每会话随机。"""
+    return build_browser_environment(geo, stable_key=stable_key)
 
 
 def validate_browser_profile(profile: dict) -> list[str]:
@@ -284,6 +339,10 @@ def validate_browser_profile(profile: dict) -> list[str]:
             issues.append("Safari 不应发送 Chromium Client Hints")
     elif f"Chrome/{profile.get('chrome_full_version')}" not in ua:
         issues.append("UA 与 chrome_full_version 不一致")
+    impersonate = str(profile.get("tls_impersonate") or IMPERSONATE)
+    impersonate_major = re.search(r"chrome(\d+)", impersonate.lower())
+    if impersonate_major and impersonate_major.group(1) != str(profile.get("chrome_major") or ""):
+        issues.append("TLS impersonate 与 Chrome 主版本不一致")
     if profile.get("browser_os") == "macOS":
         if "Macintosh; Intel Mac OS X" not in ua:
             issues.append("macOS 画像但 UA 不是 Macintosh")
@@ -300,4 +359,4 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
+apply_env_overrides(globals(), {'ENABLE_HIGH_FIDELITY_FINGERPRINT': 'bool', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
