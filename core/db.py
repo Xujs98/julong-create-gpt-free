@@ -1336,14 +1336,111 @@ def recover_interrupted_extract_links() -> int:
         return recovered
 
 
-def _account_matches_query(row: dict, q: str | None) -> bool:
-    q = str(q or "").strip().lower()
-    if not q:
+def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
+    """构造账号搜索别名，返回（套餐别名，状态别名）。"""
+    plan = str(row.get("current_plan_type") or row.get("plan_type") or "").strip()
+    plan_lower = plan.lower()
+    plan_aliases = [plan, f"套餐:{plan}", f"[套餐:{plan}]"] if plan else []
+    if plan_lower == "free":
+        if bool(row.get("plus_trial_eligible")):
+            plan_aliases.extend([
+                "free(可Plus试用)", "free（可Plus试用）", "可Plus试用",
+                "[可Plus试用]", "[套餐:free(可Plus试用)]",
+            ])
+        elif row.get("plan_check_status") in {"queued", "running"} or row.get("plan_check_ok") is None:
+            plan_aliases.extend(["free(待查资格)", "待查资格"])
+
+    status_aliases: list[str] = []
+
+    def add_flag(enabled: bool, enabled_label: str, disabled_label: str) -> None:
+        label = enabled_label if enabled else disabled_label
+        status_aliases.extend([label, f"[{label}]"])
+
+    add_flag(bool(row.get("totp_secret")), "2FA", "无2FA")
+    add_flag(bool(row.get("link_completed")), "提链", "未提链")
+    add_flag(bool(row.get("sms_completed")), "接码", "未接码")
+    add_flag(bool(str(row.get("access_token") or "").strip()), "Token", "无Token")
+    add_flag(bool(row.get("archived")), "归档", "未归档")
+
+    twofa_status = str(row.get("twofa_status") or "").strip().lower()
+    if twofa_status == "failed":
+        status_aliases.extend(["2FA失败", "[2FA失败]"])
+    elif twofa_status == "skipped":
+        status_aliases.extend(["2FA已跳过", "[2FA已跳过]"])
+
+    codex_status = str(row.get("codex_status") or "").strip().lower()
+    if codex_status:
+        status_aliases.extend([f"Codex:{codex_status}", f"[Codex:{codex_status}]"])
+    if codex_status == "success":
+        status_aliases.extend(["Codex", "[Codex]"])
+
+    agent_status = str(row.get("codex_agent_status") or "").strip().lower()
+    if agent_status:
+        status_aliases.extend([f"Agent:{agent_status}", f"[Agent:{agent_status}]"])
+    if agent_status == "success" or bool(str(row.get("codex_agent_token") or "").strip()):
+        status_aliases.extend(["Agent", "[Agent]"])
+
+    live_status = str(row.get("live_check_status") or "").strip().lower()
+    if live_status:
+        status_aliases.extend([f"查活:{live_status}", f"[查活:{live_status}]"])
+    if row.get("live_check_ok") is True:
+        status_aliases.extend(["查活正常", "[查活正常]"])
+    elif row.get("live_check_ok") is False:
+        status_aliases.extend(["查活失败", "[查活失败]"])
+
+    if str(row.get("plan_check_status") or "").lower() == "failed":
+        status_aliases.extend(["套餐查询失败", "[套餐查询失败]"])
+    return plan_aliases, status_aliases
+
+
+def _account_query_text(row: dict) -> tuple[str, str, str]:
+    plan_aliases, status_aliases = _account_query_aliases(row)
+    searchable_values = []
+    for key, value in row.items():
+        # extra_json/session 中可能保留注册瞬间的旧套餐，套餐升级后会干扰 !free。
+        if key in {"extra_json", "session", "plan_type"} and row.get("current_plan_type"):
+            continue
+        if isinstance(value, (dict, list, tuple, set)):
+            continue
+        searchable_values.append(str(value))
+    general = "\n".join(searchable_values + plan_aliases + status_aliases).lower()
+    return general, "\n".join(plan_aliases).lower(), "\n".join(status_aliases).lower()
+
+
+def _account_query_term_matches(row: dict, term: str) -> bool:
+    term = str(term or "").strip().strip("*").strip()
+    if not term:
         return True
-    try:
-        return q in "\n".join(str(v) for v in row.values()).lower()
-    except Exception:
-        return False
+    normalized = term.lower().replace("（", "(").replace("）", ")")
+    general, plans, statuses = _account_query_text(row)
+    displayed_plan = str(row.get("current_plan_type") or row.get("plan_type") or "").strip().lower()
+    if normalized == "free":
+        return displayed_plan == "free"
+    if normalized in {"plus", "pro", "team", "go"}:
+        return normalized in displayed_plan and displayed_plan != "free"
+    plan_terms = {
+        "可plus试用", "free(可plus试用)", "free(待查资格)",
+    }
+    if normalized in plan_terms or normalized.startswith("套餐:") or normalized.startswith("[套餐:"):
+        return normalized in plans.replace("（", "(").replace("）", ")")
+    if normalized.startswith("[") and normalized.endswith("]"):
+        return normalized in statuses.replace("（", "(").replace("）", ")") or normalized in plans.replace("（", "(").replace("）", ")")
+    return normalized in general.replace("（", "(").replace("）", ")")
+
+
+def _account_matches_query(row: dict, q: str | None) -> bool:
+    """账号表达式搜索：``&&`` 表示同时满足，``!`` 前缀表示排除。"""
+    query = str(q or "").strip()
+    if not query:
+        return True
+    terms = [part.strip() for part in re.split(r"\s*&&\s*", query) if part.strip()]
+    for raw_term in terms:
+        negated = raw_term.startswith("!")
+        term = raw_term[1:].strip() if negated else raw_term
+        matched = _account_query_term_matches(row, term)
+        if (not negated and not matched) or (negated and matched):
+            return False
+    return True
 
 
 def _filtered_decorated_accounts(
