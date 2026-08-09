@@ -166,6 +166,7 @@ def _should_disable_failed_registration_email(error: object) -> bool:
         or "邮箱提交后进入登录密码页" in text
         or "auth.openai.com/log-in/password" in text
         or "/log-in/password" in text
+        or "invalid_auth_step" in text.lower()
     )
 
 

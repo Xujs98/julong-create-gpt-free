@@ -1,7 +1,9 @@
+import json
 from contextlib import ExitStack
 from unittest.mock import Mock, patch
 
 import main
+import pytest
 from core import openai_auth
 
 
@@ -42,6 +44,35 @@ class _Session:
         )
 
 
+class _SentinelSession:
+    device_id = "device"
+    sentinel_sid = "sid"
+    browser_profile = {}
+
+    def __init__(self):
+        self.calls = 0
+
+    def get_sentinel_headers(self):
+        return {"accept": "application/json"}
+
+    def post(self, url, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("Failed to perform, curl: (35) TLS connect error: invalid library")
+        return _Response(url, {"persona": "chatgpt-noauth"})
+
+
+class _InvalidAuthResponse(_Response):
+    status_code = 400
+
+    def __init__(self, url):
+        super().__init__(url, {"error": {"code": "invalid_auth_step", "message": "Invalid authorization step."}})
+        self.text = json.dumps(self._payload)
+
+    def raise_for_status(self):
+        raise RuntimeError("HTTP Error 400")
+
+
 def test_protocol_password_helpers_send_password_and_keep_otp_step():
     session = _Session()
     assert openai_auth.get_create_account_page(session).endswith("/create-account/password")
@@ -52,6 +83,28 @@ def test_protocol_password_helpers_send_password_and_keep_otp_step():
     assert url.endswith("/api/accounts/user/register")
     assert '"password": "StrongPassword"' in kwargs["data"]
     assert kwargs["headers"]["openai-sentinel-token"] == "sentinel"
+
+
+def test_sentinel_token_retries_transient_tls_failure():
+    session = _SentinelSession()
+    with patch.object(openai_auth, "generate_requirements_token", return_value="p"), patch.object(
+        openai_auth, "build_sentinel_request_body", return_value="{}"
+    ), patch.object(openai_auth.time, "sleep") as sleep:
+        result = openai_auth.request_sentinel_token(session, "oauth_create_account")
+
+    assert result["persona"] == "chatgpt-noauth"
+    assert session.calls == 2
+    assert sleep.call_count == 1
+
+
+def test_password_register_invalid_auth_step_has_structured_error():
+    session = _Session()
+    session.post = Mock(return_value=_InvalidAuthResponse("https://auth.openai.com/api/accounts/user/register"))
+
+    with pytest.raises(openai_auth.InvalidAuthorizationStepError) as caught:
+        openai_auth.register_user_with_password(session, "user@example.com", "StrongPassword", "sentinel")
+
+    assert "invalid_auth_step" in str(caught.value)
 
 
 def test_protocol_login_email_posts_authorize_continue_payload():
@@ -199,3 +252,43 @@ def test_run_registration_protocol_password_branch_persists_password():
     assert events.index(("register", "ConfiguredPassword")) < events.index(("send_otp", None))
     assert ("sentinel", "username_password_create") in events
     assert ("save", "ConfiguredPassword") in events
+
+
+def test_protocol_failure_after_password_registration_quarantines_email():
+    session = Mock(proxy="", device_id="device", auth_session_logging_id="log", sentinel_sid="sid", browser_profile={})
+    released = Mock()
+
+    def fake_sentinel(_session, flow):
+        if flow == "oauth_create_account":
+            raise RuntimeError("Failed to perform, curl: (35) TLS connect error: invalid library")
+        return {"token": "challenge"}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(main._register_cfg, "ENABLE_CREATE_PASSWORD", True))
+        stack.enter_context(patch.object(main._register_cfg, "REGISTER_PASSWORD", "ConfiguredPassword"))
+        stack.enter_context(patch.object(main._email_cfg, "USE_EMAIL_SERVICE", False))
+        stack.enter_context(patch.object(main._twofa_cfg, "ENABLE_2FA", False))
+        stack.enter_context(patch.object(main._protocol_cfg, "CHATGPT_ANON_BOOTSTRAP_ENABLED", False))
+        stack.enter_context(patch.object(main._protocol_cfg, "CHATGPT_AUTH_BOOTSTRAP_ENABLED", False))
+        stack.enter_context(patch.object(main._roxy_cfg, "REGISTRATION_DRIVER", "protocol"))
+        stack.enter_context(patch.object(main, "BrowserSession", return_value=session))
+        stack.enter_context(patch.object(main, "network_preflight"))
+        stack.enter_context(patch.object(main, "get_providers", return_value={}))
+        stack.enter_context(patch.object(main, "get_csrf_token", return_value="csrf"))
+        stack.enter_context(patch.object(main, "signin_openai", return_value="authorize"))
+        stack.enter_context(patch.object(main, "follow_authorize", return_value="https://auth.openai.com/email-verification"))
+        stack.enter_context(patch.object(main, "get_create_account_page", return_value="https://auth.openai.com/create-account/password"))
+        stack.enter_context(patch.object(main, "request_sentinel_token", side_effect=fake_sentinel))
+        stack.enter_context(patch.object(main, "build_sentinel_header", return_value=("sentinel", "so")))
+        stack.enter_context(patch.object(main, "register_user_with_password", return_value={"page": {"type": "email_otp_send"}}))
+        stack.enter_context(patch.object(main, "send_email_otp"))
+        stack.enter_context(patch.object(main, "validate_email_otp", return_value={"page": {"type": "about_you"}, "continue_url": "https://auth.openai.com/about-you"}))
+        stack.enter_context(patch.object(main, "navigate_about_you"))
+        stack.enter_context(patch.object(main, "human_delay"))
+        stack.enter_context(patch("core.email_provider.release_email", released))
+
+        result = main.run_registration("user@example.com", "Sample User", "1990-01-01", proxy="", otp_code="123456")
+
+    assert result["success"] is False
+    released.assert_called_once()
+    assert released.call_args.kwargs["status"] == "failed"

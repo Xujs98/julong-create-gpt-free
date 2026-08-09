@@ -22,6 +22,10 @@ class EmailOtpInvalidError(RuntimeError):
     """邮箱验证码无效/过期，可重新发送后重试。"""
 
 
+class InvalidAuthorizationStepError(RuntimeError):
+    """服务端授权会话已不在当前注册步骤，当前邮箱应隔离而非重复领取。"""
+
+
 class AccountUnusableError(Exception):
     """
     邮箱对应的 OpenAI 账号已废（删除/停用/封禁），再试也是同样结果。
@@ -118,6 +122,8 @@ def _extract_error_code(resp) -> str:
 # 步骤4 网络层临时性错误（代理抽风 / TLS 握手失败 / 重置等）的重试参数
 _FOLLOW_AUTH_MAX_ATTEMPTS = 3
 _FOLLOW_AUTH_BACKOFF_BASE = 2.0  # 第 N 次重试前等 2^(N-1) 秒
+_SENTINEL_MAX_ATTEMPTS = 3
+_SENTINEL_BACKOFF_BASE = 1.0
 
 
 def _is_transient_network_error(exc: Exception) -> bool:
@@ -256,9 +262,29 @@ def request_sentinel_token(session: BrowserSession, flow: str) -> dict:
 
     headers = session.get_sentinel_headers()
 
-    logger.info(f"[Sentinel] 请求 sentinel token, flow={flow}")
-    resp = session.post(url, headers=headers, data=body)
-    resp.raise_for_status()
+    resp = None
+    last_exc: Exception | None = None
+    for attempt in range(1, _SENTINEL_MAX_ATTEMPTS + 1):
+        try:
+            logger.info(
+                f"[Sentinel] 请求 sentinel token, flow={flow} "
+                f"(尝试 {attempt}/{_SENTINEL_MAX_ATTEMPTS})"
+            )
+            resp = session.post(url, headers=headers, data=body)
+            resp.raise_for_status()
+            break
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_network_error(exc) or attempt >= _SENTINEL_MAX_ATTEMPTS:
+                raise
+            backoff = _SENTINEL_BACKOFF_BASE * (2 ** (attempt - 1))
+            logger.warning(
+                "[Sentinel] 临时网络错误：%s: %s，%.1fs 后重试",
+                type(exc).__name__, str(exc)[:180], backoff,
+            )
+            time.sleep(backoff)
+    if resp is None:
+        raise last_exc if last_exc else RuntimeError("Sentinel 请求未返回响应")
 
     data = resp.json()
     if not isinstance(data, dict):
@@ -462,6 +488,11 @@ def register_user_with_password(
     resp = session.post(url, headers=headers, data=body)
     if resp.status_code != 200:
         logger.error("[密码注册] 提交失败 status=%s body=%s", resp.status_code, (resp.text or "")[:300])
+        error_code = _extract_error_code(resp)
+        if error_code == "invalid_auth_step":
+            raise InvalidAuthorizationStepError(
+                "密码注册授权步骤已失效（invalid_auth_step），请隔离当前邮箱并重新领取素材"
+            )
         resp.raise_for_status()
     data = resp.json()
     page = data.get("page") if isinstance(data, dict) else {}

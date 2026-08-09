@@ -30,6 +30,7 @@ from core.openai_auth import (
     network_preflight,
     navigate_about_you,
     EmailOtpInvalidError,
+    InvalidAuthorizationStepError,
     create_account,
 )
 from core.account_export import (
@@ -299,6 +300,7 @@ def run_registration(
     logger.debug(f"[注册] 设备ID={session.device_id}，会话日志ID={session.auth_session_logging_id}")
 
     create_acknowledged = False
+    registration_flow_progressed = False
     openai_password: str | None = None
     try:
         # 网络预检必须在 signin/follow_authorize 之前完成；预检不带邮箱，不会触发 OTP。
@@ -375,6 +377,9 @@ def run_registration(
                 sentinel_header_password,
                 so_header_password,
             )
+            # 密码注册接口已接受后，邮箱对应的远端授权流程已推进；
+            # 后续网络错误时不能把邮箱放回 available 重复注册。
+            registration_flow_progressed = True
             # register 接口只声明下一步，统一显式触发 OTP，并把取信时间窗
             # 重置到本次密码提交之后，避免读到 authorize 阶段的旧邮件。
             otp_after_ts = time.time()
@@ -427,6 +432,8 @@ def run_registration(
 
         if validate_result is None:
             raise RuntimeError("OTP 验证未完成")
+        # OTP 已验证成功后，当前邮箱的授权会话已被消费；后续失败统一隔离。
+        registration_flow_progressed = True
         human_delay("api")
 
         # OTP 校验后的下一步由服务端 auth session 决定：
@@ -662,12 +669,12 @@ def run_registration(
                         note=f"账号已废弃，邮箱不可用: {str(e)[:180]}",
                     )
                     logger.warning(f"[邮箱:{src}] {email} 账号已废弃，标记为 failed，不再重新注册")
-                elif create_acknowledged:
+                elif create_acknowledged or registration_flow_progressed or isinstance(e, InvalidAuthorizationStepError):
                     src = release_email(
                         email, status="failed",
-                        note=f"创建接口已通过但后续失败，已废弃: {str(e)[:180]}",
+                        note=f"注册授权流程已推进但后续失败，已隔离: {str(e)[:180]}",
                     )
-                    logger.warning(f"[邮箱:{src}] {email} 已创建但后续失败，标记为 failed，不再重新注册")
+                    logger.warning(f"[邮箱:{src}] {email} 注册流程已推进但后续失败，标记为 failed，不再重新注册")
                 else:
                     src = release_email(email, status="available", note=f"上次失败: {str(e)[:180]}")
                     logger.info(f"[邮箱:{src}] {email} 已恢复 available")
