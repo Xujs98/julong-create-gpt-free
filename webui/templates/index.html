@@ -488,7 +488,7 @@
       width: 12px; height: 12px; stroke: currentColor; fill: none;
       stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
     }
-    .jobs-table-v2-wrap { overflow: auto; padding: 0; }
+    .jobs-table-v2-wrap { height: 480px; max-height: 480px; overflow: auto; padding: 0; }
     .jobs-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
     }
@@ -499,6 +499,7 @@
       color: #606266; box-sizing: border-box;
     }
     .jobs-table-v2 thead th {
+      position: sticky; top: 0; z-index: 2;
       background: #f5f7fa; color: #808093; font-size: 14px; font-weight: 600;
       height: 44px; border-bottom: 1px solid #ebeef5;
       line-height: 1;
@@ -675,7 +676,10 @@
       border: 1px solid #ebeef5; border-radius: 10px; background: #fff;
       box-shadow: 0 0 12px rgba(0,0,0,.04); overflow: hidden;
     }
-    .accounts-table-v2-wrap { overflow: auto; padding: 0; }
+    .accounts-table-v2-wrap {
+      height: 480px; max-height: 480px;
+      overflow: auto; padding: 0;
+    }
     .accounts-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
       min-width: 1430px;
@@ -687,6 +691,7 @@
       color: #606266; box-sizing: border-box;
     }
     .accounts-table-v2 thead th {
+      position: sticky; top: 0; z-index: 2;
       background: #f5f7fa; color: #808093; font-size: 14px; font-weight: 600;
       height: 44px; border-bottom: 1px solid #ebeef5; line-height: 1;
     }
@@ -733,6 +738,13 @@
       background: #fff; border-color: #dcdfe6; cursor: not-allowed; opacity: 1;
     }
     .accounts-table-v2 tbody td { height: 56px; }
+    .table-selection-bar-v2 {
+      display: flex; align-items: center; gap: 10px; min-height: 42px;
+      padding: 7px 16px; border-top: 1px solid #ebeef5;
+      background: #fff; color: #606266; font-size: 13px;
+    }
+    .table-selection-bar-v2.hidden { display: none; }
+    .table-selection-bar-v2 strong { color: #377DFF; font-weight: 700; }
     .accounts-table-v2 tbody td:first-child { padding-left: 16px; }
     .accounts-table-v2 tbody td:last-child { padding-right: 16px; }
     .accounts-table-v2 .col-email,
@@ -1346,7 +1358,7 @@
       padding: 12px 16px 16px;
       justify-content: flex-start;
     }
-    .codex-table-v2-wrap { overflow: auto; padding: 0; }
+    .codex-table-v2-wrap { height: 480px; max-height: 480px; overflow: auto; padding: 0; }
     .codex-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
       min-width: 1100px;
@@ -1358,6 +1370,7 @@
       color: #606266; box-sizing: border-box;
     }
     .codex-table-v2 thead th {
+      position: sticky; top: 0; z-index: 2;
       background: #f5f7fa; color: #808093; font-size: 14px; font-weight: 600;
       height: 44px; border-bottom: 1px solid #ebeef5; line-height: 1;
     }
@@ -1588,7 +1601,7 @@
       padding: 0 6px; font: inherit; font-size: 13px; color: #606266;
       box-sizing: border-box;
     }
-    .outlook-table-v2-wrap { overflow: auto; padding: 0; }
+    .outlook-table-v2-wrap { height: 480px; max-height: 480px; overflow: auto; padding: 0; }
     .outlook-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
       min-width: 1100px;
@@ -1600,6 +1613,7 @@
       color: #606266; box-sizing: border-box;
     }
     .outlook-table-v2 thead th {
+      position: sticky; top: 0; z-index: 2;
       background: #f5f7fa; color: #808093; font-size: 14px; font-weight: 600;
       height: 44px; border-bottom: 1px solid #ebeef5; line-height: 1;
     }
@@ -2446,6 +2460,10 @@ try {
           <tbody id="jobsBodyV2"></tbody>
         </table>
       </div>
+      <div class="table-selection-bar-v2 hidden" id="jobsSelectionBarV2" aria-live="polite">
+        <span>已选 <strong id="jobsSelectionCountV2">0</strong> 个</span>
+        <button type="button" class="jobs-tb-btn" id="btnClearSelectedJobsV2">取消当前选中</button>
+      </div>
       <div class="jobs-v2-pager" id="pager-jobs-v2"></div>
     </section>
   </div>
@@ -2545,6 +2563,10 @@ try {
           <tbody id="accountsBodyV2"></tbody>
         </table>
       </div>
+      <div class="table-selection-bar-v2 hidden" id="accountsSelectionBarV2" aria-live="polite">
+        <span>已选 <strong id="accountsSelectionCountV2">0</strong> 个</span>
+        <button type="button" class="jobs-tb-btn" id="btnClearSelectedAccountsV2">取消当前选中</button>
+      </div>
       <div class="jobs-v2-pager" id="pager-accounts-v2"></div>
     </section>
     <div class="body hidden" id="retryLogPanel">
@@ -2626,6 +2648,10 @@ try {
           <tbody id="codexBodyV2"></tbody>
         </table>
       </div>
+      <div class="table-selection-bar-v2 hidden" id="codexSelectionBarV2" aria-live="polite">
+        <span>已选 <strong id="codexSelectionCountV2">0</strong> 个</span>
+        <button type="button" class="jobs-tb-btn" id="btnClearSelectedCodexV2">取消当前选中</button>
+      </div>
       <div class="jobs-v2-pager" id="pager-codex-v2"></div>
     </section>
   </div>
@@ -2676,6 +2702,10 @@ try {
           </thead>
           <tbody id="outlookBodyV2"></tbody>
         </table>
+      </div>
+      <div class="table-selection-bar-v2 hidden" id="outlookSelectionBarV2" aria-live="polite">
+        <span>已选 <strong id="outlookSelectionCountV2">0</strong> 个</span>
+        <button type="button" class="jobs-tb-btn" id="btnClearSelectedOutlookV2">取消当前选中</button>
       </div>
       <div class="jobs-v2-pager" id="pager-outlook-v2"></div>
     </section>
@@ -3192,6 +3222,8 @@ function bindJobsBodyEvents(bodyEl) {
   if (cancelV2) cancelV2.addEventListener('click', () => cancelAllPendingJobs(cancelV2));
   const refreshV2 = $('#btnRefreshJobsV2');
   if (refreshV2) refreshV2.addEventListener('click', refreshJobs);
+  const clearSelectedV2 = $('#btnClearSelectedJobsV2');
+  if (clearSelectedV2) clearSelectedV2.addEventListener('click', clearSelectedJobsV2);
 
   function stepInputNumber(inputId, delta) {
     const el = document.getElementById(inputId);
@@ -3255,10 +3287,18 @@ function renderJobs() {
 }
 
 function updateJobsSelectionUi(pageRows = null) {
+  const none = JOB_SELECTED.size === 0;
+  const selectionBar = $('#jobsSelectionBarV2');
+  const selectionCount = $('#jobsSelectionCountV2');
+  const clearSelectionBtn = $('#btnClearSelectedJobsV2');
+  if (selectionCount) selectionCount.textContent = JOB_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
+
   const bulkBtnV2 = $('#btnDeleteSelectedJobsV2');
   const bulkRetryBtnV2 = $('#btnRetrySelectedJobsV2');
-  if (bulkBtnV2) bulkBtnV2.disabled = JOB_SELECTED.size === 0;
-  if (bulkRetryBtnV2) bulkRetryBtnV2.disabled = JOB_SELECTED.size === 0;
+  if (bulkBtnV2) bulkBtnV2.disabled = none;
+  if (bulkRetryBtnV2) bulkRetryBtnV2.disabled = none;
 
   if (!pageRows) pageRows = JOBS;
   const selectableIds = pageRows.filter(j => !['running','stopping'].includes(j.status)).map(j => Number(j.id));
@@ -3269,6 +3309,13 @@ function updateJobsSelectionUi(pageRows = null) {
     cbAll.indeterminate = checkedCount > 0 && checkedCount < selectableIds.length;
     cbAll.disabled = selectableIds.length === 0;
   }
+}
+
+function clearSelectedJobsV2() {
+  if (!JOB_SELECTED.size) return;
+  JOB_SELECTED.clear();
+  renderJobs();
+  showToast('已取消当前选中');
 }
 
 async function refreshJobs() {
@@ -4022,7 +4069,13 @@ function renderAccounts() {
 function updateAccountSelectionUi(pageRows = null) {
   const none = ACCOUNT_SELECTED.size === 0;
   const hintV2 = $('#accountsSelectedHintV2');
+  const selectionBar = $('#accountsSelectionBarV2');
+  const selectionCount = $('#accountsSelectionCountV2');
+  const clearSelectionBtn = $('#btnClearSelectedAccountsV2');
   if (hintV2) hintV2.textContent = `已选 ${ACCOUNT_SELECTED.size}`;
+  if (selectionCount) selectionCount.textContent = ACCOUNT_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
 
   const archiveLabel = SHOW_ARCHIVED_ACCOUNTS ? '恢复选中' : '归档选中';
   const archiveTitle = SHOW_ARCHIVED_ACCOUNTS ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
@@ -4053,6 +4106,13 @@ function updateAccountSelectionUi(pageRows = null) {
     cbAll.indeterminate = checkedCount > 0 && checkedCount < pageIds.length;
     cbAll.disabled = pageIds.length === 0;
   }
+}
+
+function clearSelectedAccountsV2() {
+  if (!ACCOUNT_SELECTED.size) return;
+  ACCOUNT_SELECTED.clear();
+  renderAccounts();
+  showToast('已取消当前选中');
 }
 
 // ---------- 补跑日志面板 ----------
@@ -5202,6 +5262,7 @@ async function copySelectedAccountTokens() {
   bind('btnDownloadSelectedTxtV2', downloadSelectedAccountTxt);
   bind('btnArchiveSelectedAccountsV2', archiveSelectedAccounts);
   bind('btnDeleteSelectedAccountsV2', deleteSelectedAccounts);
+  bind('btnClearSelectedAccountsV2', clearSelectedAccountsV2);
 })();
 
 // ---------- 邮箱池 ----------
@@ -5326,6 +5387,12 @@ function renderOutlook() {
 }
 function updateOutlookSelectionUi(pageRows = null) {
   const none = OUTLOOK_SELECTED.size === 0;
+  const selectionBar = $('#outlookSelectionBarV2');
+  const selectionCount = $('#outlookSelectionCountV2');
+  const clearSelectionBtn = $('#btnClearSelectedOutlookV2');
+  if (selectionCount) selectionCount.textContent = OUTLOOK_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
   [
     'btnDeleteSelectedOutlookV2',
     'btnMarkSelectedOutlookAvailableV2',
@@ -5346,6 +5413,12 @@ function updateOutlookSelectionUi(pageRows = null) {
   cbAll.checked = allChecked;
   cbAll.indeterminate = someChecked;
   cbAll.disabled = pageKeys.length === 0;
+}
+function clearSelectedOutlookV2() {
+  if (!OUTLOOK_SELECTED.size) return;
+  OUTLOOK_SELECTED.clear();
+  renderOutlook();
+  showToast('已取消当前选中');
 }
 function onPoolSourceChange(el) {
   if (el && el.id === 'poolSourceV2') setPoolSourceV2(el.value);
@@ -5443,6 +5516,8 @@ async function onOutlookBodyClick(e) {
   }
   const selectAllV2 = $('#outlookSelectAllV2');
   if (selectAllV2) selectAllV2.addEventListener('change', (e) => syncOutlookSelectAll(e.target.checked));
+  const clearSelectedV2 = $('#btnClearSelectedOutlookV2');
+  if (clearSelectedV2) clearSelectedV2.addEventListener('click', clearSelectedOutlookV2);
   const bodyV2 = $('#outlookBodyV2');
   if (bodyV2) {
     bodyV2.addEventListener('change', onOutlookBodyChange);
@@ -5655,10 +5730,22 @@ async function loadCodex() {
 const CODEX_SELECTED = new Set();
 function _codexUpdateSelectedHint() {
   const none = CODEX_SELECTED.size === 0;
+  const selectionBar = $('#codexSelectionBarV2');
+  const selectionCount = $('#codexSelectionCountV2');
+  const clearSelectionBtn = $('#btnClearSelectedCodexV2');
+  if (selectionCount) selectionCount.textContent = CODEX_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
   ['btnCodexDownloadBulkV2', 'btnCodexDownloadBulkCpaV2', 'btnCodexDeleteBulkV2'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = none;
   });
+}
+function clearSelectedCodexV2() {
+  if (!CODEX_SELECTED.size) return;
+  CODEX_SELECTED.clear();
+  renderCodex();
+  showToast('已取消当前选中');
 }
 function _codexStatusBadge(r) {
   const exported = (r.exported_count || 0) > 0;
@@ -5942,6 +6029,7 @@ async function codexDeleteBulk() {
   bind('btnCodexDownloadBulkV2', codexDownloadBulkLocal);
   bind('btnCodexDownloadBulkCpaV2', codexDownloadBulkCpa);
   bind('btnCodexDeleteBulkV2', codexDeleteBulk);
+  bind('btnClearSelectedCodexV2', clearSelectedCodexV2);
   document.addEventListener('click', (e) => {
     if (e.target.closest('.codex-table-v2 .acc-v2-more')) return;
     closeCodexV2MoreMenus();

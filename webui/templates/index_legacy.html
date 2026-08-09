@@ -104,7 +104,8 @@
     .buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .inline-num { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; font-weight:700; white-space:nowrap; }
     .inline-num input { width:70px; min-height:38px; margin-top:0; padding:4px 8px; }
-    .table-wrap { overflow: auto; border-top: 1px solid #edf1f5; }
+    .table-wrap { height: 480px; max-height: 480px; overflow: auto; border-top: 1px solid #edf1f5; }
+    .table-wrap thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
     th, td { padding: 10px 12px; border-bottom: 1px solid #edf1f5; text-align: left; white-space: nowrap; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
     th { user-select: none; }
@@ -343,6 +344,13 @@
     }
     #toast.show { opacity: 1; transform: translateY(0); }
     /* 分页条 */
+    .table-selection-bar {
+      display: flex; align-items: center; gap: 10px; min-height: 42px;
+      padding: 8px 16px; border-top: 1px solid #edf1f5;
+      background: var(--surface); color: var(--muted); font-size: 12px;
+    }
+    .table-selection-bar strong { color: var(--blue); font-weight: 800; }
+    .table-selection-bar .btn { min-height: 30px; padding: 0 10px; font-size: 12px; }
     .pager-bar {
       display: flex; align-items: center; gap: 8px; padding: 10px 16px;
       border-top: 1px solid var(--line); font-size: 13px; flex-wrap: wrap;
@@ -521,6 +529,10 @@
           <tbody id="jobsBody"></tbody>
         </table>
       </div>
+      <div class="table-selection-bar hidden" id="jobsSelectionBar" aria-live="polite">
+        <span>已选 <strong id="jobsSelectionCount">0</strong> 个</span>
+        <button type="button" class="btn" id="btnClearSelectedJobs">取消当前选中</button>
+      </div>
       <div class="pager-bar" id="pager-jobs"></div>
       <div class="body hidden" id="logPanel">
         <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
@@ -594,6 +606,10 @@
           <tbody id="accountsBody"></tbody>
         </table>
       </div>
+      <div class="table-selection-bar hidden" id="accountsSelectionBar" aria-live="polite">
+        <span>已选 <strong id="accountsSelectionCount">0</strong> 个</span>
+        <button type="button" class="btn" id="btnClearSelectedAccounts">取消当前选中</button>
+      </div>
       <div class="pager-bar" id="pager-accounts"></div>
       <div class="body hidden" id="retryLogPanel">
         <h3>补跑日志：<span id="retryLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
@@ -657,6 +673,10 @@
           <tbody id="codexBody"></tbody>
         </table>
       </div>
+      <div class="table-selection-bar hidden" id="codexSelectionBar" aria-live="polite">
+        <span>已选 <strong id="codexSelectionCount">0</strong> 个</span>
+        <button type="button" class="btn" id="btnClearSelectedCodex">取消当前选中</button>
+      </div>
       <div class="pager-bar" id="pager-codex"></div>
     </section>
   </div>
@@ -714,6 +734,10 @@
           </tr></thead>
           <tbody id="outlookBody"></tbody>
         </table>
+      </div>
+      <div class="table-selection-bar hidden" id="outlookSelectionBar" aria-live="polite">
+        <span>已选 <strong id="outlookSelectionCount">0</strong> 个</span>
+        <button type="button" class="btn" id="btnClearSelectedOutlook">取消当前选中</button>
       </div>
       <div class="pager-bar" id="pager-outlook"></div>
     </section>
@@ -917,6 +941,7 @@ $('#jobsSelectAll').addEventListener('change', (e) => {
 });
 $('#btnDeleteSelectedJobs').addEventListener('click', deleteSelectedJobs);
 $('#btnRetrySelectedJobs').addEventListener('click', retrySelectedJobs);
+$('#btnClearSelectedJobs').addEventListener('click', clearSelectedJobsLegacy);
 $('#btnCancelPending').addEventListener('click', async () => {
   const pendingCount = Number(JOB_STATUS_COUNTS.pending || 0);
   const msg = pendingCount > 0
@@ -962,13 +987,20 @@ function renderJobs() {
 }
 
 function updateJobsSelectionUi(pageRows = null) {
+  const none = JOB_SELECTED.size === 0;
   const hint = $('#jobsSelectedHint');
+  const selectionBar = $('#jobsSelectionBar');
+  const selectionCount = $('#jobsSelectionCount');
+  const clearSelectionBtn = $('#btnClearSelectedJobs');
+  if (hint) hint.textContent = `已选 ${JOB_SELECTED.size}`;
+  if (selectionCount) selectionCount.textContent = JOB_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
   const bulkBtn = $('#btnDeleteSelectedJobs');
   const bulkRetryBtn = $('#btnRetrySelectedJobs');
-  if (hint) hint.textContent = `已选 ${JOB_SELECTED.size}`;
-  if (bulkBtn) bulkBtn.disabled = JOB_SELECTED.size === 0;
+  if (bulkBtn) bulkBtn.disabled = none;
   if (bulkRetryBtn) {
-    bulkRetryBtn.disabled = JOB_SELECTED.size === 0;
+    bulkRetryBtn.disabled = none;
   }
 
   const cbAll = $('#jobsSelectAll');
@@ -981,6 +1013,13 @@ function updateJobsSelectionUi(pageRows = null) {
   cbAll.checked = selectableIds.length > 0 && checkedCount === selectableIds.length;
   cbAll.indeterminate = checkedCount > 0 && checkedCount < selectableIds.length;
   cbAll.disabled = selectableIds.length === 0;
+}
+
+function clearSelectedJobsLegacy() {
+  if (!JOB_SELECTED.size) return;
+  JOB_SELECTED.clear();
+  renderJobs();
+  showToast('已取消当前选中');
 }
 
 async function refreshJobs() {
@@ -1676,7 +1715,14 @@ function renderAccounts() {
 }
 
 function updateAccountSelectionUi(pageRows = null) {
+  const none = ACCOUNT_SELECTED.size === 0;
   const hint = $('#accountsSelectedHint');
+  const selectionBar = $('#accountsSelectionBar');
+  const selectionCount = $('#accountsSelectionCount');
+  const clearSelectionBtn = $('#btnClearSelectedAccounts');
+  if (selectionCount) selectionCount.textContent = ACCOUNT_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
   const bulkBtn = $('#btnDeleteSelectedAccounts');
   const retryBulkBtn = $('#btnRetrySelectedCodex');
   const stopCodexBulkBtn = $('#btnStopSelectedCodex');
@@ -1693,20 +1739,20 @@ function updateAccountSelectionUi(pageRows = null) {
   const injectSessionsBtn = $('#btnInjectSelectedSessions');
   const archiveSelectedBtn = $('#btnArchiveSelectedAccounts');
   if (hint) hint.textContent = `已选 ${ACCOUNT_SELECTED.size}`;
-  if (bulkBtn) bulkBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (retryBulkBtn) retryBulkBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (stopCodexBulkBtn) stopCodexBulkBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (downloadCpaBtn) downloadCpaBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (extractLinksBtn) extractLinksBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (generateAgentBtn) generateAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (downloadAgentBtn) downloadAgentBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (uploadAgentSub2Btn) uploadAgentSub2Btn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (checkPlanBtn) checkPlanBtn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (bulkBtn) bulkBtn.disabled = none;
+  if (retryBulkBtn) retryBulkBtn.disabled = none;
+  if (stopCodexBulkBtn) stopCodexBulkBtn.disabled = none;
+  if (downloadCpaBtn) downloadCpaBtn.disabled = none;
+  if (extractLinksBtn) extractLinksBtn.disabled = none;
+  if (generateAgentBtn) generateAgentBtn.disabled = none;
+  if (downloadAgentBtn) downloadAgentBtn.disabled = none;
+  if (uploadAgentSub2Btn) uploadAgentSub2Btn.disabled = none;
+  if (checkPlanBtn) checkPlanBtn.disabled = none;
   if (copySelectedTokenBtn) copySelectedTokenBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (copySelectedBtn) copySelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (downloadTxtBtn) downloadTxtBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (noteSelectedBtn) noteSelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
-  if (injectSessionsBtn) injectSessionsBtn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (copySelectedBtn) copySelectedBtn.disabled = none;
+  if (downloadTxtBtn) downloadTxtBtn.disabled = none;
+  if (noteSelectedBtn) noteSelectedBtn.disabled = none;
+  if (injectSessionsBtn) injectSessionsBtn.disabled = none;
   if (archiveSelectedBtn) {
     archiveSelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
     archiveSelectedBtn.textContent = SHOW_ARCHIVED_ACCOUNTS ? '恢复选中' : '归档选中';
@@ -1723,6 +1769,13 @@ function updateAccountSelectionUi(pageRows = null) {
   cbAll.checked = pageIds.length > 0 && checkedCount === pageIds.length;
   cbAll.indeterminate = checkedCount > 0 && checkedCount < pageIds.length;
   cbAll.disabled = pageIds.length === 0;
+}
+
+function clearSelectedAccountsLegacy() {
+  if (!ACCOUNT_SELECTED.size) return;
+  ACCOUNT_SELECTED.clear();
+  renderAccounts();
+  showToast('已取消当前选中');
 }
 
 // ---------- 补跑日志面板 ----------
@@ -1976,6 +2029,7 @@ $('#accountsSelectAll').addEventListener('change', (e) => {
   renderAccounts();
 });
 $('#btnDeleteSelectedAccounts').addEventListener('click', deleteSelectedAccounts);
+$('#btnClearSelectedAccounts').addEventListener('click', clearSelectedAccountsLegacy);
 $('#btnArchiveSelectedAccounts').addEventListener('click', archiveSelectedAccounts);
 $('#btnCopySelectedTokens').addEventListener('click', copySelectedAccountTokens);
 $('#btnCopySelectedLines').addEventListener('click', copySelectedAccountLines);
@@ -2743,16 +2797,23 @@ function renderOutlook() {
   _renderPager('outlook', total);
 }
 function updateOutlookSelectionUi(pageRows = null) {
+  const none = OUTLOOK_SELECTED.size === 0;
   const hint = $('#outlookSelectedHint');
+  const selectionBar = $('#outlookSelectionBar');
+  const selectionCount = $('#outlookSelectionCount');
+  const clearSelectionBtn = $('#btnClearSelectedOutlook');
+  if (selectionCount) selectionCount.textContent = OUTLOOK_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
   const bulkBtn = $('#btnDeleteSelectedOutlook');
   const markAvailBtn = $('#btnMarkSelectedOutlookAvailable');
   const disableBtn = $('#btnDisableSelectedOutlook');
   const failBtn = $('#btnFailSelectedOutlook');
   if (hint) hint.textContent = `已选 ${OUTLOOK_SELECTED.size}`;
-  if (bulkBtn) bulkBtn.disabled = OUTLOOK_SELECTED.size === 0;
-  if (markAvailBtn) markAvailBtn.disabled = OUTLOOK_SELECTED.size === 0;
-  if (disableBtn) disableBtn.disabled = OUTLOOK_SELECTED.size === 0;
-  if (failBtn) failBtn.disabled = OUTLOOK_SELECTED.size === 0;
+  if (bulkBtn) bulkBtn.disabled = none;
+  if (markAvailBtn) markAvailBtn.disabled = none;
+  if (disableBtn) disableBtn.disabled = none;
+  if (failBtn) failBtn.disabled = none;
 
   const cbAll = $('#outlookSelectAll');
   if (!cbAll) return;
@@ -2764,6 +2825,12 @@ function updateOutlookSelectionUi(pageRows = null) {
   cbAll.checked = pageKeys.length > 0 && checkedCount === pageKeys.length;
   cbAll.indeterminate = checkedCount > 0 && checkedCount < pageKeys.length;
   cbAll.disabled = pageKeys.length === 0;
+}
+function clearSelectedOutlookLegacy() {
+  if (!OUTLOOK_SELECTED.size) return;
+  OUTLOOK_SELECTED.clear();
+  renderOutlook();
+  showToast('已取消当前选中');
 }
 $('#qOutlook').addEventListener('input', debounce(() => { PAGERS.outlook.page = 1; loadOutlook(); }, 250));
 $('#poolSource').addEventListener('change', () => {
@@ -2786,6 +2853,7 @@ $('#outlookSelectAll').addEventListener('change', (e) => {
   renderOutlook();
 });
 $('#btnDeleteSelectedOutlook').addEventListener('click', deleteSelectedOutlook);
+$('#btnClearSelectedOutlook').addEventListener('click', clearSelectedOutlookLegacy);
 $('#btnMarkSelectedOutlookAvailable').addEventListener('click', () => bulkMarkOutlookStatus('available'));
 $('#btnDisableSelectedOutlook').addEventListener('click', () => bulkMarkOutlookStatus('disabled'));
 $('#btnFailSelectedOutlook').addEventListener('click', () => bulkMarkOutlookStatus('failed'));
@@ -2906,12 +2974,25 @@ async function loadCodex() {
 }
 const CODEX_SELECTED = new Set();
 function _codexUpdateSelectedHint() {
-  $('#codexSelectedHint').textContent = `已选 ${CODEX_SELECTED.size}`;
-  $('#btnCodexDownloadBulk').disabled = CODEX_SELECTED.size === 0;
+  const none = CODEX_SELECTED.size === 0;
+  const selectionBar = $('#codexSelectionBar');
+  const selectionCount = $('#codexSelectionCount');
+  const clearSelectionBtn = $('#btnClearSelectedCodex');
+  if ($('#codexSelectedHint')) $('#codexSelectedHint').textContent = `已选 ${CODEX_SELECTED.size}`;
+  if (selectionCount) selectionCount.textContent = CODEX_SELECTED.size;
+  if (selectionBar) selectionBar.classList.toggle('hidden', none);
+  if (clearSelectionBtn) clearSelectionBtn.disabled = none;
+  $('#btnCodexDownloadBulk').disabled = none;
   const cpaBulkBtn = $('#btnCodexDownloadBulkCpa');
   if (cpaBulkBtn) cpaBulkBtn.disabled = CODEX_SELECTED.size === 0;
   const delBtn = $('#btnCodexDeleteBulk');
   if (delBtn) delBtn.disabled = CODEX_SELECTED.size === 0;
+}
+function clearSelectedCodexLegacy() {
+  if (!CODEX_SELECTED.size) return;
+  CODEX_SELECTED.clear();
+  renderCodex();
+  showToast('已取消当前选中');
 }
 function renderCodex() {
   const total = CODEX_TOTAL;
@@ -2949,6 +3030,7 @@ function renderCodex() {
 }
 $('#qCodex').addEventListener('input', debounce(() => { PAGERS.codex.page = 1; loadCodex(); }, 250));
 $('#btnRefreshCodex').addEventListener('click', loadCodex);
+$('#btnClearSelectedCodex').addEventListener('click', clearSelectedCodexLegacy);
 
 // 全选 / 取消全选（仅当前页可见行）
 $('#codexSelectAll').addEventListener('change', (e) => {
