@@ -2561,6 +2561,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         _check_manual_stop()
 
         totp_secret = None
+        twofa_result = {
+            "requested": bool(_twofa_cfg.ENABLE_2FA),
+            "status": "pending" if _twofa_cfg.ENABLE_2FA else "disabled",
+            "error": None,
+        }
         if _twofa_cfg.ENABLE_2FA:
             try:
                 logger.info("[Roxy注册][2FA] ENABLE_2FA=True，开始设置 TOTP")
@@ -2570,8 +2575,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                     proxy=proxy,
                     previous_otp=current_otp,
                 )
+                twofa_result["status"] = "success"
                 logger.info("[Roxy注册][2FA] TOTP 设置完成")
             except Exception as exc:
+                twofa_result["status"] = "failed"
+                twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
                 logger.error("[Roxy注册][2FA] 设置失败：%s: %s", type(exc).__name__, exc)
                 logger.debug("[Roxy注册][2FA] 失败详情", exc_info=True)
 
@@ -2615,6 +2623,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                 "session": saved_session,
                 "roxybrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
                 "registration_password": openai_password,
+                "twofa": twofa_result,
                 "codex": codex_result,
             },
         )

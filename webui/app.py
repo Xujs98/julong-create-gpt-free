@@ -98,6 +98,8 @@ def _compact_account_for_list(row: dict) -> dict:
         "email": row.get("email"),
         "has_access_token": bool(str(row.get("access_token") or "").strip()),
         "totp_enabled": bool(row.get("totp_secret")),
+        "twofa_status": row.get("twofa_status"),
+        "twofa_requested": bool(row.get("twofa_requested")),
         "password_available": bool(_account_registration_password(row)),
         "codex_agent_has_token": bool(str(row.get("codex_agent_token") or "").strip()),
     }
@@ -109,6 +111,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "proxy_country_name", "proxy_region", "proxy_city", "proxy_exit_ip",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
+        "twofa_status", "twofa_requested",
     ):
         if key in row:
             out[key] = row.get(key)
@@ -127,6 +130,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "discount_amount", "discount_type", "discount_duration_num_periods",
         "discount_expires_at", "discount_cancellation_policy", "discount_promo_campaign_id",
         "token_expired", "token_expires_at",
+        "twofa_error",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
         "icloud_code_url_available",

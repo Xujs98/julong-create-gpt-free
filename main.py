@@ -501,11 +501,19 @@ def run_registration(
 
         # ==================== 阶段7: 设置 2FA（受 config.ENABLE_2FA 控制）====================
         totp_secret = None
+        twofa_result = {
+            "requested": bool(_twofa_cfg.ENABLE_2FA),
+            "status": "pending" if _twofa_cfg.ENABLE_2FA else "disabled",
+            "error": None,
+        }
         if _twofa_cfg.ENABLE_2FA:
             # 步骤14-20: 重认证（要再收一次邮箱 OTP）→ enroll TOTP → activate
             try:
                 totp_secret = setup_2fa(session, email, previous_otp=current_otp)
+                twofa_result["status"] = "success"
             except Exception as exc:
+                twofa_result["status"] = "failed"
+                twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
                 logger.error(f"2FA 设置失败: {exc}")
                 logger.debug("2FA 错误详情:", exc_info=True)
                 logger.warning("将继续保存账号信息（不含 TOTP secret），可后续手动设置")
@@ -559,6 +567,7 @@ def run_registration(
                 "sentinel_sid": getattr(session, "sentinel_sid", None),
                 "browser_profile": getattr(session, "browser_profile", None),
                 "registration_password": openai_password,
+                "twofa": twofa_result,
                 "codex": codex_result,
             },
         )

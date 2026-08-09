@@ -1628,6 +1628,18 @@ function _accountPasswordCell(r) {
     ? `<button type="button" class="account-password-copy" data-account-copy-secret="password" data-account-id="${esc(r.id)}" title="点击复制账号密码">密码</button>`
     : '<span class="account-password-none" title="该账号注册时未保存创建密码；开启创建密码只对新注册任务生效">未设置密码</span>';
 }
+function _accountTotpCell(r) {
+  if (r.totp_enabled) return '已启用';
+  const status = String(r.twofa_status || '').trim().toLowerCase();
+  const error = String(r.twofa_error || '').trim();
+  if (status === 'failed') {
+    const title = error ? `2FA 设置失败：${error}；请查看注册日志并重启服务后重试` : '2FA 设置失败；请查看注册日志并重启服务后重试';
+    return `<span class="status-failed" title="${esc(title)}">设置失败</span>`;
+  }
+  if (status === 'pending') return '<span class="status-pending" title="2FA 正在设置，等待任务完成">设置中</span>';
+  if (status === 'skipped') return '<span class="muted" title="当前注册路径跳过自动 2FA 设置">已跳过</span>';
+  return '<span class="muted" title="该账号没有保存 TOTP；可能是注册时未开启 2FA，或设置阶段失败，请查看注册日志">未启用</span>';
+}
 function renderAccounts() {
   const p = PAGERS.accounts;
   const total = ACCOUNTS_TOTAL;
@@ -1641,7 +1653,7 @@ function renderAccounts() {
       <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span>${_liveStatusSub(r)}</td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
-      <td>${r.totp_enabled ? '已启用' : '<span class="muted" title="该账号没有保存 TOTP；可能是注册时未开启 2FA，或设置阶段失败，请查看注册日志">未启用</span>'}</td>
+      <td>${_accountTotpCell(r)}</td>
       <td>${_codexCell(r)}</td>
       <td>${_codexAgentCell(r)}</td>
       <td class="muted">${esc(r.created_at || '-')}</td>

@@ -845,6 +845,7 @@ def insert_account(
         existing = _find_by_email(accounts, email)
         outlook_row = _find_by_email(outlook_rows, email)
         icloud_row = _find_by_email(icloud_rows, email)
+        twofa = (extra or {}).get("twofa") or {}
         extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
 
         if existing is None:
@@ -862,6 +863,22 @@ def insert_account(
         row.update({
             "access_token": access_token,
             "totp_secret": totp_secret if totp_secret is not None else row.get("totp_secret"),
+            # 2FA 结果单独落库，避免 ENABLE_2FA=True 但设置异常时只表现为“未启用”。
+            # 旧数据没有该字段时保持兼容，由前端按 totp_secret 回退判断。
+            "twofa_status": (
+                str(twofa.get("status") or "").strip()
+                or row.get("twofa_status")
+                or ("success" if totp_secret else None)
+            ),
+            "twofa_error": (
+                str(twofa.get("error") or "").strip()
+                or row.get("twofa_error")
+            ),
+            "twofa_requested": (
+                bool(twofa.get("requested"))
+                if "requested" in twofa
+                else row.get("twofa_requested")
+            ),
             "user_id": user_id if user_id is not None else row.get("user_id"),
             "user_name": user_name if user_name is not None else row.get("user_name"),
             "plan_type": plan_type if plan_type is not None else row.get("plan_type"),

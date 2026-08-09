@@ -1909,6 +1909,13 @@ def run_browser_use_registration(
 
             if _twofa_cfg.ENABLE_2FA:
                 logger.warning("[BrowserUse] 当前路径暂不自动设置 2FA，已跳过")
+                twofa_result = {
+                    "requested": True,
+                    "status": "skipped",
+                    "error": "BrowserUse 注册路径暂不支持自动设置 2FA",
+                }
+            else:
+                twofa_result = {"requested": False, "status": "disabled", "error": None}
             totp_secret = None
 
             codex_result = {
@@ -1968,6 +1975,7 @@ def run_browser_use_registration(
                         "connect": session_info_open.raw,
                     },
                     "registration_password": openai_password,
+                    "twofa": twofa_result,
                     "codex": codex_result,
                 },
             )

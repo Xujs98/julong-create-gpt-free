@@ -193,6 +193,11 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         saved_session = build_saved_session(session_info, capture_browser_cookies(driver))
 
         totp_secret = None
+        twofa_result = {
+            "requested": bool(_twofa_cfg.ENABLE_2FA),
+            "status": "pending" if _twofa_cfg.ENABLE_2FA else "disabled",
+            "error": None,
+        }
         if _twofa_cfg.ENABLE_2FA:
             try:
                 logger.info("[Cloak注册][2FA] ENABLE_2FA=True，开始设置 TOTP")
@@ -202,8 +207,11 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                     proxy=getattr(driver, "upstream_proxy_url", None) or proxy,
                     previous_otp=current_otp,
                 )
+                twofa_result["status"] = "success"
                 logger.info("[Cloak注册][2FA] TOTP 设置完成")
             except Exception as exc:
+                twofa_result["status"] = "failed"
+                twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
                 logger.error("[Cloak注册][2FA] 设置失败：%s: %s", type(exc).__name__, exc)
                 logger.debug("[Cloak注册][2FA] 失败详情", exc_info=True)
 
@@ -245,6 +253,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                 "session": saved_session,
                 "cloakbrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
                 "registration_password": openai_password,
+                "twofa": twofa_result,
                 "codex": codex_result,
             },
         )
