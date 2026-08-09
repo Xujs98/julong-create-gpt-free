@@ -1,8 +1,9 @@
 from pathlib import Path
+import json
 from unittest.mock import patch
 
 from core import db
-from webui.app import create_app
+from webui.app import _account_secret_value, create_app
 
 
 ROOT = Path(__file__).parents[1]
@@ -57,3 +58,20 @@ def test_icloud_url_secret_is_scoped_to_icloud_accounts():
     assert response.status_code == 200
     assert response.get_json()["value"] == ""
     lookup.assert_not_called()
+
+
+def test_account_token_cell_exposes_at_and_saved_session_copy_actions():
+    source = TEMPLATE.read_text(encoding="utf-8")
+    assert '<th class="col-token">AT / Session</th>' in source
+    assert 'data-account-copy-secret="access_token"' in source
+    assert 'data-account-copy-secret="session"' in source
+    assert 'title="复制完整 access token"' in source
+    assert 'title="复制已保存的完整 Session"' in source
+    assert "AT 已复制" in source
+    assert "Session 已复制" in source
+
+
+def test_saved_session_secret_returns_compact_json():
+    saved = {"accessToken": "AT", "cookies": [{"name": "sid", "value": "COOKIE"}]}
+    value = _account_secret_value({"extra_json": json.dumps({"session": saved})}, "session")
+    assert json.loads(value) == saved

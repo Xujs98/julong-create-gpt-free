@@ -699,7 +699,7 @@
     .accounts-table-v2 .col-id { width: 72px; }
     .accounts-table-v2 .col-email { width: 340px; min-width: 340px; }
     .accounts-table-v2 .col-source { width: 90px; }
-    .accounts-table-v2 .col-token { width: 100px; }
+    .accounts-table-v2 .col-token { width: 180px; min-width: 180px; }
     .accounts-table-v2 .col-plan { width: 280px; }
     .accounts-table-v2 .col-note { width: 140px; }
     .accounts-table-v2 .col-completion { width: 150px; }
@@ -987,6 +987,15 @@
       border: 1px solid #9ee0d6; box-sizing: border-box;
       font: inherit; font-size: 13px; font-weight: 500; line-height: 1;
       color: #2bb8a6; background: #E7FCF8; cursor: pointer; white-space: nowrap;
+    }
+    .accounts-table-v2 .acc-v2-token-actions {
+      display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .accounts-table-v2 .acc-v2-token-session {
+      color: #377DFF; background: #EBF2FF; border-color: #9BBEFF;
+    }
+    .accounts-table-v2 .acc-v2-token-session:hover:not(:disabled) {
+      background: #377DFF; border-color: #377DFF; color: #fff;
     }
     .accounts-table-v2 .acc-v2-token-copy:hover:not(:disabled) {
       background: #2bb8a6; border-color: #2bb8a6; color: #fff;
@@ -2522,7 +2531,7 @@ try {
               <th class="col-id">ID</th>
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
-              <th class="col-token">Token</th>
+              <th class="col-token">AT / Session</th>
               <th class="col-plan">套餐</th>
               <th class="col-note">备注</th>
               <th class="col-completion">状态</th>
@@ -3888,10 +3897,16 @@ function _tokenCellV2(r) {
     const blocked = /(?:http(?: error)?\s*)?403|forbidden/i.test(liveErr);
     liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#e6a23c">查活: ${blocked ? '访问受阻' : '失败'}</div>`;
   }
-  if (r.has_access_token) {
-    return `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 Token">复制</button>${liveHtml}`;
+  if (r.has_access_token || r.has_session) {
+    const at = r.has_access_token
+      ? `<button type="button" class="acc-v2-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 access token">AT</button>`
+      : '';
+    const session = r.has_session
+      ? `<button type="button" class="acc-v2-token-copy acc-v2-token-session" data-account-copy-secret="session" data-account-id="${esc(r.id)}" title="复制已保存的完整 Session">Session</button>`
+      : '';
+    return `<div class="acc-v2-token-actions">${at}${session}</div>${liveHtml}`;
   }
-  return `<span class="pill status-failed">无Token</span>${liveHtml}`;
+  return `<span class="pill status-failed">无AT</span>${liveHtml}`;
 }
 function _accountsV2MoreMenu(r) {
   const parts = [
@@ -4192,7 +4207,7 @@ async function onAccountsBodyClick(e) {
           copySecretBtn.classList.remove('is-copied');
           copySecretBtn.innerHTML = originalHtml;
         }, 1600);
-      } else if (field === 'totp_code' || field === 'icloud_code_url') {
+      } else if (field === 'access_token' || field === 'session' || field === 'totp_code' || field === 'icloud_code_url') {
         copySecretBtn.classList.add('is-copied');
         copySecretBtn.innerHTML = accountV2Icons().check;
         window.setTimeout(() => {
@@ -4201,7 +4216,7 @@ async function onAccountsBodyClick(e) {
           copySecretBtn.innerHTML = originalHtml;
         }, 1200);
       }
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'totp_code' ? '2FA 动态码已复制（30 秒内有效）' : field === 'password' ? '密码已复制' : field === 'icloud_code_url' ? 'iCloud 接码 URL 已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'AT 已复制' : field === 'session' ? 'Session 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'totp_code' ? '2FA 动态码已复制（30 秒内有效）' : field === 'password' ? '密码已复制' : field === 'icloud_code_url' ? 'iCloud 接码 URL 已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {

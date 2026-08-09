@@ -125,11 +125,16 @@
     .col-error { width: 320px; }
     .col-actions { width: 220px; }
     .jobs-table .col-actions { width: 330px; }
-    .accounts-table .col-token { width: 92px; }
+    .accounts-table .col-token { width: 150px; }
     .accounts-table .col-plan { width: 340px; }
     .accounts-table .col-note { width: 180px; }
     .accounts-table .col-agent { width: 220px; }
     .accounts-table .col-actions { width: 360px; }
+    .account-token-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .account-token-copy { min-height: 26px; padding: 2px 9px; border: 1px solid #9ee0d6; border-radius: 4px; color: #2bb8a6; background: #E7FCF8; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .account-token-copy.session { border-color: #9BBEFF; color: #377DFF; background: #EBF2FF; }
+    .account-token-copy:hover { color: #fff; background: #2bb8a6; border-color: #2bb8a6; }
+    .account-token-copy.session:hover { background: #377DFF; border-color: #377DFF; }
     .accounts-table td:nth-child(6), .accounts-table th:nth-child(6) { overflow: visible; text-overflow: clip; }
     .accounts-table td:nth-child(10), .accounts-table th:nth-child(10) { overflow: visible; text-overflow: clip; }
 
@@ -1650,7 +1655,7 @@ function renderAccounts() {
       <td class="muted">#${esc(r.id)}</td>
       <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div>${_accountPasswordCell(r)}</td>
       <td>${esc(r.email_source || '-')}</td>
-      <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span>${_liveStatusSub(r)}</td>
+      <td><div class="account-token-actions">${r.has_access_token || r.has_session ? `${r.has_access_token ? `<button type="button" class="account-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 access token">AT</button>` : ''}${r.has_session ? `<button type="button" class="account-token-copy session" data-account-copy-secret="session" data-account-id="${esc(r.id)}" title="复制已保存的完整 Session">Session</button>` : ''}` : '<span class="muted">无AT</span>'}</div>${_liveStatusSub(r)}</td>
       <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
       <td>${_accountTotpCell(r)}</td>
@@ -1659,7 +1664,7 @@ function renderAccounts() {
       <td class="muted">${esc(r.created_at || '-')}</td>
       <td class="actions actions-cell">
         <div class="account-row-actions">
-          <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制Token</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
+          <div class="account-action-group"><button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
           <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-live-check="${esc(r.id)}" title="依次校验现有 AT、保存 Session、协议账号密码与 2FA；旧账号才使用邮箱验证码">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
@@ -1816,7 +1821,7 @@ $('#accountsBody').addEventListener('click', async (e) => {
           copySecretBtn.textContent = original;
         }, 1600);
       }
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'password' ? '密码已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'AT 已复制' : field === 'session' ? 'Session 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'password' ? '密码已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {

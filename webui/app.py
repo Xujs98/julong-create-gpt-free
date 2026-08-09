@@ -11,6 +11,7 @@ Flask 本地控制台。
 默认绑定 127.0.0.1，仅本地访问。
 """
 import logging
+import json
 import threading
 import time
 import uuid
@@ -57,6 +58,16 @@ def _account_registration_password(row: dict) -> str:
     return str((extra or {}).get("registration_password") or "").strip()
 
 
+def _account_saved_session(row: dict) -> dict:
+    """读取注册/查活保存的完整 ChatGPT Session。"""
+    try:
+        extra = json.loads(str(row.get("extra_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    session = extra.get("session") if isinstance(extra, dict) else None
+    return session if isinstance(session, dict) else {}
+
+
 
 
 def _matches_query(row: dict, q: str | None) -> bool:
@@ -97,6 +108,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "id": row.get("id"),
         "email": row.get("email"),
         "has_access_token": bool(str(row.get("access_token") or "").strip()),
+        "has_session": bool(_account_saved_session(row)),
         "totp_enabled": bool(row.get("totp_secret")),
         "twofa_status": row.get("twofa_status"),
         "twofa_requested": bool(row.get("twofa_requested")),
@@ -158,6 +170,9 @@ def _account_secret_value(row: dict, field: str) -> str:
     field = (field or "").strip()
     if field == "access_token":
         return str(row.get("access_token") or "")
+    if field == "session":
+        session = _account_saved_session(row)
+        return json.dumps(session, ensure_ascii=False, separators=(",", ":")) if session else ""
     if field == "copy_line":
         return str(row.get("copy_line") or "")
     if field == "email":
@@ -196,7 +211,7 @@ def _account_secret_value(row: dict, field: str) -> str:
             return ""
         import pyotp
         return pyotp.TOTP(secret).now()
-    raise ValueError("field 仅支持 email/password/totp/url/access_token/copy_line/codex_agent_token/totp_code/icloud_code_url")
+    raise ValueError("field 仅支持 email/password/totp/url/access_token/session/copy_line/codex_agent_token/totp_code/icloud_code_url")
 
 
 def _compact_job_for_list(row: dict) -> dict:
