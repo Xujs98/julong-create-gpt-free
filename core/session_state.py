@@ -58,9 +58,12 @@ def capture_browser_cookies(driver_or_page: Any) -> list[dict[str, Any]]:
 
 def capture_http_cookies(browser_session: Any) -> list[dict[str, Any]]:
     """从 curl_cffi BrowserSession 的 CookieJar 读取 ChatGPT cookies。"""
-    jar = getattr(getattr(browser_session, "session", None), "cookies", None)
-    if jar is None:
+    cookies = getattr(getattr(browser_session, "session", None), "cookies", None)
+    if cookies is None:
         return []
+    # curl_cffi.requests.Cookies.__iter__ 返回 cookie 名称字符串；真实 Cookie
+    # 对象位于 .jar。旧逻辑直接迭代 Cookies，导致协议注册保存出 cookies=[]。
+    jar = getattr(cookies, "jar", cookies)
     out = []
     try:
         for cookie in jar:

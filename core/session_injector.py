@@ -98,7 +98,9 @@ def _inject_one(
     saved = extract_saved_session(account)
     cookies = list((saved or {}).get("cookies") or []) if saved else []
     if not cookies:
-        return {"ok": False, "id": account_id, "email": email, "reason": "该账号没有保存浏览器 cookies，请重新注册后再植入"}
+        reason = "该账号没有保存浏览器 cookies，请先执行查活补全登录态后再植入"
+        logger.warning("[登录态植入] 跳过：id=%s email=%s reason=%s", account_id, email, reason)
+        return {"ok": False, "id": account_id, "email": email, "reason": reason}
 
     driver = None
     opened = None

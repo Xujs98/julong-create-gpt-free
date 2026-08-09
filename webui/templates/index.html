@@ -5562,7 +5562,9 @@ async function injectSelectedSessions() {
     const success = result.success || [];
     const failed = result.failed || [];
     const skipped = result.skipped || [];
-    showToast(`登录态植入完成：成功 ${success.length}，失败 ${failed.length + skipped.length}`);
+    const problems = [...failed, ...skipped];
+    const reason = problems[0]?.reason ? `；${problems[0].reason}` : '';
+    showToast(`登录态植入完成：成功 ${success.length}，失败 ${problems.length}${reason}`);
   } catch (err) {
     showToast('植入登录状态失败: ' + err.message);
   } finally {

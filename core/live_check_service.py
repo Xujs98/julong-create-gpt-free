@@ -11,6 +11,7 @@ from pathlib import Path
 from core import db
 from core.account_liveness import check_account_liveness, log_path
 from core.chatgpt_plan import check_account_plan, resolve_plan_check_route
+from core.session_state import extract_saved_session
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ def _check_existing_access_token(account: dict, *, proxy: str | None, email: str
     _append_log(email, "[查活] 先校验现有 AT；有效时直接完成，不触发邮箱 OTP")
     checked = check_account_plan(access_token, proxy=proxy)
     if checked.get("ok"):
+        saved = extract_saved_session(account) or {}
+        if not list(saved.get("cookies") or []):
+            _append_log(email, "[查活] 现有 AT 在线有效，但缺少可植入 Session Cookie，继续重新登录补全")
+            return None
         plan_type = checked.get("current_plan_type") or account.get("plan_type")
         return {
             "ok": True,

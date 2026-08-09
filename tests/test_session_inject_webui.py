@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 from webui.app import create_app
@@ -29,3 +30,11 @@ def test_inject_session_bulk_dispatches_selected_ids_and_workers():
 def test_inject_session_bulk_rejects_empty_selection():
     response = _client().post("/api/accounts/inject-session-bulk", json={"account_ids": []})
     assert response.status_code == 400
+
+
+def test_inject_session_ui_shows_first_failure_reason():
+    root = Path(__file__).resolve().parents[1]
+    for template in ("index.html", "index_legacy.html"):
+        source = (root / "webui" / "templates" / template).read_text(encoding="utf-8")
+        assert "problems[0]?.reason" in source
+        assert "失败 ${problems.length}${reason}" in source

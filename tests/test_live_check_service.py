@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -6,7 +7,13 @@ from core.live_check_service import _check_existing_access_token
 
 
 def test_valid_access_token_completes_live_check_without_email_otp():
-    account = {"access_token": "TOKEN", "user_id": "user-1", "user_name": "User", "plan_type": "free"}
+    account = {
+        "access_token": "TOKEN",
+        "user_id": "user-1",
+        "user_name": "User",
+        "plan_type": "free",
+        "extra_json": json.dumps({"session": {"cookies": [{"name": "sid", "value": "COOKIE"}]}}),
+    }
     checked = {"ok": True, "checked_at": "2026-08-08T10:00:00", "current_plan_type": "free"}
     with patch("core.live_check_service.check_account_plan", return_value=checked), patch(
         "core.live_check_service._append_log"
@@ -17,6 +24,22 @@ def test_valid_access_token_completes_live_check_without_email_otp():
     assert result["status"] == "live"
     assert result["check_method"] == "access_token"
     assert result["access_token"] == "TOKEN"
+
+
+def test_valid_access_token_without_session_cookies_requests_login_refresh():
+    """AT 可用但登录态不可植入时，查活应继续登录并补齐 Cookie。"""
+    account = {
+        "access_token": "TOKEN",
+        "extra_json": json.dumps({"session": {"accessToken": "TOKEN", "cookies": []}}),
+    }
+    checked = {"ok": True, "checked_at": "2026-08-08T10:00:00", "current_plan_type": "free"}
+    with patch("core.live_check_service.check_account_plan", return_value=checked), patch(
+        "core.live_check_service._append_log"
+    ) as append_log:
+        result = _check_existing_access_token(account, proxy="PROXY", email="user@example.com")
+
+    assert result is None
+    assert any("缺少可植入 Session Cookie" in call.args[1] for call in append_log.call_args_list)
 
 
 def test_expired_access_token_requests_login_refresh():
