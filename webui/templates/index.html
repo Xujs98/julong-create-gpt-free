@@ -783,7 +783,7 @@
     .accounts-table-v2 .col-small { width: 64px; }
     .accounts-table-v2 .col-status { width: 90px; }
     .accounts-table-v2 .col-agent { width: 120px; }
-    .accounts-table-v2 .col-time { width: 150px; }
+    .accounts-table-v2 .col-time { width: 160px; min-width: 160px; }
     .accounts-table-v2 .col-actions { width: 145px; }
     .accounts-table-v2 input[type="checkbox"] {
       width: 16px !important; height: 16px !important;
@@ -810,6 +810,18 @@
       background: #fff; border-color: #dcdfe6; cursor: not-allowed; opacity: 1;
     }
     .accounts-table-v2 tbody td { height: 56px; }
+    .acc-v2-created-at {
+      display: flex; flex-direction: column; justify-content: center; gap: 4px;
+      min-width: 0; line-height: 1.2; font-variant-numeric: tabular-nums;
+    }
+    .acc-v2-created-date { color: #606266; font-size: 14px; }
+    .acc-v2-created-meta { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+    .acc-v2-created-day {
+      display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
+      border-radius: 9px; background: #ecf5ff; color: #409eff;
+      font-size: 11px; line-height: 18px; white-space: nowrap;
+    }
+    .acc-v2-created-time { color: #909399; font-size: 12px; white-space: nowrap; }
     .table-selection-bar-v2 {
       display: flex; align-items: center; gap: 10px; min-height: 42px;
       padding: 7px 16px; border-top: 1px solid #ebeef5;
@@ -4467,6 +4479,23 @@ function _accountTotpCell(r, accountIcons) {
   if (status === 'skipped') return '<span class="acc-v2-totp-state is-skipped" title="当前注册路径跳过自动 2FA 设置">已跳过</span>';
   return '<span class="acc-v2-muted" title="该账号没有保存 TOTP；可能是注册时未开启 2FA，或设置阶段失败，请查看注册日志">未启用</span>';
 }
+function _accountCreatedAtCell(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '<span class="acc-v2-muted">-</span>';
+  const normalized = /^\d{4}-\d{2}-\d{2} /.test(raw) ? raw.replace(' ', 'T') : raw;
+  const createdAt = new Date(normalized);
+  if (Number.isNaN(createdAt.getTime())) return `<span title="${esc(raw)}">${esc(raw)}</span>`;
+  const pad = number => String(number).padStart(2, '0');
+  const dateText = `${createdAt.getFullYear()}-${pad(createdAt.getMonth() + 1)}-${pad(createdAt.getDate())}`;
+  const timeText = `${pad(createdAt.getHours())}:${pad(createdAt.getMinutes())}:${pad(createdAt.getSeconds())}`;
+  const now = new Date();
+  const createdDay = Date.UTC(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate());
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayDiff = Math.round((today - createdDay) / 86400000);
+  const dayLabel = dayDiff === 0 ? '今天' : (dayDiff >= 1 && dayDiff <= 7 ? `${dayDiff}天前` : '');
+  const labelHtml = dayLabel ? `<span class="acc-v2-created-day">${esc(dayLabel)}</span>` : '';
+  return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span></div></div>`;
+}
 function renderAccounts() {
   const total = ACCOUNTS_TOTAL;
   const rows = ACCOUNTS;
@@ -4488,7 +4517,7 @@ function renderAccounts() {
       <td class="col-small acc-v2-totp-cell">${_accountTotpCell(r, accountIcons)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-agent">${_codexAgentCell(r)}</td>
-      <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
+      <td class="col-time">${_accountCreatedAtCell(r.created_at)}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
           <button type="button" class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button>
