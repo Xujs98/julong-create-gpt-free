@@ -4992,7 +4992,7 @@ async function copySelectedAccountLines() {
   try {
     const lines = await fetchAccountSecrets(ids, 'copy_line');
     if (!lines.length) { showToast('选中账号没有可复制整行'); return; }
-    copyText(lines.join('\n'));
+    await copyText(lines.join('\n'), false);
     showToast(`已复制 ${lines.length} 行`);
   } catch(err) { showToast('复制失败: ' + err.message); }
 }
@@ -5633,7 +5633,7 @@ async function copySelectedAccountTokens() {
   try {
     const lines = await fetchAccountSecrets(ids, 'access_token');
     if (!lines.length) { showToast('选中账号没有可复制 Token'); return; }
-    copyText(lines.join('\n'));
+    await copyText(lines.join('\n'), false);
     showToast(`已复制 ${lines.length} 个 Token`);
   } catch(e) { showToast('复制失败: ' + e.message); }
 }
