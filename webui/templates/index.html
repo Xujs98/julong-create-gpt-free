@@ -1071,11 +1071,22 @@
       font: inherit; font-size: 13px; font-weight: 500; line-height: 1;
       color: #2bb8a6; background: #E7FCF8; cursor: pointer; white-space: nowrap;
     }
+    .accounts-table-v2 .acc-v2-token-copy svg {
+      width: 14px; height: 14px; flex: 0 0 14px;
+      fill: none; stroke: currentColor; stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+    .accounts-table-v2 .acc-v2-token-copy.is-copied {
+      color: #fff; background: #2bb8a6; border-color: #2bb8a6;
+    }
     .accounts-table-v2 .acc-v2-token-actions {
       display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
     }
     .accounts-table-v2 .acc-v2-token-session {
       color: #377DFF; background: #EBF2FF; border-color: #9BBEFF;
+    }
+    .accounts-table-v2 .acc-v2-token-session.is-copied {
+      color: #fff; background: #377DFF; border-color: #377DFF;
     }
     .accounts-table-v2 .acc-v2-token-session:hover:not(:disabled) {
       background: #377DFF; border-color: #377DFF; color: #fff;
