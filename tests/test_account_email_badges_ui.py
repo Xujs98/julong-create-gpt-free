@@ -17,7 +17,7 @@ def test_account_email_row_has_proxy_badge_and_icloud_url_action():
     assert "acc-v2-proxy-badge" in source
     assert ".acc-v2-email:hover .acc-v2-proxy-badge" in source
     assert "table-layout: fixed" in source
-    assert ".accounts-table-v2 .col-email { width: 340px; min-width: 340px; }" in source
+    assert ".accounts-table-v2 .col-email { width: 280px; min-width: 280px; }" in source
     assert "overflow: visible; text-overflow: clip; white-space: normal" in source
     assert "data-account-copy-secret=\"icloud_code_url\"" in source
     assert "acc-v2-icloud-url-copy" in source

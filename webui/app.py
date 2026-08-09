@@ -363,6 +363,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         status_filter = str(request.args.get("status", default="") or "").lower()
+        created_from = str(request.args.get("created_from", default="") or "").strip()[:10]
+        created_to = str(request.args.get("created_to", default="") or "").strip()[:10]
         if status_filter not in {"", "all", "link", "sms"}:
             return jsonify({"ok": False, "error": "status 仅支持 all / link / sms"}), 400
         q = str(request.args.get("q", default="") or "").strip()
@@ -381,6 +383,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 status_filter=status_filter,
+                created_from=created_from,
+                created_to=created_to,
             )
             result["items"] = [_compact_account_for_list(r) for r in (result.get("items") or [])]
             result.update({"ok": True, "page": page, "page_size": page_size, "compact": True})
@@ -400,6 +404,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         status_filter = str(request.args.get("status", default="") or "").lower()
+        created_from = str(request.args.get("created_from", default="") or "").strip()[:10]
+        created_to = str(request.args.get("created_to", default="") or "").strip()[:10]
         if status_filter not in {"", "all", "link", "sms"}:
             return jsonify({"ok": False, "error": "status 仅支持 all / link / sms"}), 400
         q = str(request.args.get("q", default="") or "").strip()
@@ -416,6 +422,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 status_filter=status_filter,
+                created_from=created_from,
+                created_to=created_to,
             )
             snapshot.update({"page": page, "page_size": page_size})
         else:

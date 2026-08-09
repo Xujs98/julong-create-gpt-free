@@ -1448,6 +1448,8 @@ def _filtered_decorated_accounts(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
 ) -> list[dict]:
     rows = _load_accounts()
     if archived in (True, "1", "true", "yes", "only"):
@@ -1457,6 +1459,14 @@ def _filtered_decorated_accounts(
     else:
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
+    date_from = str(created_from or '').strip()[:10]
+    date_to = str(created_to or '').strip()[:10]
+    if date_from or date_to:
+        decorated = [
+            r for r in decorated
+            if (not date_from or str(r.get("created_at") or "")[:10] >= date_from)
+            and (not date_to or str(r.get("created_at") or "")[:10] <= date_to)
+        ]
     decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
     decorated = [r for r in decorated if _account_matches_status_filter(r, status_filter)]
     decorated = [r for r in decorated if _account_matches_query(r, q)]
@@ -1470,6 +1480,8 @@ def list_account_plan_check_statuses(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
@@ -1503,6 +1515,8 @@ def list_account_plan_check_statuses(
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            created_from=created_from,
+            created_to=created_to,
         )
         total = len(all_rows)
         limit = max(1, int(limit))
@@ -1591,6 +1605,8 @@ def list_accounts(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
 ) -> list[dict]:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -1598,6 +1614,8 @@ def list_accounts(
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            created_from=created_from,
+            created_to=created_to,
         )
         return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
 
@@ -1609,6 +1627,8 @@ def list_accounts_page(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
 ) -> dict:
     with _LOCK:
         rows = _filtered_decorated_accounts(
@@ -1616,6 +1636,8 @@ def list_accounts_page(
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            created_from=created_from,
+            created_to=created_to,
         )
         total = len(rows)
         limit = max(1, int(limit))
