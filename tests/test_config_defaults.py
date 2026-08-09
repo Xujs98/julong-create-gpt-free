@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from config import env_loader
+from config import browser
 from webui import config_editor
 
 
@@ -68,6 +69,18 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
             "wss://connect.browser-use.com",
         )
         self.assertTrue(config_editor._coerce_raw_value("", True, "bool"))
+
+    def test_region_profile_switch_has_follow_proxy_semantics(self):
+        fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
+        self.assertEqual(fields["AUTO_BROWSER_LOCALE_FROM_IP"]["label"], "跟随代理池 IP")
+        self.assertIn("关闭", fields["AUTO_BROWSER_LOCALE_FROM_IP"]["help"])
+        self.assertIn("自定义", fields["BROWSER_LOCALE_PROFILE"]["label"])
+
+    def test_custom_region_profile_ignores_proxy_geo_when_switch_is_off(self):
+        with patch.object(browser, "AUTO_BROWSER_LOCALE_FROM_IP", False):
+            profile = browser.build_browser_environment({"country": "US", "timezone": "America/Los_Angeles"})
+        self.assertEqual(profile["locale_profile"], browser.BROWSER_LOCALE_PROFILE)
+        self.assertEqual(profile["timezone_iana"], browser.BROWSER_LOCALE_PROFILES[browser.BROWSER_LOCALE_PROFILE]["timezone_iana"])
 
 
 if __name__ == "__main__":

@@ -100,6 +100,22 @@ class CloakLaunchOptionsTests(unittest.TestCase):
         )
         driver.quit()
 
+    def test_region_switch_off_uses_custom_profile_without_cloak_geoip(self):
+        from core import cloakbrowser_driver as module
+
+        with patch.object(module._cfg, "CLOAK_GEOIP", True), patch.object(
+            module._cfg, "CLOAK_LOCALE", ""
+        ), patch.object(module._cfg, "CLOAK_TIMEZONE", ""), patch(
+            "config.browser.AUTO_BROWSER_LOCALE_FROM_IP", False
+        ), patch.object(module, "_detect_cloak_exit_geo") as detect_geo:
+            options = module._build_cloak_locale_options("http://proxy.example.test:8080")
+
+        detect_geo.assert_not_called()
+        from config import browser
+        custom = browser.BROWSER_LOCALE_PROFILES[browser.BROWSER_LOCALE_PROFILE]
+        self.assertEqual(options["locale"], custom["navigator_language"])
+        self.assertEqual(options["timezone"], custom["timezone_iana"])
+
 
 class CloakPageRecoveryTests(unittest.TestCase):
     def test_switches_to_live_page_after_challenge_navigation(self):

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import main
-from config import roxybrowser
+from config import browser, roxybrowser
 
 
 class RegistrationDriverDispatchTests(unittest.TestCase):
@@ -46,7 +46,11 @@ class RegistrationDriverDispatchTests(unittest.TestCase):
 
     @patch("main.BrowserSession", side_effect=RuntimeError("protocol-selected"))
     def test_dispatches_protocol(self, browser_session):
-        with patch.object(roxybrowser, "REGISTRATION_DRIVER", "protocol"):
+        # 测试只验证协议分发，显式隔离本地 .env 中的高拟真画像开关，
+        # 避免 BrowserSession 额外携带 fingerprint_key 造成调用签名漂移。
+        with patch.object(roxybrowser, "REGISTRATION_DRIVER", "protocol"), patch.object(
+            browser, "ENABLE_HIGH_FIDELITY_FINGERPRINT", False
+        ):
             with self.assertRaisesRegex(RuntimeError, "protocol-selected"):
                 self._run()
         browser_session.assert_called_once_with(proxy="")

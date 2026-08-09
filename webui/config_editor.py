@@ -486,12 +486,12 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "BROWSER_LOCALE_PROFILE", "file": "browser.py", "type": "str", "group": "浏览器画像",
-        "label": "地区画像", "help": "应与代理出口地区一致；可选 jp/cn/us/sg。当前本地代理实测为日本东京，推荐 jp",
+        "label": "地区画像（自定义）", "help": "关闭“跟随代理池 IP”后使用；可选 jp/cn/us/sg，当前值作为语言、时区与 Accept-Language 画像",
     },
 
     {
         "key": "AUTO_BROWSER_LOCALE_FROM_IP", "file": "browser.py", "type": "bool", "group": "浏览器画像",
-        "label": "按出口IP自动画像", "help": "开启后每个 BrowserSession 会用当前代理出口 IP 自动选择语言/时区；失败时回退到地区画像",
+        "label": "跟随代理池 IP", "help": "开启：按当前代理池出口 IP 自动选择地区；关闭：使用下方“地区画像（自定义）”",
     },
     {
         "key": "IP_GEO_TIMEOUT", "file": "browser.py", "type": "float", "group": "浏览器画像",

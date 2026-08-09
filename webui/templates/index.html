@@ -6734,15 +6734,39 @@ function renderConfigPlainFieldV2(f) {
     const shown = isPlaceholderEmpty(fv) ? '' : fv;
     const inputType = f.secret ? 'password' : 'text';
     const ph = f.secret ? '保存在 .env，可留空' : '可留空';
-    control = `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
+    const isRegionProfile = f.key === 'BROWSER_LOCALE_PROFILE';
+    const autoRegion = isRegionProfile && regionProfileAutoEnabledV2();
+    const regionAttrs = isRegionProfile
+      ? ` data-region-profile-input${autoRegion ? ' disabled aria-disabled="true"' : ''}`
+      : '';
+    control = `<input type="${inputType}" data-key="${attrEsc(f.key)}"${regionAttrs} value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
   return `
     <label class="fld">
       ${esc(f.label)}
-      <span class="hint">${esc(f.help || '')}</span>
+      <span class="hint"${f.key === 'BROWSER_LOCALE_PROFILE' ? ' data-region-profile-hint' : ''}>${esc(f.help || '')}</span>
       ${control}
     </label>
   `;
+}
+function regionProfileAutoEnabledV2() {
+  if (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'AUTO_BROWSER_LOCALE_FROM_IP')) {
+    return !!CONFIG_PENDING_UPDATES.AUTO_BROWSER_LOCALE_FROM_IP;
+  }
+  const field = CONFIG.find(f => f.key === 'AUTO_BROWSER_LOCALE_FROM_IP');
+  return !!(field && field.value);
+}
+function syncRegionProfileControlV2() {
+  const auto = regionProfileAutoEnabledV2();
+  document.querySelectorAll('#configSectionsV2 [data-region-profile-input]').forEach(input => {
+    input.disabled = auto;
+    input.setAttribute('aria-disabled', String(auto));
+  });
+  document.querySelectorAll('#configSectionsV2 [data-region-profile-hint]').forEach(hint => {
+    hint.textContent = auto
+      ? '当前由代理池出口 IP 自动选择地区；关闭“跟随代理池 IP”后可编辑自定义值'
+      : '当前使用自定义地区画像，可选 jp/cn/us/sg';
+  });
 }
 function renderMixedConfigSectionV2(name, fields, intro) {
   const slug = configGroupSlug(name);
@@ -7142,6 +7166,7 @@ function renderConfigLayoutV2() {
   bindRoxyWorkspaceToolsV2();
   bindCloudMailToolsV2();
   bindProxyTestToolsV2();
+  syncRegionProfileControlV2();
 }
 function scrollToConfigSection(slug) {
   const el = document.getElementById(slug);
@@ -7319,6 +7344,7 @@ function trackConfigFieldChange(e) {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
+  if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);

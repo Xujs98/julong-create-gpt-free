@@ -3246,9 +3246,34 @@ function renderConfigField(f) {
     const shown = isPlaceholderEmpty(fv) ? '' : fv;
     const inputType = f.secret ? 'password' : 'text';
     const ph = f.secret ? '保存在 .env，可留空' : '可留空';
-    html += `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
+    const isRegionProfile = f.key === 'BROWSER_LOCALE_PROFILE';
+    const autoRegion = isRegionProfile && regionProfileAutoEnabled();
+    const regionAttrs = isRegionProfile
+      ? ` data-region-profile-input${autoRegion ? ' disabled aria-disabled="true"' : ''}`
+      : '';
+    html += `<input type="${inputType}" data-key="${attrEsc(f.key)}"${regionAttrs} value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
   return html + `</label>`;
+}
+function regionProfileAutoEnabled() {
+  if (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'AUTO_BROWSER_LOCALE_FROM_IP')) {
+    return !!CONFIG_PENDING_UPDATES.AUTO_BROWSER_LOCALE_FROM_IP;
+  }
+  const field = CONFIG.find(f => f.key === 'AUTO_BROWSER_LOCALE_FROM_IP');
+  return !!(field && field.value);
+}
+function syncRegionProfileControl() {
+  const auto = regionProfileAutoEnabled();
+  document.querySelectorAll('#configForm [data-region-profile-input]').forEach(input => {
+    input.disabled = auto;
+    input.setAttribute('aria-disabled', String(auto));
+  });
+  document.querySelectorAll('#configForm [data-key="BROWSER_LOCALE_PROFILE"]').forEach(input => {
+    const hint = input.closest('.fld')?.querySelector('.hint');
+    if (hint) hint.firstChild.textContent = auto
+      ? '当前由代理池出口 IP 自动选择地区；关闭“跟随代理池 IP”后可编辑自定义值 · '
+      : '当前使用自定义地区画像，可选 jp/cn/us/sg · ';
+  });
 }
 
 function configSubhead(title, help = '') {
@@ -3507,6 +3532,7 @@ function renderConfigPanel() {
     </div>
   `;
   bindRoxyWorkspaceTools();
+  syncRegionProfileControl();
 }
 
 async function loadConfig() {
@@ -3621,6 +3647,7 @@ $('#configForm').addEventListener('input', (e) => {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
+  if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControl();
 });
 $('#configForm').addEventListener('change', (e) => {
   const el = e.target.closest('[data-key]');

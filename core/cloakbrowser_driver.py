@@ -491,6 +491,22 @@ def _build_cloak_locale_options(proxy_url: str | None = None) -> dict:
         out["timezone"] = explicit_timezone
     if explicit_locale and explicit_timezone:
         return out
+    try:
+        from config import browser as _browser_cfg
+        follow_proxy_geo = bool(getattr(_browser_cfg, "AUTO_BROWSER_LOCALE_FROM_IP", True))
+    except Exception:
+        follow_proxy_geo = True
+    if not follow_proxy_geo:
+        # 关闭跟随代理时，显式构造自定义地区画像，不能让 Cloak 回退到宿主机语言/时区。
+        try:
+            from config.browser import build_browser_environment
+            profile = build_browser_environment({})
+            out.setdefault("locale", str(profile.get("navigator_language") or ""))
+            out.setdefault("timezone", str(profile.get("timezone_iana") or ""))
+            out.setdefault("accept_language", str(profile.get("accept_language") or ""))
+        except Exception as exc:
+            logger.debug("[Cloak] 构建自定义地区画像失败：%s: %s", type(exc).__name__, exc)
+        return {k: v for k, v in out.items() if v}
     if not bool(getattr(_cfg, "CLOAK_GEOIP", True)):
         return out
     try:
@@ -549,10 +565,15 @@ def build_cloak_driver(
     # geoip=True 交给 CloakBrowser 根据当前出口 IP 自动匹配 timezone/locale/WebRTC。
     # 之前只有显式 proxy_url 时才开启；如果用户走系统代理/VPN/透明代理，代码层面
     # 看不到 proxy_url，会误关 geoip，导致语言/时区不跟随出口。这里改为完全尊重配置。
+    try:
+        from config import browser as _browser_cfg
+        follow_proxy_geo = bool(getattr(_browser_cfg, "AUTO_BROWSER_LOCALE_FROM_IP", True))
+    except Exception:
+        follow_proxy_geo = True
     opts = {
         "headless": bool(getattr(_cfg, "CLOAK_HEADLESS", False)) if headless is None else bool(headless),
         "humanize": bool(getattr(_cfg, "CLOAK_HUMANIZE", True)),
-        "geoip": bool(getattr(_cfg, "CLOAK_GEOIP", True)),
+        "geoip": bool(getattr(_cfg, "CLOAK_GEOIP", True)) and follow_proxy_geo,
     }
     if locale_opts.get("locale"):
         opts["locale"] = locale_opts["locale"]
