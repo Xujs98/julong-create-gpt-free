@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-本地文件持久化层。
+SQLite 主持久化层。
 
-根目录文件分工：
+SQLite 保存账号、邮箱池和任务的权威状态；根目录 JSON/TXT 继续作为兼容镜像：
     - 用于注册的邮箱.txt      仅保留可继续注册的邮箱素材
     - 注册成功的邮箱.txt      仅保存注册成功的邮箱素材，不追加 token
     - 注册成功的token.txt     每行只保存一个 access token
@@ -11,6 +11,7 @@
 """
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -20,6 +21,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
+
+from core.sqlite_store import SQLiteStore
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -43,6 +46,20 @@ _CODEX_DIR = _PROJECT_ROOT / "codex_accounts"
 # 导出状态单独存：{ "codex-邮箱-plan.json": {"exported_at": "...", "exported_count": N} }
 # 不污染 CPA 兼容的原文件
 _CODEX_EXPORT_STATE = _PROJECT_ROOT / "codex_导出状态.json"
+_DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
+
+_SQLITE_PATH = _LEGACY_DATA_DIR / "registration.sqlite3"
+_DEFAULT_SQLITE_PATH = _SQLITE_PATH
+_DEFAULT_OUTLOOK_JSON = _OUTLOOK_JSON
+_DEFAULT_GENERIC_API_EMAIL_JSON = _GENERIC_API_EMAIL_JSON
+_DEFAULT_ICLOUD_EMAIL_JSON = _ICLOUD_EMAIL_JSON
+_DEFAULT_ACCOUNTS_JSON = _ACCOUNTS_JSON
+_DEFAULT_JOBS_JSON = _JOBS_JSON
+_DEFAULT_CODEX_EXPORT_STATE = _CODEX_EXPORT_STATE
+_DEFAULT_DOMAIN_EMAIL_JSON = _DOMAIN_EMAIL_JSON
+_SQLITE_MIGRATION_MARKER = "json_to_sqlite_migration_completed_at"
+_SQLITE_READY_PATH: Path | None = None
+_SQLITE_STORE_INSTANCE: SQLiteStore | None = None
 
 _LEGACY_SQLITE = _LEGACY_DATA_DIR / "registrations.db"
 _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
@@ -78,6 +95,89 @@ def _write_json(path: Path, data: Any) -> None:
         encoding="utf-8",
     )
     tmp.replace(path)
+
+
+def _storage_backend() -> str:
+    """Return the configured backend; JSON remains an emergency rollback mode."""
+    value = os.getenv("TURB_STORAGE_BACKEND")
+    if value is None:
+        env_path = _PROJECT_ROOT / ".env"
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                key, separator, raw = line.partition("=")
+                if separator and key.strip() == "TURB_STORAGE_BACKEND":
+                    value = raw.strip().strip('"\'')
+                    break
+    return str(value or "sqlite").strip().lower()
+
+
+def _uses_sqlite(current_path: Path, default_path: Path) -> bool:
+    """Tests that redirect a JSON path keep their isolated file backend."""
+    return (
+        _storage_backend() != "json"
+        and Path(_SQLITE_PATH) == Path(_DEFAULT_SQLITE_PATH)
+        and Path(current_path) == Path(default_path)
+    )
+
+
+def _read_migration_value(path: Path, expected_type: type, default: Any) -> Any:
+    """Strictly read a migration source so malformed files never become empty data."""
+    if not path.exists():
+        return default
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, expected_type):
+        raise ValueError(f"迁移源格式错误: {path.name} 应为 {expected_type.__name__}")
+    return data
+
+
+def _read_migration_list(path: Path, legacy_path: Path | None = None) -> list[dict]:
+    if path.exists():
+        return _read_migration_value(path, list, [])
+    if legacy_path is not None and legacy_path.exists():
+        return _read_migration_value(legacy_path, list, [])
+    return []
+
+
+def _sqlite_source_snapshot() -> tuple[dict[str, list[dict]], dict[str, Any]]:
+    collections = {
+        "outlook_pool": _read_migration_list(_OUTLOOK_JSON, _LEGACY_OUTLOOK_JSON),
+        "generic_api_email_pool": _read_migration_list(_GENERIC_API_EMAIL_JSON),
+        "icloud_email_pool": _read_migration_list(_ICLOUD_EMAIL_JSON),
+        "registered_accounts": _read_migration_list(_ACCOUNTS_JSON, _LEGACY_ACCOUNTS_JSON),
+        "registration_jobs": _read_migration_list(_JOBS_JSON, _LEGACY_JOBS_JSON),
+        "domain_email_pool": _read_migration_list(_DOMAIN_EMAIL_JSON),
+    }
+    documents = {
+        "codex_export_state": _read_migration_value(_CODEX_EXPORT_STATE, dict, {}),
+    }
+    return collections, documents
+
+
+def initialize_sqlite_storage(*, force: bool = False) -> dict[str, int]:
+    """Create SQLite and atomically import the current JSON state once."""
+    global _SQLITE_READY_PATH, _SQLITE_STORE_INSTANCE
+    store = SQLiteStore(_SQLITE_PATH)
+    with _LOCK:
+        marker = store.get_metadata(_SQLITE_MIGRATION_MARKER)
+        if force or marker is None:
+            collections, documents = _sqlite_source_snapshot()
+            store.replace_all(
+                collections,
+                documents=documents,
+                metadata={_SQLITE_MIGRATION_MARKER: _now()},
+            )
+        _SQLITE_READY_PATH = Path(_SQLITE_PATH)
+        _SQLITE_STORE_INSTANCE = store
+        return store.counts()
+
+
+def _sqlite_store() -> SQLiteStore:
+    global _SQLITE_READY_PATH, _SQLITE_STORE_INSTANCE
+    path = Path(_SQLITE_PATH)
+    if _SQLITE_READY_PATH != path or _SQLITE_STORE_INSTANCE is None:
+        initialize_sqlite_storage()
+    assert _SQLITE_STORE_INSTANCE is not None
+    return _SQLITE_STORE_INSTANCE
 
 
 def _next_id(items: list[dict]) -> int:
@@ -495,6 +595,8 @@ render();
 
 
 def _load_outlook() -> list[dict]:
+    if _uses_sqlite(_OUTLOOK_JSON, _DEFAULT_OUTLOOK_JSON):
+        return _sqlite_store().load_records("outlook_pool")
     rows = _read_json(_OUTLOOK_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_OUTLOOK_JSON, [])
@@ -502,12 +604,16 @@ def _load_outlook() -> list[dict]:
 
 
 def _save_outlook(rows: list[dict]) -> None:
+    if _uses_sqlite(_OUTLOOK_JSON, _DEFAULT_OUTLOOK_JSON):
+        _sqlite_store().replace_records("outlook_pool", rows)
     _write_json(_OUTLOOK_JSON, rows)
     _sync_outlook_txt(rows)
     _render_static_viewer(outlook_rows=rows)
 
 
 def _load_generic_api_emails() -> list[dict]:
+    if _uses_sqlite(_GENERIC_API_EMAIL_JSON, _DEFAULT_GENERIC_API_EMAIL_JSON):
+        return _sqlite_store().load_records("generic_api_email_pool")
     rows = _read_json(_GENERIC_API_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
 
@@ -515,12 +621,16 @@ def _load_generic_api_emails() -> list[dict]:
 def _save_generic_api_emails(rows: list[dict]) -> None:
     for row in rows:
         row["copy_line"] = _generic_api_email_line(row)
+    if _uses_sqlite(_GENERIC_API_EMAIL_JSON, _DEFAULT_GENERIC_API_EMAIL_JSON):
+        _sqlite_store().replace_records("generic_api_email_pool", rows)
     _write_json(_GENERIC_API_EMAIL_JSON, rows)
     _sync_generic_api_email_txt(rows)
 
 
 def _load_icloud_emails() -> list[dict]:
     """读取独立 iCloud 邮箱池。"""
+    if _uses_sqlite(_ICLOUD_EMAIL_JSON, _DEFAULT_ICLOUD_EMAIL_JSON):
+        return _sqlite_store().load_records("icloud_email_pool")
     rows = _read_json(_ICLOUD_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
 
@@ -529,11 +639,15 @@ def _save_icloud_emails(rows: list[dict]) -> None:
     """持久化 iCloud 邮箱池并刷新文本镜像。"""
     for row in rows:
         row["copy_line"] = _icloud_email_line(row)
+    if _uses_sqlite(_ICLOUD_EMAIL_JSON, _DEFAULT_ICLOUD_EMAIL_JSON):
+        _sqlite_store().replace_records("icloud_email_pool", rows)
     _write_json(_ICLOUD_EMAIL_JSON, rows)
     _sync_icloud_email_txt(rows)
 
 
 def _load_accounts() -> list[dict]:
+    if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
+        return _sqlite_store().load_records("registered_accounts")
     rows = _read_json(_ACCOUNTS_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_ACCOUNTS_JSON, [])
@@ -543,6 +657,8 @@ def _load_accounts() -> list[dict]:
 def _save_accounts(rows: list[dict]) -> None:
     for row in rows:
         row["copy_line"] = _account_line(row)
+    if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
+        _sqlite_store().replace_records("registered_accounts", rows)
     _write_json(_ACCOUNTS_JSON, rows)
     _sync_accounts_txt(rows)
     _sync_tokens_txt(rows)
@@ -550,6 +666,8 @@ def _save_accounts(rows: list[dict]) -> None:
 
 
 def _load_jobs() -> list[dict]:
+    if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
+        return _sqlite_store().load_records("registration_jobs")
     rows = _read_json(_JOBS_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_JOBS_JSON, [])
@@ -557,6 +675,8 @@ def _load_jobs() -> list[dict]:
 
 
 def _save_jobs(rows: list[dict]) -> None:
+    if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
+        _sqlite_store().replace_records("registration_jobs", rows)
     _write_json(_JOBS_JSON, rows)
 
 
@@ -2506,11 +2626,16 @@ def get_icloud_email_by_email(email: str) -> dict | None:
 
 def _load_codex_export_state() -> dict:
     """读导出状态映射 {filename: {exported_at, exported_count}}。不存在返回 {}。"""
+    if _uses_sqlite(_CODEX_EXPORT_STATE, _DEFAULT_CODEX_EXPORT_STATE):
+        data = _sqlite_store().load_document("codex_export_state", {})
+        return data if isinstance(data, dict) else {}
     data = _read_json(_CODEX_EXPORT_STATE, {})
     return data if isinstance(data, dict) else {}
 
 
 def _save_codex_export_state(state: dict) -> None:
+    if _uses_sqlite(_CODEX_EXPORT_STATE, _DEFAULT_CODEX_EXPORT_STATE):
+        _sqlite_store().replace_document("codex_export_state", state)
     _write_json(_CODEX_EXPORT_STATE, state)
 
 
@@ -2893,7 +3018,7 @@ def _migrate_legacy_sqlite() -> dict:
 def migrate_legacy_files() -> dict:
     """
     把历史 SQLite、accounts/*.json、outlook_accounts.txt、outlook_accounts_used.json
-    迁移到当前 JSON/TXT 文件存储。多次调用是幂等的。
+    导入当前主存储。多次调用是幂等的；JSON/TXT 会继续同步为兼容镜像。
     """
     summary = {
         "accounts_imported": 0,
@@ -2965,17 +3090,25 @@ def migrate_legacy_files() -> dict:
 
 
 def db_path() -> Path:
-    """兼容旧名称，返回当前文件存储目录。"""
-    return _DATA_DIR
+    """Return the authoritative SQLite path, or the JSON directory in rollback mode."""
+    return _SQLITE_PATH if _storage_backend() != "json" else _DATA_DIR
 
 
 def storage_paths() -> dict:
     return {
+        "backend": "sqlite" if _storage_backend() != "json" else "json",
+        "sqlite": str(_SQLITE_PATH),
         "outlook_json": str(_OUTLOOK_JSON),
         "outlook_txt": str(_OUTLOOK_TXT),
+        "generic_api_json": str(_GENERIC_API_EMAIL_JSON),
+        "generic_api_txt": str(_GENERIC_API_EMAIL_TXT),
+        "icloud_json": str(_ICLOUD_EMAIL_JSON),
+        "icloud_txt": str(_ICLOUD_EMAIL_TXT),
         "accounts_json": str(_ACCOUNTS_JSON),
         "accounts_txt": str(_ACCOUNTS_TXT),
         "tokens_txt": str(_TOKENS_TXT),
+        "domain_json": str(_DOMAIN_EMAIL_JSON),
+        "codex_export_state": str(_CODEX_EXPORT_STATE),
         "viewer_html": str(_VIEWER_HTML),
         "jobs_json": str(_JOBS_JSON),
         "logs_dir": str(_LOG_DIR),
@@ -2997,15 +3130,17 @@ def refresh_static_viewer() -> Path:
 # Domain email pool（Cloudflare 域名邮箱跟踪）
 # ============================================================
 
-_DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
-
 
 def _load_domain_pool() -> list[dict]:
+    if _uses_sqlite(_DOMAIN_EMAIL_JSON, _DEFAULT_DOMAIN_EMAIL_JSON):
+        return _sqlite_store().load_records("domain_email_pool")
     rows = _read_json(_DOMAIN_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
 
 
 def _save_domain_pool(rows: list[dict]) -> None:
+    if _uses_sqlite(_DOMAIN_EMAIL_JSON, _DEFAULT_DOMAIN_EMAIL_JSON):
+        _sqlite_store().replace_records("domain_email_pool", rows)
     _write_json(_DOMAIN_EMAIL_JSON, rows)
 
 

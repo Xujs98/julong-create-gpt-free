@@ -627,8 +627,22 @@ WebUI 配置页保存后会调用热加载；Roxy、Codex、邮箱、代理、�
 
 ## 数据与产物
 
+账号、邮箱池、注册任务和 Codex 导出状态默认以 `data/registration.sqlite3` 为主存储。
+原有 JSON/TXT 会在每次写入时同步刷新，继续用于兼容导出、人工查看和迁移回滚。
+
+首次升级可执行以下命令；脚本会先备份源文件和 SHA-256 清单，再导入 SQLite，
+最后执行记录数、ID、完整字段摘要和 `PRAGMA integrity_check` 校验：
+
+```bash
+python3 tools/migrate_to_sqlite.py
+```
+
+迁移审计文件保存在 `artifacts/sqlite-migration-20260809/`。如需恢复迁移前文件并
+临时切回 JSON 主存储，可运行该目录中的 `rollback-sqlite-migration.sh`。
+
 | 路径 | 内容 |
 |---|---|
+| `data/registration.sqlite3` | SQLite 主数据库（账号、邮箱池、任务和导出状态） |
 | `用于注册的邮箱.txt/json` | Outlook 邮箱池及状态 |
 | `用于注册的API邮箱.txt/json` | 通用 API 邮箱池及状态 |
 | `注册成功的邮箱.txt/json` | 注册成功账号 |
@@ -787,7 +801,8 @@ ENABLE_CODEX_AUTO = False
 │   ├── cf_temp_mail_client.py      # Cloudflare Worker 临时邮箱
 │   ├── sms_provider.py             # 接码平台
 │   ├── account_export.py           # 保存账号/批次归档
-│   └── db.py                       # 文件数据库
+│   ├── db.py                       # SQLite 主存储与兼容镜像
+│   └── sqlite_store.py             # SQLite schema、事务和完整字段存储
 ├── webui/
 │   ├── app.py                      # Flask API
 │   ├── config_editor.py            # 配置读写/热加载
