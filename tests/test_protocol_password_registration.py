@@ -178,7 +178,7 @@ def test_run_registration_protocol_password_branch_persists_password():
             ("get_providers", {"side_effect": lambda *_: mark("providers") or {}}),
             ("get_csrf_token", {"side_effect": lambda *_: mark("csrf") or "csrf"}),
             ("signin_openai", {"side_effect": lambda *_: mark("signin") or "authorize"}),
-            ("follow_authorize", {"side_effect": lambda *args, **kw: mark("authorize", kw.get("allow_password_page")) or "https://auth.openai.com/create-account/password"}),
+            ("follow_authorize", {"side_effect": lambda *args, **kw: mark("authorize", kw.get("allow_password_page")) or "https://auth.openai.com/email-verification"}),
             ("get_create_account_page", {"side_effect": lambda *_: mark("password_page") or "https://auth.openai.com/create-account/password"}),
             ("request_sentinel_token", {"side_effect": lambda *args: mark("sentinel", args[-1]) or {"token": "x"}}),
             ("build_sentinel_header", {"side_effect": lambda *args: mark("sentinel_header", args[-1]) or ("sentinel", "so")}),

@@ -356,9 +356,9 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
 
 # ============================================================
 # 密码分支专用函数：创建账号密码后继续邮箱 OTP 验证。
-# 当前 OpenAI 主流程：follow_authorize 自动跳到 /email-verification 并发 OTP，
-# 不再走密码注册路径。如未来需要恢复密码注册（点击"使用密码继续"按钮的分支），
-# 可参考下方实现解封即可。
+# authorize 即使先落到 /email-verification，页面仍提供
+# /create-account/password；协议模式按浏览器链接顺序先导航该页面，
+# 再提交 /api/accounts/user/register。
 # ============================================================
 
 # def get_create_account_page(session: BrowserSession) -> None:

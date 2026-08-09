@@ -27,7 +27,6 @@ from core.openai_auth import (
     build_sentinel_header,
     validate_email_otp,
     send_email_otp,
-    continue_authorize_with_email,
     network_preflight,
     navigate_about_you,
     EmailOtpInvalidError,
@@ -339,61 +338,27 @@ def run_registration(
 
         # ==================== 阶段2: OpenAI Auth ====================
         # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）。
-        # 只有服务端真实落到 password signup 页时才提交 /user/register。
-        # 已落到 /email-verification 后再强行 GET 密码页不会切换 auth step，
-        # 随后的 register 会稳定返回 invalid_auth_step。
+        # 当前服务端即使 original_screen_hint=signup，也会先落到
+        # /email-verification，并在 HTML 中提供 /create-account/password 链接。
+        # 密码开关开启时必须模拟该链接导航，才能把 auth session 切到
+        # username_password_create，再提交 /api/accounts/user/register。
         authorize_landing = follow_authorize(
             session,
             authorize_url,
             allow_password_page=password_requested,
         )
-        create_password = password_requested and _is_protocol_password_landing(authorize_landing)
-        if password_requested and not create_password:
-            # 某些 authorize 响应仍先落到通用页面，需要用 signup screen
-            # 显式推进 auth session，再导航到真正的密码注册页。
-            signup_result = continue_authorize_with_email(
-                session,
-                email,
-                screen_hint="signup",
-            )
-            signup_target = ""
-            if isinstance(signup_result, dict):
-                signup_target = str(
-                    signup_result.get("continue_url")
-                    or signup_result.get("external_url")
-                    or signup_result.get("redirect_url")
-                    or signup_result.get("url")
-                    or ((signup_result.get("page") or {}).get("url") if isinstance(signup_result.get("page"), dict) else "")
-                    or ((signup_result.get("page") or {}).get("continue_url") if isinstance(signup_result.get("page"), dict) else "")
-                    or ""
-                )
-            if _is_protocol_password_landing(signup_target):
-                password_page_url = signup_target
-                if password_page_url.startswith("/"):
-                    password_page_url = "https://auth.openai.com" + password_page_url
-                password_page_resp = session.get(
-                    password_page_url,
-                    headers=session.get_auth_navigate_headers(referer=authorize_landing or "https://auth.openai.com/"),
-                    allow_redirects=True,
-                )
-                password_page_status = getattr(password_page_resp, "status_code", 0)
-                if isinstance(password_page_status, int) and password_page_status >= 400:
-                    raise RuntimeError(
-                        f"[密码注册] 密码页导航失败 status={password_page_status}: "
-                        f"{str(getattr(password_page_resp, 'text', '') or '')[:240]}"
-                    )
-                password_page_landing = str(getattr(password_page_resp, "url", "") or password_page_url)
-                create_password = _is_protocol_password_landing(password_page_landing)
+        create_password = False
+        if password_requested:
+            password_landing = get_create_account_page(session)
+            create_password = _is_protocol_password_landing(password_landing)
             if not create_password:
                 raise RuntimeError(
-                    "[密码注册] 已启用密码设置，但服务端未进入密码注册分支；"
-                    f"authorize_landing={authorize_landing or '未知'}，signup_result={signup_result}"
+                    "[密码注册] 已请求创建密码页，但服务端未保持密码注册状态；"
+                    f"authorize_landing={authorize_landing or '未知'}，password_landing={password_landing or '未知'}"
                 )
         human_delay("navigate")
 
         if create_password:
-            get_create_account_page(session)
-            human_delay("navigate")
             openai_password = _protocol_registration_password()
             sentinel_resp_password = request_sentinel_token(session, "username_password_create")
             sentinel_header_password, so_header_password = build_sentinel_header(
