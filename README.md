@@ -640,6 +640,9 @@ python3 tools/migrate_to_sqlite.py
 迁移审计文件保存在 `artifacts/sqlite-migration-20260809/`。如需恢复迁移前文件并
 临时切回 JSON 主存储，可运行该目录中的 `rollback-sqlite-migration.sh`。
 
+账号分组保存在 SQLite 的 `account_groups` 实体中。新账号自动进入“默认分组”；
+分组弹窗支持多选筛选、创建、改名和空分组删除，批量移动只对已勾选账号生效。
+
 | 路径 | 内容 |
 |---|---|
 | `data/registration.sqlite3` | SQLite 主数据库（账号、邮箱池、任务和导出状态） |

@@ -90,6 +90,8 @@ def _sqlite_db_patch(root: Path):
         "_LEGACY_JOBS_JSON": root / "legacy-jobs.json",
         "_DOMAIN_EMAIL_JSON": root / "domain.json",
         "_DEFAULT_DOMAIN_EMAIL_JSON": root / "domain.json",
+        "_GROUPS_JSON": root / "groups.json",
+        "_DEFAULT_GROUPS_JSON": root / "groups.json",
         "_CODEX_EXPORT_STATE": root / "codex-state.json",
         "_DEFAULT_CODEX_EXPORT_STATE": root / "codex-state.json",
         "_VIEWER_HTML": root / "viewer.html",
@@ -108,15 +110,20 @@ def test_db_bootstraps_sqlite_once_and_keeps_json_mirror(tmp_path, monkeypatch):
     )
 
     with _sqlite_db_patch(tmp_path):
-        assert db._load_accounts() == accounts
+        loaded = db._load_accounts()
+        assert loaded[0]["id"] == accounts[0]["id"]
+        assert loaded[0]["email"] == accounts[0]["email"]
+        assert loaded[0]["note"] == accounts[0]["note"]
+        assert loaded[0]["group_name"] == db.DEFAULT_ACCOUNT_GROUP
         (tmp_path / "accounts.json").write_text("[]", encoding="utf-8")
-        assert db._load_accounts() == accounts
+        assert db._load_accounts()[0]["email"] == accounts[0]["email"]
 
         updated = [{**accounts[0], "note": "SQLite 更新"}]
         db._save_accounts(updated)
 
-        assert db._load_accounts() == updated
-        assert json.loads((tmp_path / "accounts.json").read_text(encoding="utf-8")) == updated
+        assert db._load_accounts()[0]["note"] == "SQLite 更新"
+        mirrored = json.loads((tmp_path / "accounts.json").read_text(encoding="utf-8"))
+        assert mirrored[0]["note"] == "SQLite 更新"
         assert db.storage_paths()["backend"] == "sqlite"
 
 
@@ -145,3 +152,36 @@ def test_json_backend_remains_available_for_rollback(tmp_path, monkeypatch):
         assert db._load_accounts() == source
         assert not (tmp_path / "data" / "registration.sqlite3").exists()
         assert db.storage_paths()["backend"] == "json"
+
+
+def test_account_groups_default_assignment_move_rename_and_delete_rules(tmp_path, monkeypatch):
+    monkeypatch.setenv("TURB_STORAGE_BACKEND", "sqlite")
+    source = [
+        {"id": 1, "email": "one@example.com"},
+        {"id": 2, "email": "two@example.com", "group_name": "历史组"},
+    ]
+    (tmp_path / "accounts.json").write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+
+    with _sqlite_db_patch(tmp_path):
+        groups = db.list_account_groups()
+        assert [(item["name"], item["count"]) for item in groups] == [
+            ("全部", 2), ("默认分组", 1), ("历史组", 1)
+        ]
+        created = db.create_account_group("空组")
+        assert created["count"] == 0
+        updated, skipped = db.move_accounts_to_group([1, 999], created["id"])
+        assert [item["id"] for item in updated] == [1]
+        assert skipped == [{"id": 999, "reason": "账号不存在"}]
+        assert db.list_accounts(group_filter="空组")[0]["id"] == 1
+
+        renamed = db.rename_account_group(created["id"], "新组")
+        assert renamed["name"] == "新组"
+        assert {item["id"] for item in db.list_accounts(group_filter=json.dumps(["新组", "历史组"], ensure_ascii=False))} == {1, 2}
+        with pytest.raises(ValueError, match="有账号"):
+            db.delete_account_group(created["id"])
+        db.move_accounts_to_group([1], 1)
+        assert db.delete_account_group(created["id"])["name"] == "新组"
+        with pytest.raises(ValueError, match="默认分组"):
+            db.rename_account_group(1, "不允许")
+        with pytest.raises(ValueError, match="默认分组"):
+            db.delete_account_group(1)

@@ -28,6 +28,7 @@ SOURCE_FILES = (
     "用于注册的iCloud邮箱.json",
     "用于注册的iCloud邮箱.txt",
     "用于注册的域名邮箱.json",
+    "账号分组.json",
     "注册成功的邮箱.json",
     "注册成功的邮箱.txt",
     "注册成功的token.txt",

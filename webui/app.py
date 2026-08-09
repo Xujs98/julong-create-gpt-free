@@ -107,6 +107,7 @@ def _compact_account_for_list(row: dict) -> dict:
     out = {
         "id": row.get("id"),
         "email": row.get("email"),
+        "group_name": row.get("group_name") or db.DEFAULT_ACCOUNT_GROUP,
         "has_access_token": bool(str(row.get("access_token") or "").strip()),
         "has_session": bool(_account_saved_session(row)),
         "totp_enabled": bool(row.get("totp_secret")),
@@ -357,12 +358,59 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     # 已注册账号
     # ----------------------------------------------------------
+    @app.get("/api/account-groups")
+    def api_account_groups():
+        return jsonify({"ok": True, "groups": db.list_account_groups()})
+
+    @app.post("/api/account-groups")
+    def api_account_group_create():
+        data = request.get_json(silent=True) or {}
+        try:
+            group = db.create_account_group(data.get("name"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "group": group}), 201
+
+    @app.patch("/api/account-groups/<int:group_id>")
+    def api_account_group_rename(group_id: int):
+        data = request.get_json(silent=True) or {}
+        try:
+            group = db.rename_account_group(group_id, data.get("name"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "group": group})
+
+    @app.delete("/api/account-groups/<int:group_id>")
+    def api_account_group_delete(group_id: int):
+        try:
+            deleted = db.delete_account_group(group_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "deleted": deleted})
+
+    @app.post("/api/accounts/group-move")
+    def api_accounts_group_move():
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        try:
+            group_id = int(data.get("group_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "group_id 必须是有效分组 ID"}), 400
+        try:
+            updated, skipped = db.move_accounts_to_group(ids, group_id)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "updated": updated, "updated_count": len(updated), "skipped": skipped})
+
     @app.get("/api/accounts")
     def api_accounts():
         limit = request.args.get("limit", default=500, type=int)
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         status_filter = str(request.args.get("status", default="") or "").lower()
+        group_filter = str(request.args.get("group", default="") or "").strip()
         created_from = str(request.args.get("created_from", default="") or "").strip()[:10]
         created_to = str(request.args.get("created_to", default="") or "").strip()[:10]
         if status_filter not in {"", "all", "link", "sms"}:
@@ -383,6 +431,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 status_filter=status_filter,
+                group_filter=group_filter,
                 created_from=created_from,
                 created_to=created_to,
             )
@@ -395,6 +444,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            group_filter=group_filter,
         ))
 
     @app.get("/api/accounts/plan-check-status")
@@ -404,6 +454,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         status_filter = str(request.args.get("status", default="") or "").lower()
+        group_filter = str(request.args.get("group", default="") or "").strip()
         created_from = str(request.args.get("created_from", default="") or "").strip()[:10]
         created_to = str(request.args.get("created_to", default="") or "").strip()[:10]
         if status_filter not in {"", "all", "link", "sms"}:
@@ -422,6 +473,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 status_filter=status_filter,
+                group_filter=group_filter,
                 created_from=created_from,
                 created_to=created_to,
             )
@@ -433,6 +485,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 plan_filter=plan_filter,
                 q=q,
                 status_filter=status_filter,
+                group_filter=group_filter,
             )
         snapshot["queue"] = plan_check_service.queue_settings()
         return jsonify(snapshot)

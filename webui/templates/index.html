@@ -775,6 +775,7 @@
     .accounts-table-v2 .col-id { width: 60px; }
     .accounts-table-v2 .col-email { width: 280px; min-width: 280px; }
     .accounts-table-v2 .col-source { width: 80px; }
+    .accounts-table-v2 .col-group { width: 130px; min-width: 120px; }
     .accounts-table-v2 .col-token { width: 150px; min-width: 150px; }
     .accounts-table-v2 .col-plan { width: 200px; }
     .accounts-table-v2 .col-note { width: 110px; }
@@ -1899,6 +1900,43 @@
     .accounts-filter-date-grid input:focus { outline: none; border-color: #377DFF; box-shadow: 0 0 0 3px rgba(55,125,255,.12); }
     .accounts-filter-archive { display: flex; gap: 8px; flex-wrap: wrap; }
     .accounts-filter-foot { border-top: 1px solid #ebeef5; background: #fafbfc; }
+    #accountGroupsModal:not(.hidden) {
+      position: fixed; inset: 0; z-index: 1200;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px; box-sizing: border-box;
+      background: rgba(15, 23, 42, .45);
+    }
+    .account-groups-dialog {
+      width: min(520px, 100%); max-height: min(720px, calc(100vh - 48px));
+      display: flex; flex-direction: column; background: #fff;
+      border: 1px solid #ebeef5; border-radius: 12px;
+      box-shadow: 0 24px 70px rgba(15,23,42,.28); overflow: hidden;
+    }
+    .account-groups-head { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid #ebeef5; }
+    .account-groups-head-main { min-width: 0; flex: 1; }
+    .account-groups-head h3 { margin: 0; color: #303133; font-size: 18px; line-height: 1.3; }
+    .account-groups-head p { margin: 7px 0 0; color: #909399; font-size: 12px; line-height: 1.45; }
+    .account-groups-head-actions { display: flex; align-items: center; gap: 6px; }
+    .account-groups-add { width: 30px; height: 30px; padding: 0; border: 1px solid #b3d8ff; border-radius: 6px; background: #ecf5ff; color: #377DFF; font-size: 22px; line-height: 1; cursor: pointer; }
+    .account-groups-add:hover { background: #377DFF; color: #fff; }
+    .account-groups-close { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #909399; font-size: 20px; line-height: 1; cursor: pointer; }
+    .account-groups-close:hover { color: #606266; background: #f5f7fa; }
+    .account-groups-body { overflow: auto; padding: 12px 14px 16px; }
+    .account-group-item { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; color: #303133; cursor: pointer; transition: .15s ease; }
+    .account-group-item:hover { background: #f5f7fa; border-color: #e4e7ed; }
+    .account-group-item.is-active { color: #377DFF; background: #ecf5ff; border-color: #b3d8ff; }
+    .account-group-item.is-disabled { cursor: default; }
+    .account-group-item-main { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
+    .account-group-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+    .account-group-item-count { color: #909399; font-size: 12px; white-space: nowrap; }
+    .account-group-item.is-active .account-group-item-count { color: #377DFF; }
+    .account-group-item-actions { display: flex; align-items: center; gap: 5px; }
+    .account-group-item-actions button { min-width: 28px; height: 28px; padding: 0 7px; border: 1px solid #dcdfe6; border-radius: 5px; background: #fff; color: #606266; font-size: 12px; cursor: pointer; }
+    .account-group-item-actions button:hover:not(:disabled) { color: #377DFF; border-color: #9bbcff; background: #f6f9ff; }
+    .account-group-item-actions button.danger { color: #e64545; border-color: #fbc4c4; }
+    .account-group-item-actions button.danger:hover:not(:disabled) { color: #fff; background: #f56c6c; border-color: #f56c6c; }
+    .account-group-item-actions button:disabled { color: #c0c4cc; background: #f5f7fa; cursor: not-allowed; }
+    .account-groups-empty { padding: 24px 10px; color: #909399; text-align: center; font-size: 13px; }
     .accounts-view-v2 { position: relative; display: inline-flex; align-items: center; }
     .accounts-view-menu-v2 {
       position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: 190px;
@@ -1917,6 +1955,7 @@
     .accounts-table-v2.is-col-hidden-id .col-id,
     .accounts-table-v2.is-col-hidden-email .col-email,
     .accounts-table-v2.is-col-hidden-source .col-source,
+    .accounts-table-v2.is-col-hidden-group .col-group,
     .accounts-table-v2.is-col-hidden-token .col-token,
     .accounts-table-v2.is-col-hidden-plan .col-plan,
     .accounts-table-v2.is-col-hidden-note .col-note,
@@ -2651,6 +2690,7 @@ try {
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="id" role="menuitemcheckbox" aria-checked="true"><span>ID</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="email" role="menuitemcheckbox" aria-checked="true"><span>邮箱</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="source" role="menuitemcheckbox" aria-checked="true"><span>来源</span><span class="accounts-view-check">✓</span></button>
+              <button type="button" class="accounts-view-item-v2 is-active" data-account-column="group" role="menuitemcheckbox" aria-checked="true"><span>分组</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="token" role="menuitemcheckbox" aria-checked="true"><span>AT / Session</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="plan" role="menuitemcheckbox" aria-checked="true"><span>套餐</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="note" role="menuitemcheckbox" aria-checked="true"><span>备注</span><span class="accounts-view-check">✓</span></button>
@@ -2702,11 +2742,16 @@ try {
           <button type="button" class="acc-v2-status-option" data-account-status-filter="link" aria-pressed="false">提链</button>
           <button type="button" class="acc-v2-status-option" data-account-status-filter="sms" aria-pressed="false">接码</button>
         </div>
+        <div class="acc-v2-btn-group acc-v2-status-filter" role="group" aria-label="账号分组操作">
+          <span class="acc-v2-btn-group-title">分组</span>
+          <button type="button" class="acc-v2-status-option" id="btnViewAccountGroupsV2" title="查看、筛选和管理账号分组">查看分组</button>
+          <button type="button" class="acc-v2-status-option" id="btnMoveSelectedAccountsGroupV2" disabled title="将选中账号移动到现有分组">移动</button>
+        </div>
       </div>
       <div class="accounts-table-v2-wrap">
         <table class="accounts-table-v2">
           <colgroup>
-            <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
+            <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source"><col class="col-group">
             <col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-completion"><col class="col-small">
             <col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions">
           </colgroup>
@@ -2716,6 +2761,7 @@ try {
               <th class="col-id">ID</th>
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
+              <th class="col-group">分组</th>
               <th class="col-token">AT / Session</th>
               <th class="col-plan">套餐</th>
               <th class="col-note">备注</th>
@@ -2995,6 +3041,21 @@ try {
     </div>
   </div>
 </div>
+<div id="accountGroupsModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="accountGroupsTitle">
+  <div class="account-groups-dialog" role="document">
+    <div class="account-groups-head">
+      <div class="account-groups-head-main">
+        <h3 id="accountGroupsTitle">账号分组</h3>
+        <p id="accountGroupsHint">点击分组可筛选账号；默认分组不可修改和删除。</p>
+      </div>
+      <div class="account-groups-head-actions">
+        <button type="button" class="account-groups-add" id="btnCreateAccountGroupV2" title="新建分组" aria-label="新建分组">+</button>
+        <button type="button" class="account-groups-close" id="btnCloseAccountGroups" aria-label="关闭">×</button>
+      </div>
+    </div>
+    <div class="account-groups-body" id="accountGroupsBodyV2"></div>
+  </div>
+</div>
 <div id="accountExportModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="accountExportTitle">
   <div class="account-export-dialog" role="document">
     <div class="account-export-head">
@@ -3044,6 +3105,9 @@ let ACCOUNT_DATE_FROM = '';
 let ACCOUNT_DATE_TO = '';
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
 let ACCOUNT_STATUS_FILTER = '';
+let ACCOUNT_GROUP_FILTER = [];
+let ACCOUNT_GROUPS = [];
+let ACCOUNT_GROUP_MODAL_MODE = 'view';
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -3593,6 +3657,8 @@ function updateModalScrollLock() {
     || !$('#liveLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
     || !$('#outlookImportModal').classList.contains('hidden')
+    || !$('#accountsFilterModal').classList.contains('hidden')
+    || !$('#accountGroupsModal').classList.contains('hidden')
     || !$('#accountExportModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
@@ -3802,17 +3868,140 @@ function getCodexBulkWorkers() {
   const el = document.getElementById('codexBulkWorkersV2');
   return Math.max(1, Math.min(16, Number((el && el.value) || 3)));
 }
+function accountGroupById(id) {
+  return ACCOUNT_GROUPS.find(group => String(group.id) === String(id));
+}
+function accountGroupLabel() {
+  if (!ACCOUNT_GROUP_FILTER.length) return '查看分组';
+  return ACCOUNT_GROUP_FILTER.length === 1 ? ACCOUNT_GROUP_FILTER[0] : `已选 ${ACCOUNT_GROUP_FILTER.length} 组`;
+}
+function accountGroupQueryValue() {
+  return JSON.stringify(ACCOUNT_GROUP_FILTER);
+}
+function renderAccountGroupsModal() {
+  const body = $('#accountGroupsBodyV2');
+  if (!body) return;
+  const isMove = ACCOUNT_GROUP_MODAL_MODE === 'move';
+  const title = $('#accountGroupsTitle');
+  const hint = $('#accountGroupsHint');
+  const add = $('#btnCreateAccountGroupV2');
+  if (title) title.textContent = isMove ? '移动到分组' : '账号分组';
+  if (hint) hint.textContent = isMove ? `已选 ${ACCOUNT_SELECTED.size} 个账号，点击目标分组即可移动。` : '点击分组可筛选账号；默认分组不可修改和删除。';
+  if (add) add.classList.toggle('hidden', isMove);
+  if (!ACCOUNT_GROUPS.length) {
+    body.innerHTML = '<div class="account-groups-empty">暂无分组</div>';
+    return;
+  }
+  body.innerHTML = ACCOUNT_GROUPS.map(group => {
+    const active = !isMove && ((group.is_all && !ACCOUNT_GROUP_FILTER.length) || (!group.is_all && ACCOUNT_GROUP_FILTER.includes(String(group.name))));
+    const countText = `(${Number(group.count || 0)})`;
+    const action = group.is_all || group.is_default || isMove ? '' : `<div class="account-group-item-actions"><button type="button" data-account-group-rename="${esc(group.id)}">改名</button><button type="button" class="danger" data-account-group-delete="${esc(group.id)}" ${Number(group.count || 0) ? 'disabled title="有账号的分组不可删除"' : ''}>删</button></div>`;
+    return `<div class="account-group-item${active ? ' is-active' : ''}" data-account-group-select="${esc(group.id)}" data-account-group-name="${esc(group.name)}"><div class="account-group-item-main"><span class="account-group-item-name">${esc(group.name)}</span><span class="account-group-item-count">${countText}</span></div>${action}</div>`;
+  }).join('');
+}
+async function loadAccountGroups(openModal = false, mode = 'view') {
+  try {
+    const res = await api('/api/account-groups');
+    ACCOUNT_GROUPS = res.groups || [];
+    const viewBtn = $('#btnViewAccountGroupsV2');
+    if (viewBtn) viewBtn.textContent = accountGroupLabel();
+    if (openModal) {
+      ACCOUNT_GROUP_MODAL_MODE = mode;
+      renderAccountGroupsModal();
+      $('#accountGroupsModal')?.classList.remove('hidden');
+      updateModalScrollLock();
+    }
+    return ACCOUNT_GROUPS;
+  } catch (e) {
+    showToast('加载分组失败: ' + e.message);
+    return [];
+  }
+}
+function closeAccountGroupsModal() {
+  $('#accountGroupsModal')?.classList.add('hidden');
+  updateModalScrollLock();
+}
+async function selectAccountGroup(group) {
+  if (!group) return;
+  if (ACCOUNT_GROUP_MODAL_MODE === 'move') {
+    await moveSelectedAccountsToGroup(group);
+    return;
+  }
+  if (group.is_all) ACCOUNT_GROUP_FILTER = [];
+  else {
+    const name = String(group.name || '');
+    ACCOUNT_GROUP_FILTER = ACCOUNT_GROUP_FILTER.includes(name)
+      ? ACCOUNT_GROUP_FILTER.filter(item => item !== name)
+      : [...ACCOUNT_GROUP_FILTER, name];
+  }
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  renderAccountGroupsModal();
+  await loadAccountGroups(false);
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+}
+async function createAccountGroupFromUi() {
+  const name = await appPrompt('新建分组', '', {inputLabel: '分组名称', placeholder: '例如：Plus 账号', confirmText: '创建'});
+  if (name === null) return;
+  try {
+    await api('/api/account-groups', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name})});
+    await loadAccountGroups(true, 'view');
+    showToast('分组已创建');
+  } catch (e) { showToast('新建分组失败: ' + e.message); }
+}
+async function renameAccountGroupFromUi(groupId) {
+  const group = accountGroupById(groupId);
+  if (!group || group.is_default) return;
+  const name = await appPrompt('修改分组名称', group.name || '', {inputLabel: '分组名称', confirmText: '保存'});
+  if (name === null) return;
+  try {
+    await api(`/api/account-groups/${encodeURIComponent(groupId)}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name})});
+    ACCOUNT_GROUP_FILTER = ACCOUNT_GROUP_FILTER.map(item => item === group.name ? String(name || '').trim() : item);
+    await loadAccountGroups(true, 'view');
+    await loadAccounts();
+    showToast('分组名称已修改');
+  } catch (e) { showToast('修改分组失败: ' + e.message); }
+}
+async function deleteAccountGroupFromUi(groupId) {
+  const group = accountGroupById(groupId);
+  if (!group || group.is_default || Number(group.count || 0)) return;
+  if (!await appConfirm(`确定删除空分组“${group.name}”吗？`)) return;
+  try {
+    await api(`/api/account-groups/${encodeURIComponent(groupId)}`, {method: 'DELETE'});
+    ACCOUNT_GROUP_FILTER = ACCOUNT_GROUP_FILTER.filter(item => item !== group.name);
+    await loadAccountGroups(true, 'view');
+    await loadAccounts();
+    showToast('分组已删除');
+  } catch (e) { showToast('删除分组失败: ' + e.message); }
+}
+async function moveSelectedAccountsToGroup(group) {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length || !group || group.is_all) return;
+  const current = new Set(ACCOUNTS.filter(row => ids.includes(Number(row.id))).map(row => String(row.group_name || '')));
+  if (current.size === 1 && current.has(String(group.name))) { showToast('选中账号已经在该分组'); return; }
+  try {
+    const res = await api('/api/accounts/group-move', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({account_ids: ids, group_id: group.id})});
+    ACCOUNT_SELECTED.clear();
+    closeAccountGroupsModal();
+    await loadAccountGroups(false);
+    await loadAccounts();
+    showToast(`移动完成：成功 ${res.updated_count || 0} 个，跳过 ${(res.skipped || []).length || 0} 个`);
+  } catch (e) { showToast('移动分组失败: ' + e.message); }
+}
 async function loadAccounts() {
   if (accountsLoading) return;
   accountsLoading = true;
   try {
+    if (!ACCOUNT_GROUPS.length) await loadAccountGroups(false);
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const status = ACCOUNT_STATUS_FILTER;
+    const group = accountGroupQueryValue();
     const q = getAccountsQuery();
     const archivedQuery = ACCOUNT_ARCHIVE_FILTER === 'archived' ? 'only' : ACCOUNT_ARCHIVE_FILTER === 'all' ? 'all' : '0';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archivedQuery)}&plan=${encodeURIComponent(plan)}&status=${encodeURIComponent(status)}&created_from=${encodeURIComponent(ACCOUNT_DATE_FROM)}&created_to=${encodeURIComponent(ACCOUNT_DATE_TO)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archivedQuery)}&plan=${encodeURIComponent(plan)}&status=${encodeURIComponent(status)}&group=${encodeURIComponent(group)}&created_from=${encodeURIComponent(ACCOUNT_DATE_FROM)}&created_to=${encodeURIComponent(ACCOUNT_DATE_TO)}&q=${encodeURIComponent(q)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -3828,10 +4017,11 @@ async function pollAccountPlanStatuses() {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const status = ACCOUNT_STATUS_FILTER;
+    const group = accountGroupQueryValue();
     const q = getAccountsQuery();
     const archivedQuery = ACCOUNT_ARCHIVE_FILTER === 'archived' ? 'only' : ACCOUNT_ARCHIVE_FILTER === 'all' ? 'all' : '0';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archivedQuery)}&plan=${encodeURIComponent(plan)}&status=${encodeURIComponent(status)}&created_from=${encodeURIComponent(ACCOUNT_DATE_FROM)}&created_to=${encodeURIComponent(ACCOUNT_DATE_TO)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archivedQuery)}&plan=${encodeURIComponent(plan)}&status=${encodeURIComponent(status)}&group=${encodeURIComponent(group)}&created_from=${encodeURIComponent(ACCOUNT_DATE_FROM)}&created_to=${encodeURIComponent(ACCOUNT_DATE_TO)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -4290,6 +4480,7 @@ function renderAccounts() {
         <div class="acc-v2-sub">${esc(r.user_name || '-')}</div>${_accountPasswordCell(r)}
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
+      <td class="col-group" title="${esc(r.group_name || '默认分组')}"><span class="pill status-used">${esc(r.group_name || '默认分组')}</span></td>
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
@@ -4311,7 +4502,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="13" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="14" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
@@ -4347,6 +4538,8 @@ function updateAccountSelectionUi(pageRows = null) {
       el.title = archiveTitle;
     }
   });
+  const moveGroupBtn = document.getElementById('btnMoveSelectedAccountsGroupV2');
+  if (moveGroupBtn) moveGroupBtn.disabled = none;
 
   if (!pageRows) pageRows = ACCOUNTS;
   const pageIds = pageRows.map(r => Number(r.id));
@@ -4921,6 +5114,10 @@ async function refreshAccountsList(btn) {
   if (manualLinkV2) manualLinkV2.addEventListener('click', () => openManualLinkStatus(manualLinkV2));
   const filterBtn = $('#btnAccountsFilterV2');
   if (filterBtn) filterBtn.addEventListener('click', openAccountsFilterModal);
+  const groupViewBtn = $('#btnViewAccountGroupsV2');
+  if (groupViewBtn) groupViewBtn.addEventListener('click', () => loadAccountGroups(true, 'view'));
+  const groupMoveBtn = $('#btnMoveSelectedAccountsGroupV2');
+  if (groupMoveBtn) groupMoveBtn.addEventListener('click', () => loadAccountGroups(true, 'move'));
   const viewBtn = $('#btnAccountsViewV2');
   const viewMenu = $('#accountsViewMenuV2');
   if (viewBtn && viewMenu) {
@@ -4962,6 +5159,25 @@ async function refreshAccountsList(btn) {
   }));
   $('#accountsDateFromV2')?.addEventListener('change', syncAccountsDatePreset);
   $('#accountsDateToV2')?.addEventListener('change', syncAccountsDatePreset);
+})();
+
+ (function bindAccountGroupsModal() {
+  const modal = $('#accountGroupsModal');
+  if (!modal) return;
+  $('#btnCloseAccountGroups')?.addEventListener('click', closeAccountGroupsModal);
+  $('#btnCreateAccountGroupV2')?.addEventListener('click', createAccountGroupFromUi);
+  modal.addEventListener('click', event => {
+    if (event.target === modal) { closeAccountGroupsModal(); return; }
+    const rename = event.target.closest('[data-account-group-rename]');
+    if (rename) { event.stopPropagation(); renameAccountGroupFromUi(rename.dataset.accountGroupRename); return; }
+    const del = event.target.closest('[data-account-group-delete]');
+    if (del) { event.stopPropagation(); deleteAccountGroupFromUi(del.dataset.accountGroupDelete); return; }
+    const item = event.target.closest('[data-account-group-select]');
+    if (!item) return;
+    const group = accountGroupById(item.dataset.accountGroupSelect);
+    if (group) selectAccountGroup(group);
+  });
+  modal.addEventListener('keydown', event => { if (event.key === 'Escape') closeAccountGroupsModal(); });
 })();
 
 async function fetchAccountSecrets(ids, field) {

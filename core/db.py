@@ -47,6 +47,7 @@ _CODEX_DIR = _PROJECT_ROOT / "codex_accounts"
 # 不污染 CPA 兼容的原文件
 _CODEX_EXPORT_STATE = _PROJECT_ROOT / "codex_导出状态.json"
 _DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
+_GROUPS_JSON = _PROJECT_ROOT / "账号分组.json"
 
 _SQLITE_PATH = _LEGACY_DATA_DIR / "registration.sqlite3"
 _DEFAULT_SQLITE_PATH = _SQLITE_PATH
@@ -57,9 +58,12 @@ _DEFAULT_ACCOUNTS_JSON = _ACCOUNTS_JSON
 _DEFAULT_JOBS_JSON = _JOBS_JSON
 _DEFAULT_CODEX_EXPORT_STATE = _CODEX_EXPORT_STATE
 _DEFAULT_DOMAIN_EMAIL_JSON = _DOMAIN_EMAIL_JSON
+_DEFAULT_GROUPS_JSON = _GROUPS_JSON
 _SQLITE_MIGRATION_MARKER = "json_to_sqlite_migration_completed_at"
 _SQLITE_READY_PATH: Path | None = None
 _SQLITE_STORE_INSTANCE: SQLiteStore | None = None
+
+DEFAULT_ACCOUNT_GROUP = "默认分组"
 
 _LEGACY_SQLITE = _LEGACY_DATA_DIR / "registrations.db"
 _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
@@ -138,6 +142,39 @@ def _read_migration_list(path: Path, legacy_path: Path | None = None) -> list[di
     return []
 
 
+def _account_groups_from_rows(rows: list[dict], existing: list[dict] | None = None) -> list[dict]:
+    """Build a stable group table while preserving names found in old account rows."""
+    groups = [dict(row) for row in (existing or []) if isinstance(row, dict)]
+    by_name = {
+        str(row.get("name") or "").strip().casefold(): row
+        for row in groups
+        if str(row.get("name") or "").strip()
+    }
+    now = _now()
+    if DEFAULT_ACCOUNT_GROUP.casefold() not in by_name:
+        group = {
+            "id": 1,
+            "name": DEFAULT_ACCOUNT_GROUP,
+            "created_at": now,
+            "updated_at": now,
+            "is_default": True,
+        }
+        groups.insert(0, group)
+        by_name[DEFAULT_ACCOUNT_GROUP.casefold()] = group
+    for row in rows:
+        name = str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip() or DEFAULT_ACCOUNT_GROUP
+        key = name.casefold()
+        if key in by_name:
+            continue
+        next_id = max((int(item.get("id") or 0) for item in groups), default=0) + 1
+        group = {"id": next_id, "name": name, "created_at": now, "updated_at": now, "is_default": False}
+        groups.append(group)
+        by_name[key] = group
+    for row in groups:
+        row["is_default"] = str(row.get("name") or "").strip().casefold() == DEFAULT_ACCOUNT_GROUP.casefold()
+    return sorted(groups, key=lambda row: (not bool(row.get("is_default")), int(row.get("id") or 0)))
+
+
 def _sqlite_source_snapshot() -> tuple[dict[str, list[dict]], dict[str, Any]]:
     collections = {
         "outlook_pool": _read_migration_list(_OUTLOOK_JSON, _LEGACY_OUTLOOK_JSON),
@@ -147,6 +184,10 @@ def _sqlite_source_snapshot() -> tuple[dict[str, list[dict]], dict[str, Any]]:
         "registration_jobs": _read_migration_list(_JOBS_JSON, _LEGACY_JOBS_JSON),
         "domain_email_pool": _read_migration_list(_DOMAIN_EMAIL_JSON),
     }
+    collections["account_groups"] = _account_groups_from_rows(
+        collections["registered_accounts"],
+        _read_migration_list(_GROUPS_JSON),
+    )
     documents = {
         "codex_export_state": _read_migration_value(_CODEX_EXPORT_STATE, dict, {}),
     }
@@ -647,7 +688,8 @@ def _save_icloud_emails(rows: list[dict]) -> None:
 
 def _load_accounts() -> list[dict]:
     if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
-        return _sqlite_store().load_records("registered_accounts")
+        rows = _sqlite_store().load_records("registered_accounts")
+        return _ensure_account_group_storage(rows)
     rows = _read_json(_ACCOUNTS_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_ACCOUNTS_JSON, [])
@@ -663,6 +705,183 @@ def _save_accounts(rows: list[dict]) -> None:
     _sync_accounts_txt(rows)
     _sync_tokens_txt(rows)
     _render_static_viewer(account_rows=rows)
+
+
+def _load_group_rows() -> list[dict]:
+    if _uses_sqlite(_GROUPS_JSON, _DEFAULT_GROUPS_JSON):
+        return _sqlite_store().load_records("account_groups")
+    rows = _read_json(_GROUPS_JSON, [])
+    return rows if isinstance(rows, list) else []
+
+
+def _save_group_rows(rows: list[dict]) -> None:
+    if _uses_sqlite(_GROUPS_JSON, _DEFAULT_GROUPS_JSON):
+        _sqlite_store().replace_records("account_groups", rows)
+    _write_json(_GROUPS_JSON, rows)
+
+
+def _ensure_account_group_storage(rows: list[dict] | None = None) -> list[dict]:
+    """Backfill default group for pre-group accounts and persist discovered names."""
+    account_rows = rows if rows is not None else _load_accounts()
+    group_rows = _load_group_rows()
+    normalized = False
+    for row in account_rows:
+        name = str(row.get("group_name") or "").strip()
+        if not name:
+            row["group_name"] = DEFAULT_ACCOUNT_GROUP
+            normalized = True
+    groups = _account_groups_from_rows(account_rows, group_rows)
+    current_names = {str(row.get("name") or "").strip().casefold() for row in group_rows}
+    next_names = {str(row.get("name") or "").strip().casefold() for row in groups}
+    if normalized:
+        _save_accounts(account_rows)
+    if current_names != next_names or len(group_rows) != len(groups):
+        _save_group_rows(groups)
+    return account_rows
+
+
+def _find_group(rows: list[dict], group_id: int | None = None, name: str | None = None) -> dict | None:
+    target_name = str(name or "").strip().casefold()
+    target_id = int(group_id) if group_id is not None else None
+    for row in rows:
+        if target_id is not None and int(row.get("id") or 0) == target_id:
+            return row
+        if target_name and str(row.get("name") or "").strip().casefold() == target_name:
+            return row
+    return None
+
+
+def list_account_groups() -> list[dict]:
+    """Return groups with account counts; the default group is always first."""
+    with _LOCK:
+        rows = _ensure_account_group_storage()
+        groups = _load_group_rows()
+        counts: dict[str, int] = {}
+        for row in rows:
+            key = str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold()
+            counts[key] = counts.get(key, 0) + 1
+        out = [{
+            "id": "all",
+            "name": "全部",
+            "count": len(rows),
+            "is_default": False,
+            "is_all": True,
+        }]
+        for group in _account_groups_from_rows(rows, groups):
+            item = dict(group)
+            item["count"] = counts.get(str(group.get("name") or "").strip().casefold(), 0)
+            out.append(item)
+        return out
+
+
+def create_account_group(name: str) -> dict:
+    """Create an empty account group."""
+    clean = str(name or "").strip()
+    if not clean:
+        raise ValueError("分组名称不能为空")
+    if len(clean) > 80:
+        raise ValueError("分组名称最多 80 个字符")
+    with _LOCK:
+        _ensure_account_group_storage()
+        rows = _load_group_rows()
+        if clean.casefold() == DEFAULT_ACCOUNT_GROUP.casefold():
+            raise ValueError("默认分组不允许重复创建")
+        if _find_group(rows, name=clean):
+            raise ValueError("分组名称已存在")
+        now = _now()
+        group = {
+            "id": max((int(row.get("id") or 0) for row in rows), default=0) + 1,
+            "name": clean,
+            "count": 0,
+            "created_at": now,
+            "updated_at": now,
+            "is_default": False,
+        }
+        rows.append(group)
+        _save_group_rows(rows)
+        return dict(group)
+
+
+def rename_account_group(group_id: int, name: str) -> dict:
+    """Rename an empty or populated non-default group and update its accounts."""
+    clean = str(name or "").strip()
+    if not clean:
+        raise ValueError("分组名称不能为空")
+    if len(clean) > 80:
+        raise ValueError("分组名称最多 80 个字符")
+    with _LOCK:
+        accounts = _ensure_account_group_storage()
+        groups = _load_group_rows()
+        group = _find_group(groups, group_id=group_id)
+        if group is None:
+            raise ValueError("分组不存在")
+        if bool(group.get("is_default")) or str(group.get("name") or "").strip().casefold() == DEFAULT_ACCOUNT_GROUP.casefold():
+            raise ValueError("默认分组不允许修改")
+        duplicate = _find_group(groups, name=clean)
+        if duplicate is not None and int(duplicate.get("id") or 0) != int(group.get("id") or 0):
+            raise ValueError("分组名称已存在")
+        old_name = str(group.get("name") or "")
+        now = _now()
+        group["name"] = clean
+        group["updated_at"] = now
+        for row in accounts:
+            if str(row.get("group_name") or "").strip().casefold() == old_name.strip().casefold():
+                row["group_name"] = clean
+                row["updated_at"] = now
+        _save_accounts(accounts)
+        _save_group_rows(groups)
+        updated = dict(group)
+        updated["count"] = sum(1 for row in accounts if str(row.get("group_name") or "").strip().casefold() == clean.casefold())
+        return updated
+
+
+def delete_account_group(group_id: int) -> dict:
+    """Delete only an empty, non-default group."""
+    with _LOCK:
+        accounts = _ensure_account_group_storage()
+        groups = _load_group_rows()
+        group = _find_group(groups, group_id=group_id)
+        if group is None:
+            raise ValueError("分组不存在")
+        if bool(group.get("is_default")) or str(group.get("name") or "").strip().casefold() == DEFAULT_ACCOUNT_GROUP.casefold():
+            raise ValueError("默认分组不允许删除")
+        name_key = str(group.get("name") or "").strip().casefold()
+        count = sum(1 for row in accounts if str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold() == name_key)
+        if count:
+            raise ValueError("分组内有账号时不允许删除")
+        groups = [row for row in groups if int(row.get("id") or 0) != int(group.get("id") or 0)]
+        _save_group_rows(groups)
+        return {"id": int(group.get("id") or 0), "name": group.get("name"), "count": 0}
+
+
+def move_accounts_to_group(account_ids: list[int] | None, group_id: int) -> tuple[list[dict], list[dict]]:
+    """Move selected accounts to an existing group."""
+    ids = {int(x) for x in (account_ids or []) if str(x).strip().lstrip("-").isdigit()}
+    updated: list[dict] = []
+    skipped: list[dict] = []
+    with _LOCK:
+        accounts = _ensure_account_group_storage()
+        groups = _load_group_rows()
+        group = _find_group(groups, group_id=group_id)
+        if group is None:
+            raise ValueError("目标分组不存在")
+        target = str(group.get("name") or DEFAULT_ACCOUNT_GROUP)
+        seen: set[int] = set()
+        now = _now()
+        for row in accounts:
+            row_id = int(row.get("id") or 0)
+            if row_id not in ids:
+                continue
+            row["group_name"] = target
+            row["updated_at"] = now
+            updated.append({"id": row_id, "email": row.get("email"), "group_name": target})
+            seen.add(row_id)
+        for missing in ids - seen:
+            skipped.append({"id": missing, "reason": "账号不存在"})
+        if updated:
+            _save_accounts(accounts)
+        _save_group_rows(groups)
+    return updated, skipped
 
 
 def _load_jobs() -> list[dict]:
@@ -973,12 +1192,14 @@ def insert_account(
             row = {
                 "id": row_id,
                 "email": email,
+                "group_name": DEFAULT_ACCOUNT_GROUP,
                 "created_at": _now(),
             }
             accounts.append(row)
         else:
             row = existing
             row_id = int(row["id"])
+            row["group_name"] = str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip() or DEFAULT_ACCOUNT_GROUP
 
         row.update({
             "access_token": access_token,
@@ -1563,11 +1784,35 @@ def _account_matches_query(row: dict, q: str | None) -> bool:
     return True
 
 
+def _account_group_filter_names(value: str | list[str] | None) -> set[str]:
+    if isinstance(value, (list, tuple, set)):
+        raw_values = list(value)
+    else:
+        raw = str(value or "").strip()
+        if not raw or raw.casefold() in {"all", "全部", "[]"}:
+            return set()
+        raw_values = []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                raw_values = parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_values = raw.split(",")
+        if not raw_values:
+            raw_values = [raw]
+    return {
+        str(item or "").strip().casefold()
+        for item in raw_values
+        if str(item or "").strip() and str(item or "").strip().casefold() not in {"all", "全部"}
+    }
+
+
 def _filtered_decorated_accounts(
     archived: str | bool | None = False,
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    group_filter: str | list[str] | None = None,
     created_from: str | None = None,
     created_to: str | None = None,
 ) -> list[dict]:
@@ -1579,6 +1824,12 @@ def _filtered_decorated_accounts(
     else:
         rows = [r for r in rows if not bool(r.get("archived"))]
     decorated = [_decorate_account(r) for r in rows]
+    group_names = _account_group_filter_names(group_filter)
+    if group_names:
+        decorated = [
+            r for r in decorated
+            if str(r.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold() in group_names
+        ]
     date_from = str(created_from or '').strip()[:10]
     date_to = str(created_to or '').strip()[:10]
     if date_from or date_to:
@@ -1600,6 +1851,7 @@ def list_account_plan_check_statuses(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    group_filter: str | list[str] | None = None,
     created_from: str | None = None,
     created_to: str | None = None,
 ) -> dict:
@@ -1635,6 +1887,7 @@ def list_account_plan_check_statuses(
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            group_filter=group_filter,
             created_from=created_from,
             created_to=created_to,
         )
@@ -1725,6 +1978,7 @@ def list_accounts(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    group_filter: str | list[str] | None = None,
     created_from: str | None = None,
     created_to: str | None = None,
 ) -> list[dict]:
@@ -1734,6 +1988,7 @@ def list_accounts(
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            group_filter=group_filter,
             created_from=created_from,
             created_to=created_to,
         )
@@ -1747,6 +2002,7 @@ def list_accounts_page(
     plan_filter: str | None = None,
     q: str | None = None,
     status_filter: str | None = None,
+    group_filter: str | list[str] | None = None,
     created_from: str | None = None,
     created_to: str | None = None,
 ) -> dict:
@@ -1756,6 +2012,7 @@ def list_accounts_page(
             plan_filter=plan_filter,
             q=q,
             status_filter=status_filter,
+            group_filter=group_filter,
             created_from=created_from,
             created_to=created_to,
         )
@@ -3108,6 +3365,7 @@ def storage_paths() -> dict:
         "accounts_txt": str(_ACCOUNTS_TXT),
         "tokens_txt": str(_TOKENS_TXT),
         "domain_json": str(_DOMAIN_EMAIL_JSON),
+        "groups_json": str(_GROUPS_JSON),
         "codex_export_state": str(_CODEX_EXPORT_STATE),
         "viewer_html": str(_VIEWER_HTML),
         "jobs_json": str(_JOBS_JSON),
