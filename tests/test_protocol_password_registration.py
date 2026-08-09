@@ -103,6 +103,19 @@ def test_protocol_password_branch_requires_real_password_landing():
     assert not main._is_protocol_password_landing("https://auth.openai.com/email-verification")
 
 
+def test_protocol_authorize_continue_can_request_signup_screen():
+    session = _Session()
+    with patch.object(openai_auth, "request_sentinel_token", return_value={"token": "challenge"}), patch.object(
+        openai_auth, "build_sentinel_header", return_value=("sentinel", "so")
+    ):
+        openai_auth.continue_authorize_with_email(session, "user@example.com", screen_hint="signup")
+
+    method, url, kwargs = session.calls[-1]
+    assert method == "POST"
+    assert url.endswith("/api/accounts/authorize/continue")
+    assert '"screen_hint": "signup"' in kwargs["data"]
+
+
 def test_protocol_password_setting_generates_policy_compliant_value():
     with patch.object(main._register_cfg, "REGISTER_PASSWORD", ""):
         value = main._protocol_registration_password()

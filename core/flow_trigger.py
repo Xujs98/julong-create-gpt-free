@@ -8,6 +8,7 @@
 """
 import json
 import logging
+from urllib.parse import urlparse
 
 # 这是个内部 HTTP 接口（156.225.31.95），无 Cloudflare 拦截，
 # 不需要 curl_cffi 的 TLS 指纹模拟，直接用标准 requests 库。
@@ -57,12 +58,20 @@ def _send_sync(access_token: str) -> dict:
     if not access_token:
         return _flow_result(status="skipped", message="access_token 为空")
 
+    flow_url = str(_cfg.FLOW_TRIGGER_URL or "").strip()
+    parsed_url = urlparse(flow_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return _flow_result(
+            status="skipped",
+            message="FLOW_TRIGGER_URL 未配置或格式无效（需要 http:// 或 https:// URL）",
+        )
+
     body = dict(_cfg.FLOW_TRIGGER_PAYLOAD)
     body["access_token"] = access_token
 
     try:
         resp = requests.post(
-            _cfg.FLOW_TRIGGER_URL,
+            flow_url,
             headers=_build_headers(),
             json=body,
             timeout=_cfg.FLOW_TRIGGER_TIMEOUT,

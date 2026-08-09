@@ -497,7 +497,12 @@ def verify_login_password(session: BrowserSession, password: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def continue_authorize_with_email(session: BrowserSession, email: str) -> dict:
+def continue_authorize_with_email(
+    session: BrowserSession,
+    email: str,
+    *,
+    screen_hint: str | None = None,
+) -> dict:
     """协议提交登录邮箱，把 authorize 会话推进到密码、MFA 或邮箱验证步骤。"""
     email = str(email or "").strip()
     if not email:
@@ -510,7 +515,11 @@ def continue_authorize_with_email(session: BrowserSession, email: str) -> dict:
         headers["openai-sentinel-so-token"] = so_header
     url = "https://auth.openai.com/api/accounts/authorize/continue"
     body = {"username": {"kind": "email", "value": email}}
-    logger.info("[协议登录] 提交账号邮箱，推进到密码登录步骤：%s", email)
+    if str(screen_hint or "").strip():
+        # 注册密码分支需要显式告诉 auth session 目标 screen；
+        # 省略时保持登录/查活原有行为。
+        body["screen_hint"] = str(screen_hint).strip()
+    logger.info("[协议登录] 提交账号邮箱，推进认证步骤：%s screen_hint=%s", email, screen_hint or "默认")
     resp = session.post(url, headers=headers, data=json.dumps(body))
     if resp.status_code not in (200, 204):
         code = _extract_error_code(resp)

@@ -287,12 +287,39 @@ EDITABLE_FIELDS = [
         "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
     },
     {
+        "key": "REGISTER_PASSWORD", "file": "register.py", "type": "str", "group": "注册方式",
+        "label": "注册密码", "help": "开启创建账号密码后优先使用；留空则自动生成强密码。保存于账号 extra_json.registration_password",
+        "secret": True,
+    },
+    {
         "key": "ENABLE_CREATE_PASSWORD", "file": "register.py", "type": "bool", "group": "功能开关",
         "label": "创建账号密码", "help": "开启后，邮箱验证码页先点击“使用密码继续”并提交密码，再验证邮箱验证码；关闭时直接走验证码分支",
     },
     {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
         "label": "启用 Flow 触发", "help": "注册成功后自动调用内部 Flow 接口（不影响注册结果）",
+    },
+    {
+        "key": "FLOW_TRIGGER_URL", "file": "flow_trigger.py", "type": "str", "group": "Flow",
+        "label": "Flow 地址", "help": "注册成功后 POST 的 http:// 或 https:// 地址；留空时跳过 Flow",
+    },
+    {
+        "key": "FLOW_TRIGGER_BEARER", "file": "flow_trigger.py", "type": "str", "group": "Flow",
+        "label": "Flow Bearer", "help": "可选 Authorization Bearer 值，保存在 .env",
+        "secret": True,
+    },
+    {
+        "key": "FLOW_TRIGGER_COOKIE", "file": "flow_trigger.py", "type": "str", "group": "Flow",
+        "label": "Flow Cookie", "help": "可选 Cookie 请求头，保存在 .env",
+        "secret": True,
+    },
+    {
+        "key": "FLOW_TRIGGER_PAYLOAD", "file": "flow_trigger.py", "type": "str", "group": "Flow",
+        "label": "Flow JSON 参数", "help": "JSON 对象字符串；access_token 会由注册结果自动注入",
+    },
+    {
+        "key": "FLOW_TRIGGER_TIMEOUT", "file": "flow_trigger.py", "type": "int", "group": "Flow",
+        "label": "Flow 超时(秒)", "help": "Flow 请求超时秒数，默认 15",
     },
     {
         "key": "ENABLE_HUMANIZE_DELAY", "file": "humanize.py", "type": "bool", "group": "人工节奏",

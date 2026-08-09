@@ -22,6 +22,16 @@ class ChatgptAuthContextTests(unittest.TestCase):
         self.assertEqual(qs["login_hint"], ["user@example.com"])
         self.assertEqual(qs["ccaps"], ["login_methods"])
 
+    def test_ensure_authorize_context_can_request_signup_screen(self):
+        url = (
+            "https://auth.openai.com/api/accounts/authorize?client_id=app_x&state=s"
+            "&screen_hint=login_or_signup"
+        )
+        out = _ensure_authorize_context(url, _Session(), "user@example.com", screen_hint="signup")
+        qs = parse_qs(urlparse(out).query)
+        self.assertEqual(qs["screen_hint"], ["signup"])
+        self.assertEqual(qs["login_hint"], ["user@example.com"])
+
 
 if __name__ == "__main__":
     unittest.main()

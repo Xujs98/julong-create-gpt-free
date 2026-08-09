@@ -27,6 +27,7 @@ from core.openai_auth import (
     build_sentinel_header,
     validate_email_otp,
     send_email_otp,
+    continue_authorize_with_email,
     network_preflight,
     navigate_about_you,
     EmailOtpInvalidError,
@@ -322,8 +323,14 @@ def run_registration(
         csrf_token = get_csrf_token(session)
         human_delay("api")
 
-        # 步骤3: 发起 OAuth signin
-        authorize_url = signin_openai(session, csrf_token, email)
+        # 步骤3: 发起 OAuth signin。密码注册必须显式请求 signup screen，
+        # 否则服务端会按默认 login_or_signup 直接落到 passwordless OTP。
+        password_requested = _protocol_create_password_enabled()
+        if password_requested:
+            authorize_url = signin_openai(session, csrf_token, email, "signup")
+        else:
+            # 保留原三参数调用形态，兼容外部驱动/测试对 signin_openai 的包装。
+            authorize_url = signin_openai(session, csrf_token, email)
         human_delay("api")
 
         # 记录"OTP 触发"前的时间戳，自动取信箱时只看此后的邮件，
@@ -335,7 +342,6 @@ def run_registration(
         # 只有服务端真实落到 password signup 页时才提交 /user/register。
         # 已落到 /email-verification 后再强行 GET 密码页不会切换 auth step，
         # 随后的 register 会稳定返回 invalid_auth_step。
-        password_requested = _protocol_create_password_enabled()
         authorize_landing = follow_authorize(
             session,
             authorize_url,
@@ -343,10 +349,46 @@ def run_registration(
         )
         create_password = password_requested and _is_protocol_password_landing(authorize_landing)
         if password_requested and not create_password:
-            logger.warning(
-                "[密码注册] 当前协议会话落点不支持密码分支，保持服务端 OTP 流程：%s",
-                authorize_landing or "未知",
+            # 某些 authorize 响应仍先落到通用页面，需要用 signup screen
+            # 显式推进 auth session，再导航到真正的密码注册页。
+            signup_result = continue_authorize_with_email(
+                session,
+                email,
+                screen_hint="signup",
             )
+            signup_target = ""
+            if isinstance(signup_result, dict):
+                signup_target = str(
+                    signup_result.get("continue_url")
+                    or signup_result.get("external_url")
+                    or signup_result.get("redirect_url")
+                    or signup_result.get("url")
+                    or ((signup_result.get("page") or {}).get("url") if isinstance(signup_result.get("page"), dict) else "")
+                    or ((signup_result.get("page") or {}).get("continue_url") if isinstance(signup_result.get("page"), dict) else "")
+                    or ""
+                )
+            if _is_protocol_password_landing(signup_target):
+                password_page_url = signup_target
+                if password_page_url.startswith("/"):
+                    password_page_url = "https://auth.openai.com" + password_page_url
+                password_page_resp = session.get(
+                    password_page_url,
+                    headers=session.get_auth_navigate_headers(referer=authorize_landing or "https://auth.openai.com/"),
+                    allow_redirects=True,
+                )
+                password_page_status = getattr(password_page_resp, "status_code", 0)
+                if isinstance(password_page_status, int) and password_page_status >= 400:
+                    raise RuntimeError(
+                        f"[密码注册] 密码页导航失败 status={password_page_status}: "
+                        f"{str(getattr(password_page_resp, 'text', '') or '')[:240]}"
+                    )
+                password_page_landing = str(getattr(password_page_resp, "url", "") or password_page_url)
+                create_password = _is_protocol_password_landing(password_page_landing)
+            if not create_password:
+                raise RuntimeError(
+                    "[密码注册] 已启用密码设置，但服务端未进入密码注册分支；"
+                    f"authorize_landing={authorize_landing or '未知'}，signup_result={signup_result}"
+                )
         human_delay("navigate")
 
         if create_password:

@@ -20,7 +20,13 @@ _PASSKEY_CLIENT_CAPABILITIES = "11111"
 _CC_CAPS = "login_methods"
 
 
-def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email: str) -> str:
+def _ensure_authorize_context(
+    authorize_url: str,
+    session: BrowserSession,
+    email: str,
+    *,
+    screen_hint: str = "login_or_signup",
+) -> str:
     """
     对 NextAuth 返回的 authorize URL 做最后兜底：确保当前前端默认
     login_or_signup 链路的上下文参数没有在重定向生成阶段丢失。
@@ -34,13 +40,15 @@ def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email
             "ext-oai-did": session.device_id,
             "auth_session_logging_id": session.auth_session_logging_id,
             "ext-passkey-client-capabilities": _PASSKEY_CLIENT_CAPABILITIES,
-            "screen_hint": "login_or_signup",
+            "screen_hint": screen_hint or "login_or_signup",
             "login_hint": email,
             "ccaps": _CC_CAPS,
         }
         changed = False
         for key, value in required.items():
-            if not params.get(key):
+            # 密码注册显式请求 signup 时，即使 NextAuth 返回 URL 已带
+            # login_or_signup，也要覆盖成目标 screen，避免再次落入 OTP-only。
+            if not params.get(key) or (key == "screen_hint" and params.get(key) != [value]):
                 params[key] = [value]
                 changed = True
         if not changed:
@@ -105,7 +113,12 @@ def get_csrf_token(session: BrowserSession) -> str:
     return csrf_token
 
 
-def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
+def signin_openai(
+    session: BrowserSession,
+    csrf_token: str,
+    email: str,
+    screen_hint: str = "login_or_signup",
+) -> str:
     """
     步骤3: 发起 OAuth Signin 请求。
     POST https://chatgpt.com/api/auth/signin/openai
@@ -126,7 +139,7 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
         "ext-oai-did": session.device_id,
         "auth_session_logging_id": session.auth_session_logging_id,
         "ext-passkey-client-capabilities": _PASSKEY_CLIENT_CAPABILITIES,
-        "screen_hint": "login_or_signup",
+        "screen_hint": screen_hint or "login_or_signup",
         "login_hint": email,
     }
     url = "https://chatgpt.com/api/auth/signin/openai?" + urlencode(query_params)
@@ -153,7 +166,12 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
     if not authorize_url:
         raise ValueError(f"[步骤3] 未获取到 authorize URL, 响应: {data}")
 
-    authorize_url = _ensure_authorize_context(authorize_url, session, email)
-    logger.info("[步骤3] 获取 authorize URL 成功，已确认 login_or_signup/oai-did 上下文")
+    authorize_url = _ensure_authorize_context(
+        authorize_url,
+        session,
+        email,
+        screen_hint=screen_hint or "login_or_signup",
+    )
+    logger.info("[步骤3] 获取 authorize URL 成功，screen_hint=%s", screen_hint or "login_or_signup")
     logger.debug(f"[步骤3] URL: {authorize_url[:160]}...")
     return authorize_url
