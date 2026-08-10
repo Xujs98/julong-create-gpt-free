@@ -7248,7 +7248,8 @@ function renderConfigPlainFieldV2(f) {
   if (f.readonly && f.type === 'status') {
     control = `<div class="config-agent-status ${f.status_ok ? 'is-ok' : 'is-failed'}">${esc(fv == null ? '' : fv)}</div>`;
   } else if (Array.isArray(f.choices) && f.choices.length) {
-    control = `<select data-key="${attrEsc(f.key)}">${f.choices.map(x => `<option value="${attrEsc(x)}"${String(x) === String(fv) ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+    // option value 保留后端机器值，只把页面展示文本替换为中文标签。
+    control = `<select data-key="${attrEsc(f.key)}">${f.choices.map(x => `<option value="${attrEsc(x)}"${String(x) === String(fv) ? ' selected' : ''}>${esc((f.choice_labels || {})[x] || x)}</option>`).join('')}</select>`;
   } else if (f.type === 'int') {
     control = `<input type="number" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'float') {

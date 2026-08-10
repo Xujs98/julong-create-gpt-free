@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from core.page_agent import PageAgent
+from core.page_agent import PageAgent, PageAgentConfigError, _post_model_request
 
 
 class PageAgentTests(unittest.TestCase):
@@ -87,6 +87,65 @@ class PageAgentTests(unittest.TestCase):
         }
         actions = agent._local_actions("password", snapshot, {"password": "secret"})
         self.assertEqual(actions, [{"type": "click", "selector": "#next"}])
+
+    @patch("core.page_agent.requests.Session")
+    def test_model_request_direct_ignores_environment_proxy(self, session_factory):
+        """默认直连应关闭 requests 环境代理，并且不传 proxies 参数。"""
+        session = session_factory.return_value
+        response = session.post.return_value
+
+        result = _post_model_request(
+            {"network_route": "direct", "timeout": 12},
+            url="http://model.test/v1/chat/completions",
+            headers={"Authorization": "Bearer test"},
+            payload={"model": "test"},
+        )
+
+        self.assertIs(result, response)
+        self.assertFalse(session.trust_env)
+        self.assertNotIn("proxies", session.post.call_args.kwargs)
+        session.close.assert_called_once()
+
+    @patch("config.proxy.pick_proxy", return_value="http://user:secret@127.0.0.1:7890")
+    @patch("core.page_agent.requests.Session")
+    def test_model_request_uses_proxy_pool(self, session_factory, pick_proxy):
+        """代理池出口应把同一代理同时用于 HTTP 与 HTTPS 模型请求。"""
+        session = session_factory.return_value
+
+        _post_model_request(
+            {"network_route": "proxy_pool", "timeout": 12},
+            url="https://model.test/v1/chat/completions",
+            headers={},
+            payload={"model": "test"},
+        )
+
+        pick_proxy.assert_called_once_with()
+        self.assertEqual(
+            session.post.call_args.kwargs["proxies"],
+            {
+                "http": "http://user:secret@127.0.0.1:7890",
+                "https": "http://user:secret@127.0.0.1:7890",
+            },
+        )
+        session.close.assert_called_once()
+
+    @patch("config.proxy.pick_proxy", return_value="")
+    @patch("core.page_agent.requests.Session")
+    def test_model_request_rejects_empty_proxy_pool(self, session_factory, pick_proxy):
+        """选择代理池但未配置代理时应返回明确原因。"""
+        session = session_factory.return_value
+
+        with self.assertRaisesRegex(PageAgentConfigError, "代理池为空"):
+            _post_model_request(
+                {"network_route": "proxy_pool", "timeout": 12},
+                url="https://model.test/v1/chat/completions",
+                headers={},
+                payload={"model": "test"},
+            )
+
+        pick_proxy.assert_called_once_with()
+        session.post.assert_not_called()
+        session.close.assert_called_once()
 
 
 if __name__ == "__main__":

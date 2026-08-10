@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 import requests
 
 from config import page_agent as _cfg
+from core.proxy_utils import masked_proxy_url, normalize_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,41 @@ def _visible_script() -> str:
 def _safe_text(value: object, limit: int = 180) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:limit]
+
+
+def _post_model_request(
+    cfg: dict,
+    *,
+    url: str,
+    headers: dict,
+    payload: dict,
+):
+    """按页面 Agent 配置选择直连或代理池出口发送模型请求。"""
+    route = str(cfg.get("network_route") or "direct").strip().lower()
+    session = requests.Session()
+    # 两种模式都忽略系统 HTTP(S)_PROXY，确保出口只由页面 Agent 配置决定。
+    session.trust_env = False
+    request_kwargs = {
+        "headers": headers,
+        "json": payload,
+        "timeout": cfg["timeout"],
+    }
+    if route == "proxy_pool":
+        from config.proxy import pick_proxy
+
+        proxy_url = normalize_proxy_url(pick_proxy(), default_scheme="auto")
+        if not proxy_url:
+            session.close()
+            raise PageAgentConfigError("页面 Agent 已选择代理池出口，但代理池为空")
+        request_kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+        logger.info("[Agent] 模型请求使用代理池出口：%s", masked_proxy_url(proxy_url))
+    else:
+        logger.info("[Agent] 模型请求使用本机直连出口")
+
+    try:
+        return session.post(url, **request_kwargs)
+    finally:
+        session.close()
 
 
 class PageAgent:
@@ -229,7 +265,12 @@ class PageAgent:
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             "response_format": {"type": "json_object"},
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=self.config["timeout"])
+        resp = _post_model_request(
+            self.config,
+            url=url,
+            headers=headers,
+            payload=payload,
+        )
         resp.raise_for_status()
         data = resp.json()
         choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
@@ -432,11 +473,11 @@ def test_configuration() -> dict:
         }
 
     try:
-        resp = requests.post(
-            cfg["api_base"] + "/chat/completions",
+        resp = _post_model_request(
+            cfg,
+            url=cfg["api_base"] + "/chat/completions",
             headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
-            json={"model": cfg["model"], "messages":[{"role":"user","content":"Reply with OK"}], "max_tokens": 4, "temperature": 0},
-            timeout=cfg["timeout"],
+            payload={"model": cfg["model"], "messages":[{"role":"user","content":"Reply with OK"}], "max_tokens": 4, "temperature": 0},
         )
         resp.raise_for_status()
         _persist_validation(True)

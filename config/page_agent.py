@@ -12,6 +12,8 @@ PAGE_AGENT_PROVIDER: str = "disabled"
 PAGE_AGENT_API_BASE: str = ""
 PAGE_AGENT_API_KEY: str = env_str("PAGE_AGENT_API_KEY", "")
 PAGE_AGENT_MODEL: str = ""
+# 模型请求网络出口：direct=本机直连；proxy_pool=从代理池抽取出口。
+PAGE_AGENT_NETWORK_ROUTE: str = "direct"
 PAGE_AGENT_TIMEOUT: int = 20
 PAGE_AGENT_MAX_STEPS: int = 4
 PAGE_AGENT_TEMPERATURE: float = 0.0
@@ -25,6 +27,7 @@ def effective_config(overrides: dict | None = None) -> dict:
         "api_base": str(PAGE_AGENT_API_BASE or "").strip().rstrip("/"),
         "api_key": str(PAGE_AGENT_API_KEY or "").strip(),
         "model": str(PAGE_AGENT_MODEL or "").strip(),
+        "network_route": str(PAGE_AGENT_NETWORK_ROUTE or "direct").strip().lower(),
         "timeout": max(3, int(PAGE_AGENT_TIMEOUT or 20)),
         "max_steps": max(1, min(12, int(PAGE_AGENT_MAX_STEPS or 4))),
         "temperature": max(0.0, min(1.0, float(PAGE_AGENT_TEMPERATURE or 0.0))),
@@ -37,6 +40,7 @@ def effective_config(overrides: dict | None = None) -> dict:
             "PAGE_AGENT_API_BASE": "api_base",
             "PAGE_AGENT_API_KEY": "api_key",
             "PAGE_AGENT_MODEL": "model",
+            "PAGE_AGENT_NETWORK_ROUTE": "network_route",
             "PAGE_AGENT_TIMEOUT": "timeout",
             "PAGE_AGENT_MAX_STEPS": "max_steps",
             "PAGE_AGENT_TEMPERATURE": "temperature",
@@ -49,6 +53,9 @@ def effective_config(overrides: dict | None = None) -> dict:
     values["api_base"] = str(values["api_base"] or "").strip().rstrip("/")
     values["api_key"] = str(values["api_key"] or "").strip()
     values["model"] = str(values["model"] or "").strip()
+    values["network_route"] = str(values["network_route"] or "direct").strip().lower()
+    if values["network_route"] not in {"direct", "proxy_pool"}:
+        values["network_route"] = "direct"
     if isinstance(values["validated"], str):
         values["validated"] = values["validated"].strip().lower() in {"true", "1", "yes", "on", "y"}
     else:
@@ -65,11 +72,20 @@ def configuration_status(overrides: dict | None = None) -> dict:
             "reason": "local_dom_agent" if cfg["validated"] else "请先点击“测试 Agent 配置”",
         }
     if provider in {"openai", "openai_compatible", "compatible"}:
+        route = cfg.get("network_route") or "direct"
+        if route == "proxy_pool":
+            try:
+                from config.proxy import PROXY_POOL
+                if not [item for item in (PROXY_POOL or []) if str(item or "").strip()]:
+                    return {"configured": False, "provider": "openai_compatible", "network_route": route, "reason": "代理池为空"}
+            except Exception as exc:
+                return {"configured": False, "provider": "openai_compatible", "network_route": route, "reason": f"代理池读取失败：{type(exc).__name__}"}
         missing = [name for name, value in (("API 地址", cfg["api_base"]), ("API Key", cfg["api_key"]), ("模型", cfg["model"])) if not value]
         if missing:
-            return {"configured": False, "provider": provider, "reason": "缺少" + "、".join(missing)}
+            return {"configured": False, "provider": provider, "network_route": route, "reason": "缺少" + "、".join(missing)}
         return {
             "configured": bool(cfg["validated"]), "provider": "openai_compatible",
+            "network_route": route,
             "reason": "api_configured" if cfg["validated"] else "请先点击“测试 Agent 配置”",
         }
     return {"configured": False, "provider": provider or "disabled", "reason": "provider_disabled"}
@@ -80,6 +96,7 @@ apply_env_overrides(globals(), {
     "PAGE_AGENT_API_BASE": "str",
     "PAGE_AGENT_API_KEY": "str",
     "PAGE_AGENT_MODEL": "str",
+    "PAGE_AGENT_NETWORK_ROUTE": "str",
     "PAGE_AGENT_TIMEOUT": "int",
     "PAGE_AGENT_MAX_STEPS": "int",
     "PAGE_AGENT_TEMPERATURE": "float",

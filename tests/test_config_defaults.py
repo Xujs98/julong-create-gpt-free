@@ -76,6 +76,30 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
         self.assertIn("关闭", fields["AUTO_BROWSER_LOCALE_FROM_IP"]["help"])
         self.assertIn("自定义", fields["BROWSER_LOCALE_PROFILE"]["label"])
 
+    def test_page_agent_choices_have_chinese_labels_and_direct_default(self):
+        """页面 Agent 机器值保持兼容，WebUI 下拉统一展示中文。"""
+        fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
+        self.assertEqual(
+            fields["CLOAK_AGENT_MODE"]["choice_labels"],
+            {"takeover": "完全接管", "hybrid": "混合模式"},
+        )
+        self.assertEqual(
+            fields["PAGE_AGENT_PROVIDER"]["choice_labels"],
+            {"disabled": "关闭", "local": "本地 DOM Agent", "openai_compatible": "兼容模型 API"},
+        )
+        self.assertEqual(
+            fields["PAGE_AGENT_NETWORK_ROUTE"]["choice_labels"],
+            {"direct": "本机直连", "proxy_pool": "代理池出口"},
+        )
+        source = (config_editor._CONFIG_DIR / "page_agent.py").read_text(encoding="utf-8")
+        self.assertEqual(
+            config_editor._parse_value_from_source(source, "PAGE_AGENT_NETWORK_ROUTE", "str"),
+            "direct",
+        )
+
+        template = (config_editor._PROJECT_ROOT / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("(f.choice_labels || {})[x] || x", template)
+
     def test_custom_region_profile_ignores_proxy_geo_when_switch_is_off(self):
         with patch.object(browser, "AUTO_BROWSER_LOCALE_FROM_IP", False):
             profile = browser.build_browser_environment({"country": "US", "timezone": "America/Los_Angeles"})

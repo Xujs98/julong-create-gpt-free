@@ -120,13 +120,15 @@ EDITABLE_FIELDS = [
         "key": "CLOAK_AGENT_MODE", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
         "label": "Agent 运行模式", "help": "hybrid=固定流程优先，仅异常页面介入；takeover=每个注册阶段主动识别并操作",
         "choices": ["takeover", "hybrid"],
+        "choice_labels": {"takeover": "完全接管", "hybrid": "混合模式"},
     },
 
     # ---- 页面 Agent ----
     {
         "key": "PAGE_AGENT_PROVIDER", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
-        "label": "Agent Provider", "help": "disabled=关闭；local=本地 DOM 识别；openai_compatible=调用兼容 Chat Completions 的模型服务",
+        "label": "Agent 服务提供方", "help": "关闭 Agent、本地 DOM 识别，或调用兼容 Chat Completions 的模型服务",
         "choices": ["disabled", "local", "openai_compatible"],
+        "choice_labels": {"disabled": "关闭", "local": "本地 DOM Agent", "openai_compatible": "兼容模型 API"},
     },
     {
         "key": "PAGE_AGENT_API_BASE", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
@@ -140,6 +142,12 @@ EDITABLE_FIELDS = [
     {
         "key": "PAGE_AGENT_MODEL", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
         "label": "Agent 模型", "help": "兼容模型名称；local 模式留空",
+    },
+    {
+        "key": "PAGE_AGENT_NETWORK_ROUTE", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
+        "label": "模型网络出口", "help": "直连=模型请求从本机直接访问；代理池出口=从代理池抽取代理访问模型服务；默认直连",
+        "choices": ["direct", "proxy_pool"],
+        "choice_labels": {"direct": "本机直连", "proxy_pool": "代理池出口"},
     },
     {
         "key": "PAGE_AGENT_TIMEOUT", "file": "page_agent.py", "type": "int", "group": "页面 Agent",
@@ -1061,6 +1069,7 @@ def update_config(updates: dict) -> dict:
         "PAGE_AGENT_API_BASE",
         "PAGE_AGENT_API_KEY",
         "PAGE_AGENT_MODEL",
+        "PAGE_AGENT_NETWORK_ROUTE",
         "PAGE_AGENT_TIMEOUT",
         "PAGE_AGENT_MAX_STEPS",
         "PAGE_AGENT_TEMPERATURE",
