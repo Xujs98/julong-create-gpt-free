@@ -76,6 +76,22 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
         self.assertIn("关闭", fields["AUTO_BROWSER_LOCALE_FROM_IP"]["help"])
         self.assertIn("自定义", fields["BROWSER_LOCALE_PROFILE"]["label"])
 
+    def test_proxy_pool_has_registration_preflight_switch(self):
+        """代理池配置应提供默认关闭的注册前连通性门禁。"""
+        fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
+        field = fields["PROXY_CHECK_BEFORE_REGISTRATION"]
+        self.assertEqual(field["type"], "bool")
+        self.assertEqual(field["group"], "代理池")
+
+        source = (config_editor._CONFIG_DIR / "proxy.py").read_text(encoding="utf-8")
+        self.assertFalse(
+            config_editor._parse_value_from_source(
+                source,
+                "PROXY_CHECK_BEFORE_REGISTRATION",
+                "bool",
+            )
+        )
+
     def test_page_agent_choices_have_chinese_labels_and_direct_default(self):
         """页面 Agent 机器值保持兼容，WebUI 下拉统一展示中文。"""
         fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}

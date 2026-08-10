@@ -2444,6 +2444,31 @@ def create_app(auth_code: str | None = None) -> Flask:
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "workers 非法"}), 400
 
+        # 开关开启时先检查代理池全部出口，检查通过前不创建批次、不领取邮箱、
+        # 不向线程池提交任何注册任务。
+        proxy_check = None
+        from config import proxy as _proxy_cfg
+        if bool(getattr(_proxy_cfg, "PROXY_CHECK_BEFORE_REGISTRATION", False)):
+            from core.proxy_test import ProxyTestError, test_proxy_pool
+
+            try:
+                proxy_check = test_proxy_pool(list(getattr(_proxy_cfg, "PROXY_POOL", []) or []))
+                proxy_check["enabled"] = True
+                logger.info(
+                    "注册任务启动前代理池检查通过：available=%s total=%s",
+                    proxy_check.get("available"), proxy_check.get("total"),
+                )
+            except Exception as exc:
+                reason = str(exc) if isinstance(exc, ProxyTestError) else f"{type(exc).__name__}: 代理检查异常"
+                logger.warning("注册任务已终止：代理池连通性检查失败：%s", reason)
+                return jsonify({
+                    "ok": False,
+                    "code": "proxy_pool_preflight_failed",
+                    "error": f"代理池连通性检查失败：{reason}",
+                    "task_ended": True,
+                    "jobs_created": 0,
+                }), 400
+
         # 提交前先确认池里有足够可用邮箱，给前端一个温和提示（不阻断）
         from config import email as _email_cfg
         from config import register as _register_cfg
@@ -2475,6 +2500,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "warning": f"手动 OTP 模式：将使用 {reg_email}；验证码请在任务页提交",
                 "workers": workers,
                 "batch": _registration_batch_for_jobs(jobs),
+                "proxy_check": proxy_check,
             })
         sources = parse_email_sources(source_override or _email_cfg.EMAIL_SOURCE)
         effective_source = ",".join(sources)
@@ -2573,6 +2599,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             "workers": workers,
             "email_source": effective_source,
             "batch": _registration_batch_for_jobs(jobs),
+            "proxy_check": proxy_check,
         })
 
     @app.get("/api/manual-otp/waiting")

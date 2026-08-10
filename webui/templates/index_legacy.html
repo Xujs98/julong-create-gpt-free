@@ -876,7 +876,13 @@ async function copyText(text) {
 async function api(url, opts) {
   const r = await fetch(url, opts);
   const j = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
+  if (!r.ok) {
+    const error = new Error(j.error || ('HTTP '+r.status));
+    error.code = j.code || '';
+    error.payload = j;
+    error.status = r.status;
+    throw error;
+  }
   return j;
 }
 function debounce(fn, wait=250) {
@@ -931,7 +937,17 @@ $('#btnStart').addEventListener('click', async () => {
     const r = await api('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({count, workers}) });
     $('#regWarn').innerHTML = r.warning ? `<div class="banner warn">${esc(r.warning)}（本次并发 ${r.workers || workers}）</div>` : `<div class="banner info">已提交 ${r.submitted} 个任务，本次并发 ${r.workers || workers}</div>`;
     refreshJobs();
-  } catch(e) { $('#regWarn').innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+  } catch(e) {
+    $('#regWarn').innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+    if (e.code === 'proxy_pool_preflight_failed') {
+      await appAlert('', {
+        title: '代理池连接失败',
+        body: `${e.message}\n\n本次注册任务已结束，未创建任何任务。`,
+        tone: 'danger',
+        confirmText: '知道了',
+      });
+    }
+  }
   finally { setTimeout(restoreBtn, 3000); }
 });
 $('#btnRefreshJobs').addEventListener('click', refreshJobs);

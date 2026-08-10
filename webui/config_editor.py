@@ -558,6 +558,10 @@ EDITABLE_FIELDS = [
         "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
     },
     {
+        "key": "PROXY_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "注册前强制检查代理", "help": "开启后，每次开始注册任务都会检查代理池全部出口；任一代理不通则弹窗提示并终止本次任务",
+    },
+    {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },

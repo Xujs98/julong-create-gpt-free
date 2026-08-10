@@ -2,6 +2,7 @@
 """代理连通性与出口位置测试。"""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlsplit, urlunsplit
 
 from curl_cffi.requests import Session
@@ -87,3 +88,62 @@ def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
             except Exception as exc:
                 errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
     raise ProxyTestError("代理测试失败；" + " | ".join(errors[-3:]))
+
+
+def test_proxy_pool(
+    proxy_urls: list[str] | tuple[str, ...] | None,
+    timeout: float | None = None,
+    *,
+    max_workers: int = 8,
+) -> dict:
+    """并发检查代理池全部出口；只有全部代理连通时返回成功。"""
+    proxies = []
+    seen = set()
+    for item in proxy_urls or []:
+        value = str(item or "").strip()
+        if value and value not in seen:
+            proxies.append(value)
+            seen.add(value)
+    if not proxies:
+        raise ProxyTestError("代理池为空，请先配置至少一个代理")
+
+    workers = max(1, min(int(max_workers or 8), len(proxies), 16))
+    results: list[dict | None] = [None] * len(proxies)
+    failures: list[dict] = []
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="proxy-preflight") as executor:
+        futures = {
+            executor.submit(test_proxy, proxy, timeout=timeout): (index, proxy)
+            for index, proxy in enumerate(proxies)
+        }
+        for future in as_completed(futures):
+            index, proxy = futures[future]
+            masked = masked_proxy_url(proxy)
+            try:
+                results[index] = future.result()
+            except Exception as exc:
+                # 返回前统一使用脱敏地址；详细底层错误仅保留类型，避免代理认证信息进入弹窗。
+                failures.append({
+                    "index": index + 1,
+                    "proxy": masked,
+                    "error": f"{type(exc).__name__}: 连接测试失败",
+                })
+
+    if failures:
+        failures.sort(key=lambda item: int(item.get("index") or 0))
+        preview = "；".join(
+            f"第{item['index']}项 {item['proxy']}"
+            for item in failures[:5]
+        )
+        if len(failures) > 5:
+            preview += f"；另有 {len(failures) - 5} 项失败"
+        raise ProxyTestError(
+            f"代理池连通性检查未通过：{len(failures)}/{len(proxies)} 个代理不可用（{preview}）"
+        )
+
+    return {
+        "ok": True,
+        "total": len(proxies),
+        "available": len(proxies),
+        "failed": 0,
+        "results": [item for item in results if isinstance(item, dict)],
+    }

@@ -81,6 +81,7 @@
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 22px; margin-top: 2px;
   }
+  .app-dialog.is-alert .app-dialog-actions [data-app-dialog-cancel] { display: none; }
   .app-dialog-action {
     min-width: 84px; height: 36px; padding: 0 17px;
     border: 1px solid #dcdfe6; border-radius: 6px;
@@ -211,9 +212,11 @@
     const content = splitMessage(message, options);
     const text = `${content.title}\n${content.body}`;
     const isPrompt = mode === 'prompt';
+    const isAlert = mode === 'alert';
     const tone = isPrompt ? (options.tone || 'confirm') : inferTone(text, options);
     dialog.dataset.tone = tone;
     dialog.classList.toggle('is-prompt', isPrompt);
+    dialog.classList.toggle('is-alert', isAlert);
     titleEl.textContent = content.title;
     bodyEl.textContent = content.body;
     iconEl.innerHTML = icons[isPrompt ? 'prompt' : (tone === 'confirm' ? 'confirm' : 'warning')];
@@ -260,6 +263,7 @@
   });
 
   window.appConfirm = (message, options = {}) => openDialog('confirm', message, '', options);
+  window.appAlert = (message, options = {}) => openDialog('alert', message, '', options);
   window.appPrompt = (message, defaultValue = '', options = {}) => openDialog('prompt', message, defaultValue, options);
 })();
 </script>

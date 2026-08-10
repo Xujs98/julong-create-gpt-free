@@ -19,6 +19,9 @@ PROXY_POOL = [
     "socks5://127.0.0.1:7897",
 ]
 
+# 开启后，每次创建注册批次前必须检查代理池内全部代理；任一项失败则终止提交。
+PROXY_CHECK_BEFORE_REGISTRATION = False
+
 # 套餐/Plus 试用资格查询与 Codex Agent Token 生成共用这组独立网络策略，
 # 避免批量请求被注册代理池中的临时本地代理拖垮，也避免无条件直连造成出口策略失控。
 #   auto   = 优先使用 PLAN_CHECK_PROXY 或代理池；本地代理端口未监听时回退直连
@@ -58,6 +61,7 @@ PROXY = pick_proxy()
 # ---- .env overrides for WebUI editable fields ----
 apply_env_overrides(globals(), {
     'PROXY_POOL': 'list_str_multiline',
+    'PROXY_CHECK_BEFORE_REGISTRATION': 'bool',
     'PLAN_CHECK_PROXY_MODE': 'str',
     'PLAN_CHECK_PROXY': 'str',
     'PLAN_CHECK_TIMEOUT': 'float',

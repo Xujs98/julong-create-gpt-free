@@ -3485,7 +3485,13 @@ async function copyText(text, notify=true) {
 async function api(url, opts) {
   const r = await fetch(url, opts);
   const j = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
+  if (!r.ok) {
+    const error = new Error(j.error || ('HTTP '+r.status));
+    error.code = j.code || '';
+    error.payload = j;
+    error.status = r.status;
+    throw error;
+  }
   return j;
 }
 function debounce(fn, wait=250) {
@@ -3647,6 +3653,14 @@ async function startRegistrationFromInputs(countEl, workersEl, startBtn) {
   } catch(e) {
     REGISTRATION_BATCH_WARNING = e.message;
     renderRegistrationBatchSummary();
+    if (e.code === 'proxy_pool_preflight_failed') {
+      await appAlert('', {
+        title: '代理池连接失败',
+        body: `${e.message}\n\n本次注册任务已结束，未创建任何任务。`,
+        tone: 'danger',
+        confirmText: '知道了',
+      });
+    }
   }
   finally { setTimeout(restoreBtn, 3000); }
 }

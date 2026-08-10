@@ -35,4 +35,13 @@ def test_shared_dialog_has_accessible_keyboard_and_mobile_behavior():
     assert "isPrompt ? (options.tone || 'confirm')" in source
     assert "@media (max-width: 560px)" in source
     assert "window.appConfirm" in source
+    assert "window.appAlert" in source
     assert "window.appPrompt" in source
+
+
+def test_registration_proxy_failure_uses_shared_alert_dialog():
+    for name in PAGE_TEMPLATES:
+        source = (TEMPLATES / name).read_text(encoding="utf-8")
+        assert "proxy_pool_preflight_failed" in source
+        assert "await appAlert(" in source
+        assert "本次注册任务已结束，未创建任何任务" in source
