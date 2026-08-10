@@ -78,7 +78,8 @@ class PageAgent:
           tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '',
           id: el.id || '', autocomplete: el.autocomplete || '', inputmode: el.inputMode || '',
           aria: el.getAttribute('aria-label') || '', placeholder: el.placeholder || '',
-          disabled: !!el.disabled, valuePresent: !!String(el.value || '')
+          disabled: !!el.disabled, checked: !!el.checked,
+          valuePresent: /checkbox|radio/.test(el.type || '') ? !!el.checked : !!String(el.value || '')
         }}));
         const buttons = nodes('button,a,[role=button],input[type=submit],input[type=button]', 36).map((el, i) => ({{
           selector: selector(el, 'button-' + i),
@@ -111,24 +112,27 @@ class PageAgent:
         actions: list[dict] = []
         if stage == "email" and context.get("email"):
             target = match_input(("email", "username")) or next((x for x in inputs if x.get("tag") == "input" and not x.get("disabled")), None)
-            if target:
+            if target and not target.get("valuePresent"):
                 actions.append({"type": "fill", "selector": target.get("selector"), "value_ref": "email"})
-                button = match_button(
-                    ("continue", "next", "sign up", "signup", "注册", "继续", "次へ"),
-                    exclude=("google", "apple", "microsoft", "facebook", "github"),
-                )
-                if button:
-                    actions.append({"type": "click", "selector": button.get("selector")})
+            # 输入值与提交按钮分开决策：完全接管模式每轮重读 HTML，
+            # 第二轮看到邮箱已有值时仍应点击 Continue，而不是返回空动作。
+            button = match_button(
+                ("continue", "next", "sign up", "signup", "注册", "继续", "次へ"),
+                exclude=("google", "apple", "microsoft", "facebook", "github"),
+            )
+            if button:
+                actions.append({"type": "click", "selector": button.get("selector")})
         elif stage in {"otp", "email_otp"} and context.get("otp"):
             target = match_input(("one-time", "otp", "code", "numeric", "tel"))
             if not target:
                 plain = [x for x in inputs if x.get("tag") == "input" and not x.get("disabled")]
                 target = plain[0] if len(plain) == 1 else None
-            if target:
+            if target and not target.get("valuePresent"):
                 actions.append({"type": "fill", "selector": target.get("selector"), "value_ref": "otp"})
-                button = match_button(("continue", "verify", "submit", "确认", "继续", "認証", "次へ"))
-                if button:
-                    actions.append({"type": "click", "selector": button.get("selector")})
+            # OTP 已由上一轮填入时，当前轮继续提交验证码。
+            button = match_button(("continue", "verify", "submit", "确认", "继续", "認証", "次へ"))
+            if button:
+                actions.append({"type": "click", "selector": button.get("selector")})
         elif stage == "password_entry":
             button = match_button((
                 "use password", "continue with password", "password to continue",
@@ -138,20 +142,21 @@ class PageAgent:
                 actions.append({"type": "click", "selector": button.get("selector")})
         elif stage in {"password", "create_password"} and context.get("password"):
             target = match_input(("password", "passwort", "パスワード", "密码", "密碼"))
-            if target:
+            if target and not target.get("valuePresent"):
                 actions.append({"type": "fill", "selector": target.get("selector"), "value_ref": "password"})
-                button = match_button(("continue", "create", "register", "signup", "use password", "続行", "登録", "继续"))
-                if button:
-                    actions.append({"type": "click", "selector": button.get("selector")})
+            # 密码字段已有值时仍需推进注册流程。
+            button = match_button(("continue", "create", "register", "signup", "use password", "続行", "登録", "继续"))
+            if button:
+                actions.append({"type": "click", "selector": button.get("selector")})
         elif stage in {"profile", "about_you"}:
             name_target = match_input(
                 ("fullname", "full-name", "given-name", "displayname", "display-name", "your name", "name", "名前", "姓名"),
                 exclude=("username", "email"),
             )
-            if name_target and context.get("name"):
+            if name_target and context.get("name") and not name_target.get("valuePresent"):
                 actions.append({"type": "fill", "selector": name_target.get("selector"), "value_ref": "name"})
             birthday_target = match_input(("birthday", "birthdate", "birth-date", "date-of-birth", "dob"))
-            if birthday_target and context.get("birthday"):
+            if birthday_target and context.get("birthday") and not birthday_target.get("valuePresent"):
                 actions.append({"type": "fill", "selector": birthday_target.get("selector"), "value_ref": "birthday"})
             for ref, words in (
                 ("birth_year", ("birth-year", "birthyear", "year")),
@@ -159,8 +164,11 @@ class PageAgent:
                 ("birth_day", ("birth-day", "birthday-day", "day")),
             ):
                 target = match_input(words)
-                if target and context.get(ref):
+                if target and context.get(ref) and not target.get("valuePresent"):
                     actions.append({"type": "fill", "selector": target.get("selector"), "value_ref": ref})
+            for item in inputs:
+                if str(item.get("type") or "").lower() == "checkbox" and not item.get("checked"):
+                    actions.append({"type": "click", "selector": item.get("selector")})
             button = match_button(("continue", "submit", "finish", "done", "继续", "完成", "続行", "次へ"))
             if button:
                 actions.append({"type": "click", "selector": button.get("selector")})
@@ -243,6 +251,16 @@ class PageAgent:
             for item in list(snapshot.get("inputs") or []) + list(snapshot.get("buttons") or [])
             if item.get("selector")
         }
+        input_by_selector = {
+            str(item.get("selector") or ""): item
+            for item in (snapshot.get("inputs") or [])
+            if item.get("selector")
+        }
+        button_by_selector = {
+            str(item.get("selector") or ""): item
+            for item in (snapshot.get("buttons") or [])
+            if item.get("selector")
+        }
         actions = []
         for raw in raw_actions:
             if not isinstance(raw, dict):
@@ -257,6 +275,17 @@ class PageAgent:
                 continue
             if kind == "fill" and value_ref not in available_refs:
                 continue
+            if kind == "fill" and input_by_selector.get(selector, {}).get("valuePresent"):
+                # 单步接管中，已填写的控件下一轮应由 Agent 决定点击/提交，
+                # 避免模型重复填值导致 React 页面一直停留原步骤。
+                continue
+            if kind == "click":
+                button_text = " ".join(
+                    str(button_by_selector.get(selector, {}).get(k) or "")
+                    for k in ("text", "aria")
+                ).lower()
+                if any(word in button_text for word in ("google", "apple", "microsoft", "facebook", "github")):
+                    continue
             action["type"] = kind
             actions.append(action)
         return actions
@@ -282,18 +311,28 @@ class PageAgent:
             script = """
             const el=document.querySelector(arguments[0]); if(!el || el.disabled) return false;
             const value=String(arguments[1]); el.focus();
-            const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+            const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:
+              el.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype;
             const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set; if(setter) setter.call(el,value); else el.value=value;
             el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true;
             """
             return bool(driver.execute_script(script, selector, str(value)))
         return False
 
-    def assist(self, driver, stage: str, context: dict | None = None, *, force: bool = False) -> AgentResult:
+    def assist(
+        self,
+        driver,
+        stage: str,
+        context: dict | None = None,
+        *,
+        force: bool = False,
+        snapshot: dict | None = None,
+        max_actions: int | None = None,
+    ) -> AgentResult:
         context = dict(context or {})
         if self.mode == "hybrid" and not force:
             return AgentResult(ok=True, stage=stage, reason="hybrid_waiting_for_fallback")
-        snapshot = self.snapshot(driver)
+        snapshot = snapshot if snapshot is not None else self.snapshot(driver)
         try:
             reason = "actions_executed"
             if self.provider == "local":
@@ -311,7 +350,8 @@ class PageAgent:
                 if not actions:
                     actions = self._local_actions(stage, snapshot, context)
                     reason = "model_empty_fallback_local"
-            actions = actions[: int(self.config["max_steps"])]
+            action_limit = max_actions if max_actions is not None else int(self.config["max_steps"])
+            actions = actions[: max(1, int(action_limit))]
             executed_actions = [action for action in actions if self._execute(driver, action, context)]
             return AgentResult(
                 ok=bool(executed_actions) or not actions,
