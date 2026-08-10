@@ -449,20 +449,29 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     with _executor_lock:
         executor = get_executor(max_workers=workers)
         effective_workers = get_executor_workers()
+        batch = db.create_registration_batch(
+            requested_count=count,
+            workers=effective_workers,
+            email_source=str(email_source or ""),
+        )
         jobs = []
-        for _ in range(count):
-            job = db.create_job(email_source=email_source)
-            try:
-                executor.submit(_run_one_job, job["id"], job["log_file"])
-            except Exception as exc:
-                db.update_job(
-                    int(job["id"]),
-                    status="failed",
-                    error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
-                    completed_at=datetime.now().isoformat(timespec="seconds"),
-                )
-                logger.exception("[Service] 注册任务 #%s 提交线程池失败", job["id"])
-            jobs.append(db.get_job(int(job["id"])) or job)
+        try:
+            for _ in range(count):
+                job = db.create_job(email_source=email_source, batch_id=int(batch["id"]))
+                try:
+                    executor.submit(_run_one_job, job["id"], job["log_file"])
+                except Exception as exc:
+                    db.update_job(
+                        int(job["id"]),
+                        status="failed",
+                        error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
+                        completed_at=datetime.now().isoformat(timespec="seconds"),
+                    )
+                    logger.exception("[Service] 注册任务 #%s 提交线程池失败", job["id"])
+                jobs.append(db.get_job(int(job["id"])) or job)
+        finally:
+            # 封口后批次统计才能区分“仍在创建任务”和“任务创建缺失”。
+            db.seal_registration_batch(int(batch["id"]), [int(job["id"]) for job in jobs])
     logger.info(f"[Service] 已提交 {count} 个注册任务，源={email_source}，workers={effective_workers}")
     return jobs
 

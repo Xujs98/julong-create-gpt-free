@@ -24,6 +24,7 @@ codex_agent_accounts
 
 # 任务记录与运行日志
 注册任务.json
+注册批次日志.json
 注册日志/
 accounts_viewer.html
 

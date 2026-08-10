@@ -202,8 +202,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel, #registrationTaskLogPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -214,6 +214,40 @@
     #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
     #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    .registration-task-log-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      margin-bottom: 12px;
+    }
+    .registration-task-log-head h3 { color: #303133; font-size: 18px; }
+    .registration-task-log-actions { display: inline-flex; align-items: center; gap: 8px; }
+    .registration-task-log-clear, .registration-task-log-close {
+      min-height: 34px; border: 1px solid #dcdfe6; border-radius: 6px;
+      background: #fff; color: #606266; padding: 0 12px; font: inherit;
+      font-size: 13px; cursor: pointer; display: inline-flex; align-items: center;
+      justify-content: center; gap: 6px;
+    }
+    .registration-task-log-clear { color: #e64545; border-color: #f4b5b5; background: #fff5f5; }
+    .registration-task-log-clear:hover { color: #fff; border-color: #e64545; background: #e64545; }
+    .registration-task-log-clear svg, .registration-task-log-close svg {
+      width: 15px; height: 15px; stroke: currentColor; fill: none;
+      stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .registration-task-log-close { width: 34px; padding: 0; }
+    .registration-task-log-table-wrap {
+      max-height: calc(min(760px, calc(100vh - 48px)) - 84px); overflow: auto;
+      border: 1px solid #ebeef5; border-radius: 8px;
+    }
+    .registration-task-log-table { width: 100%; min-width: 760px; table-layout: fixed; border-collapse: collapse; }
+    .registration-task-log-table th, .registration-task-log-table td {
+      padding: 12px 14px; border-bottom: 1px solid #ebeef5; color: #606266;
+      font-size: 13px; text-align: left; font-variant-numeric: tabular-nums;
+    }
+    .registration-task-log-table th { color: #909399; background: #f5f7fa; }
+    .registration-task-log-table tbody tr:last-child td { border-bottom: 0; }
+    .registration-task-log-table .log-success { color: #169b76; font-weight: 700; }
+    .registration-task-log-table .log-failed { color: #e64545; font-weight: 700; }
+    .registration-task-log-table .log-running { color: #e6a23c; font-weight: 700; }
+    .registration-task-log-empty { padding: 48px 16px; color: #909399; text-align: center; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -423,6 +457,19 @@
     }
     #regWarnV2:empty { display: none; }
     #regWarnV2 { margin: 0 16px 8px; }
+    .registration-batch-summary {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px;
+      min-height: 42px; padding: 10px 14px; border: 1px solid #b9d2ff;
+      border-radius: 6px; background: #eef4ff; color: #1d4ed8;
+      font-size: 13px; box-sizing: border-box;
+    }
+    .registration-batch-summary strong { color: #1d4ed8; font-weight: 700; }
+    .registration-batch-summary .batch-summary-time { color: #7c3aed; font-weight: 700; }
+    .registration-batch-summary .batch-summary-success { color: #169b76; font-weight: 700; }
+    .registration-batch-summary .batch-summary-failed { color: #e64545; font-weight: 700; }
+    .registration-batch-summary .batch-summary-warning {
+      flex-basis: 100%; color: #92600a; padding-top: 5px; border-top: 1px dashed #d8c27d;
+    }
     .jobs-toolbar-v2 {
       display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
       padding: 16px;
@@ -452,6 +499,11 @@
     .jobs-toolbar-v2 .jobs-tb-btn--primary:hover:not(:disabled) { background: #5a94ff; border-color: #5a94ff; color: #fff; }
     .jobs-toolbar-v2 .jobs-tb-btn--primary:disabled {
       color: #9CBFFF; background: #EBF2FF; border-color: #D7E5FF;
+    }
+    .jobs-toolbar-v2 .jobs-tb-btn--log { gap: 7px; color: #606266; }
+    .jobs-toolbar-v2 .jobs-tb-btn--log svg {
+      width: 16px; height: 16px; stroke: currentColor; fill: none;
+      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
     }
     .jobs-toolbar-v2 .jobs-tb-btn--good {
       color: #166534; background: #edf8f1; border-color: #b9dfc9;
@@ -592,6 +644,7 @@
     .jobs-table-v2 .col-status { width: 110px; }
     .jobs-table-v2 .col-email { min-width: 200px; width: 24%; }
     .jobs-table-v2 .col-time { width: 170px; }
+    .jobs-table-v2 .col-duration { width: 118px; font-variant-numeric: tabular-nums; }
     .jobs-table-v2 .col-error { width: auto; min-width: 160px; }
     .jobs-table-v2 .col-actions {
       width: 168px; overflow: visible; text-overflow: clip; white-space: nowrap;
@@ -2667,13 +2720,17 @@ try {
           </span>
         </label>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnStartV2">开始注册</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--log" id="btnRegistrationTaskLogV2" title="查看所有注册批次记录">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+          <span>任务日志</span>
+        </button>
       </div>
       <div id="regWarnV2"></div>
       <div class="jobs-table-v2-wrap">
         <table class="jobs-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-status"><col class="col-email">
-            <col class="col-time"><col class="col-time"><col class="col-error"><col class="col-actions">
+            <col class="col-time"><col class="col-time"><col class="col-duration"><col class="col-error"><col class="col-actions">
           </colgroup>
           <thead>
             <tr>
@@ -2683,6 +2740,7 @@ try {
               <th class="col-email">邮箱</th>
               <th class="col-time">开始</th>
               <th class="col-time">完成</th>
+              <th class="col-duration">耗时</th>
               <th class="col-error">错误</th>
               <th class="col-actions">操作</th>
             </tr>
@@ -3125,6 +3183,27 @@ try {
   <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
   <div class="log" id="logContent">加载中…</div>
 </div>
+<div class="body hidden" id="registrationTaskLogPanel" role="dialog" aria-modal="true" aria-labelledby="registrationTaskLogTitle">
+  <div class="registration-task-log-head">
+    <h3 id="registrationTaskLogTitle">注册任务日志</h3>
+    <div class="registration-task-log-actions">
+      <button type="button" class="registration-task-log-clear" id="btnClearRegistrationTaskLog" title="清空已完成的任务日志">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        <span>清空</span>
+      </button>
+      <button type="button" class="registration-task-log-close" id="btnCloseRegistrationTaskLog" title="关闭" aria-label="关闭">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="registration-task-log-table-wrap">
+    <table class="registration-task-log-table">
+      <thead><tr><th>开始时间</th><th>注册量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>状态</th></tr></thead>
+      <tbody id="registrationTaskLogBody"></tbody>
+    </table>
+    <div class="registration-task-log-empty hidden" id="registrationTaskLogEmpty">暂无任务日志</div>
+  </div>
+</div>
 <div id="qrPanel" class="body hidden">
   <h3>支付二维码 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
   <img id="qrImage" alt="支付二维码">
@@ -3155,8 +3234,11 @@ let JOBS = [];
 let JOBS_TOTAL = 0;
 let JOB_STATUS_COUNTS = {};
 let jobsRenderSignature = '';
+let CURRENT_REGISTRATION_BATCH = null;
+let REGISTRATION_BATCHES = [];
+let REGISTRATION_BATCH_WARNING = '';
 const JOB_SELECTED = new Set();
-let activeLogJob = null, logTimer = null, jobsTimer = null;
+let activeLogJob = null, logTimer = null, jobsTimer = null, durationTimer = null, registrationTaskLogTimer = null;
 
 // ---------- 分页状态 ----------
 const PAGERS = {
@@ -3332,6 +3414,29 @@ function formatDateTime(v) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+
+// 把耗时统一格式化为“时:分:秒”，小时超过 24 时继续累计。
+function formatDurationSeconds(value) {
+  const seconds = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remain = seconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(hours)}:${pad(minutes)}:${pad(remain)}`;
+}
+
+// 按任务开始与完成时间计算墙钟耗时；运行中任务使用当前时间。
+function durationSecondsBetween(startedAt, completedAt='') {
+  if (!startedAt) return 0;
+  const start = new Date(startedAt).getTime();
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, Math.floor((end - start) / 1000));
+}
+
+function formatTaskDuration(startedAt, completedAt='') {
+  return startedAt ? formatDurationSeconds(durationSecondsBetween(startedAt, completedAt)) : '-';
+}
 function jobsV2OpIcons() {
   return {
     view: `<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`,
@@ -3442,6 +3547,45 @@ function setRegistrationEmailSource(value, persist=true) {
   if (persist) localStorage.setItem(REG_EMAIL_SOURCE_STORAGE_KEY, next);
 }
 
+// 渲染最近一次注册批次的实时汇总，顶部提示与历史日志使用同一份后端统计。
+function renderRegistrationBatchSummary() {
+  const el = document.getElementById('regWarnV2');
+  if (!el) return;
+  const batch = CURRENT_REGISTRATION_BATCH;
+  if (!batch) {
+    el.innerHTML = REGISTRATION_BATCH_WARNING
+      ? `<div class="banner warn">${esc(REGISTRATION_BATCH_WARNING)}</div>`
+      : '';
+    return;
+  }
+  const total = Number(batch.requested_count || batch.submitted_count || 0);
+  const workers = Number(batch.workers || 0);
+  const active = String(batch.status || '') !== 'completed';
+  const duration = active
+    ? formatTaskDuration(batch.started_at)
+    : formatDurationSeconds(batch.elapsed_seconds || durationSecondsBetween(batch.started_at, batch.completed_at));
+  const running = Number(batch.running_count || 0);
+  const pending = Number(batch.pending_count || 0);
+  el.innerHTML = `
+    <div class="registration-batch-summary">
+      <strong>已提交 ${total} 个任务，本次并发 ${workers}</strong>
+      <span class="batch-summary-time">${active ? '本次已耗时' : '本次总耗时'}：<b data-duration-start="${attrEsc(batch.started_at || '')}" data-duration-end="${attrEsc(batch.completed_at || '')}">${duration}</b></span>
+      <span class="batch-summary-success">成功：${Number(batch.success_count || 0)}</span>
+      <span class="batch-summary-failed">失败：${Number(batch.failed_count || 0)}</span>
+      ${active ? `<span>运行：${running}</span><span>排队：${pending}</span>` : '<span>状态：已完成</span>'}
+      ${REGISTRATION_BATCH_WARNING ? `<span class="batch-summary-warning">${esc(REGISTRATION_BATCH_WARNING)}</span>` : ''}
+    </div>`;
+}
+
+// 每秒只更新可见耗时文本，不重新生成整张任务表。
+function updateVisibleTaskDurations() {
+  document.querySelectorAll('[data-duration-start]').forEach((el) => {
+    const startedAt = el.dataset.durationStart || '';
+    const completedAt = el.dataset.durationEnd || '';
+    el.textContent = formatTaskDuration(startedAt, completedAt);
+  });
+}
+
 async function loadSummary() {
   try {
     const s = await api('/api/summary');
@@ -3483,13 +3627,26 @@ async function startRegistrationFromInputs(countEl, workersEl, startBtn) {
     const body = {count, workers};
     if (emailSource) body.email_source = emailSource;
     const r = await api('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    const warnHtml = r.warning ? `<div class="banner warn">${esc(r.warning)}（本次并发 ${r.workers || workers}）</div>` : `<div class="banner info">已提交 ${r.submitted} 个任务，本次并发 ${r.workers || workers}</div>`;
-    const warnEl = $('#regWarnV2'); if (warnEl) warnEl.innerHTML = warnHtml;
+    REGISTRATION_BATCH_WARNING = r.warning || '';
+    CURRENT_REGISTRATION_BATCH = r.batch || {
+      id: 0,
+      requested_count: Number(r.submitted || count),
+      submitted_count: Number(r.submitted || count),
+      workers: Number(r.workers || workers),
+      started_at: new Date().toISOString(),
+      success_count: 0,
+      failed_count: 0,
+      running_count: 0,
+      pending_count: Number(r.submitted || count),
+      status: 'running',
+    };
+    renderRegistrationBatchSummary();
     const c2 = $('#regCountV2'); if (c2) c2.value = count;
     const w2 = $('#regWorkersV2'); if (w2) w2.value = workers;
     refreshJobs();
   } catch(e) {
-    const warnEl = $('#regWarnV2'); if (warnEl) warnEl.innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+    REGISTRATION_BATCH_WARNING = e.message;
+    renderRegistrationBatchSummary();
   }
   finally { setTimeout(restoreBtn, 3000); }
 }
@@ -3576,6 +3733,8 @@ function bindJobsBodyEvents(bodyEl) {
   if (cancelV2) cancelV2.addEventListener('click', () => cancelAllPendingJobs(cancelV2));
   const refreshV2 = $('#btnRefreshJobsV2');
   if (refreshV2) refreshV2.addEventListener('click', refreshJobs);
+  const taskLogV2 = $('#btnRegistrationTaskLogV2');
+  if (taskLogV2) taskLogV2.addEventListener('click', openRegistrationTaskLogModal);
   const clearSelectedV2 = $('#btnClearSelectedJobsV2');
   if (clearSelectedV2) clearSelectedV2.addEventListener('click', clearSelectedJobsV2);
 
@@ -3611,6 +3770,7 @@ function renderJobs() {
       const stoppable = ['pending','running','stopping'].includes(j.status);
       const started = formatDateTime(j.started_at);
       const completed = formatDateTime(j.completed_at);
+      const duration = formatTaskDuration(j.started_at, j.completed_at);
       const err = j.error_message || '';
       const manualOtp = j.status === 'running' && j.email && j.manual_otp_required;
       return `
@@ -3621,6 +3781,7 @@ function renderJobs() {
         <td class="col-email" title="${esc(j.email || '-')}">${esc(j.email || '-')}</td>
         <td class="col-time" title="${esc(started)}">${esc(started)}</td>
         <td class="col-time" title="${esc(completed)}">${esc(completed)}</td>
+        <td class="col-duration" data-duration-start="${attrEsc(j.started_at || '')}" data-duration-end="${attrEsc(j.completed_at || '')}" title="${esc(duration)}">${esc(duration)}</td>
         <td class="col-error" title="${esc(err)}">${esc(err ? short(err, 60) : '-')}</td>
         <td class="col-actions">
           <div class="jobs-v2-ops">
@@ -3632,7 +3793,7 @@ function renderJobs() {
           </div>
         </td>
       </tr>`;
-    }).join('') || '<tr><td colspan="8" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
+    }).join('') || '<tr><td colspan="9" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
   }
 
 
@@ -3679,9 +3840,11 @@ async function refreshJobs() {
     const nextJobs = res.items || [];
     JOBS_TOTAL = Number(res.total || nextJobs.length || 0);
     JOB_STATUS_COUNTS = res.status_counts || {};
+    CURRENT_REGISTRATION_BATCH = res.current_batch || null;
+    renderRegistrationBatchSummary();
     const totalPages = Math.max(1, Math.ceil(JOBS_TOTAL / p.size));
     if (p.page > totalPages) { p.page = totalPages; return refreshJobs(); }
-    const nextSignature = JSON.stringify({items: nextJobs, total: JOBS_TOTAL, status_counts: JOB_STATUS_COUNTS, page: p.page, size: p.size});
+    const nextSignature = JSON.stringify({items: nextJobs, total: JOBS_TOTAL, status_counts: JOB_STATUS_COUNTS, batch: CURRENT_REGISTRATION_BATCH, page: p.page, size: p.size});
     JOBS = nextJobs;
     if (nextSignature !== jobsRenderSignature) {
       jobsRenderSignature = nextSignature;
@@ -3694,6 +3857,7 @@ async function refreshJobs() {
 let modalScrollY = 0;
 function updateModalScrollLock() {
   const opened = !$('#logPanel').classList.contains('hidden')
+    || !$('#registrationTaskLogPanel').classList.contains('hidden')
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#liveLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
@@ -3719,6 +3883,71 @@ function closeLogModal() {
   clearInterval(logTimer);
   $('#logPanel').classList.add('hidden');
   updateModalScrollLock();
+}
+function closeRegistrationTaskLogModal() {
+  clearInterval(registrationTaskLogTimer);
+  registrationTaskLogTimer = null;
+  $('#registrationTaskLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+
+// 打开批次历史弹窗，并在弹窗可见时同步刷新运行中批次。
+function openRegistrationTaskLogModal() {
+  $('#registrationTaskLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  loadRegistrationTaskLogs();
+  clearInterval(registrationTaskLogTimer);
+  registrationTaskLogTimer = setInterval(loadRegistrationTaskLogs, 3000);
+}
+
+function renderRegistrationTaskLogs() {
+  const body = $('#registrationTaskLogBody');
+  const empty = $('#registrationTaskLogEmpty');
+  if (!body || !empty) return;
+  empty.classList.toggle('hidden', REGISTRATION_BATCHES.length > 0);
+  body.innerHTML = REGISTRATION_BATCHES.map((batch) => {
+    const active = String(batch.status || '') !== 'completed';
+    const duration = active
+      ? formatTaskDuration(batch.started_at)
+      : formatDurationSeconds(batch.elapsed_seconds || durationSecondsBetween(batch.started_at, batch.completed_at));
+    return `<tr>
+      <td title="${esc(formatDateTime(batch.started_at))}">${esc(formatDateTime(batch.started_at))}</td>
+      <td>${Number(batch.requested_count || batch.submitted_count || 0)}</td>
+      <td>${Number(batch.workers || 0)}</td>
+      <td data-duration-start="${attrEsc(batch.started_at || '')}" data-duration-end="${attrEsc(batch.completed_at || '')}">${esc(duration)}</td>
+      <td class="log-success">${Number(batch.success_count || 0)}</td>
+      <td class="log-failed">${Number(batch.failed_count || 0)}</td>
+      <td class="${active ? 'log-running' : ''}">${active ? `执行中（运行 ${Number(batch.running_count || 0)} / 排队 ${Number(batch.pending_count || 0)}）` : '已完成'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadRegistrationTaskLogs() {
+  if ($('#registrationTaskLogPanel').classList.contains('hidden')) return;
+  try {
+    const result = await api('/api/registration-batches?limit=500');
+    REGISTRATION_BATCHES = result.items || [];
+    renderRegistrationTaskLogs();
+  } catch (e) {
+    showToast('任务日志加载失败: ' + e.message);
+  }
+}
+
+async function clearRegistrationTaskLogs(btn) {
+  if (!await appConfirm('确定清空已完成的注册任务日志吗？\n\n仍在执行或排队的批次会保留。')) return;
+  if (btn) btn.disabled = true;
+  try {
+    const result = await api('/api/registration-batches/clear', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}',
+    });
+    showToast(`已清空 ${Number(result.cleared || 0)} 条任务日志${result.kept_active ? `，保留 ${result.kept_active} 条执行中记录` : ''}`);
+    await loadRegistrationTaskLogs();
+    refreshJobs();
+  } catch (e) {
+    showToast('清空任务日志失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 function closeRetryLogModal() {
   retryLogEmail = null;
@@ -3746,6 +3975,8 @@ function closeQrModal() {
 }
 
 $('#btnCloseLog').addEventListener('click', closeLogModal);
+$('#btnCloseRegistrationTaskLog').addEventListener('click', closeRegistrationTaskLogModal);
+$('#btnClearRegistrationTaskLog').addEventListener('click', (e) => clearRegistrationTaskLogs(e.currentTarget));
 
 async function submitManualOtpForJob(btn) {
   const jobId = parseInt(btn.dataset.submitOtpJob, 10);
@@ -7758,6 +7989,7 @@ function setSidebarCollapsed(collapsed, persist = true) {
 loadSummary();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
+durationTimer = setInterval(updateVisibleTaskDurations, 1000);
 setInterval(loadSummary, 5000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
 </script>

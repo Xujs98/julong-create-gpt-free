@@ -41,6 +41,7 @@ _ACCOUNTS_JSON = _PROJECT_ROOT / "注册成功的邮箱.json"
 _ACCOUNTS_TXT = _PROJECT_ROOT / "注册成功的邮箱.txt"
 _TOKENS_TXT = _PROJECT_ROOT / "注册成功的token.txt"
 _JOBS_JSON = _PROJECT_ROOT / "注册任务.json"
+_REGISTRATION_BATCHES_JSON = _PROJECT_ROOT / "注册批次日志.json"
 _VIEWER_HTML = _PROJECT_ROOT / "accounts_viewer.html"
 _CODEX_DIR = _PROJECT_ROOT / "codex_accounts"
 # 导出状态单独存：{ "codex-邮箱-plan.json": {"exported_at": "...", "exported_count": N} }
@@ -56,6 +57,7 @@ _DEFAULT_GENERIC_API_EMAIL_JSON = _GENERIC_API_EMAIL_JSON
 _DEFAULT_ICLOUD_EMAIL_JSON = _ICLOUD_EMAIL_JSON
 _DEFAULT_ACCOUNTS_JSON = _ACCOUNTS_JSON
 _DEFAULT_JOBS_JSON = _JOBS_JSON
+_DEFAULT_REGISTRATION_BATCHES_JSON = _REGISTRATION_BATCHES_JSON
 _DEFAULT_CODEX_EXPORT_STATE = _CODEX_EXPORT_STATE
 _DEFAULT_DOMAIN_EMAIL_JSON = _DOMAIN_EMAIL_JSON
 _DEFAULT_GROUPS_JSON = _GROUPS_JSON
@@ -182,6 +184,7 @@ def _sqlite_source_snapshot() -> tuple[dict[str, list[dict]], dict[str, Any]]:
         "icloud_email_pool": _read_migration_list(_ICLOUD_EMAIL_JSON),
         "registered_accounts": _read_migration_list(_ACCOUNTS_JSON, _LEGACY_ACCOUNTS_JSON),
         "registration_jobs": _read_migration_list(_JOBS_JSON, _LEGACY_JOBS_JSON),
+        "registration_batches": _read_migration_list(_REGISTRATION_BATCHES_JSON),
         "domain_email_pool": _read_migration_list(_DOMAIN_EMAIL_JSON),
     }
     collections["account_groups"] = _account_groups_from_rows(
@@ -897,6 +900,21 @@ def _save_jobs(rows: list[dict]) -> None:
     if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
         _sqlite_store().replace_records("registration_jobs", rows)
     _write_json(_JOBS_JSON, rows)
+
+
+def _load_registration_batches() -> list[dict]:
+    """读取注册批次历史；SQLite 为主存储，JSON 保留兼容镜像。"""
+    if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
+        return _sqlite_store().load_records("registration_batches")
+    rows = _read_json(_REGISTRATION_BATCHES_JSON, [])
+    return rows if isinstance(rows, list) else []
+
+
+def _save_registration_batches(rows: list[dict]) -> None:
+    """保存注册批次历史并同步 JSON 镜像。"""
+    if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
+        _sqlite_store().replace_records("registration_batches", rows)
+    _write_json(_REGISTRATION_BATCHES_JSON, rows)
 
 
 def _find_by_email(rows: list[dict], email: str) -> dict | None:
@@ -3032,6 +3050,184 @@ def codex_accounts_summary() -> dict:
 # registration_jobs
 # ============================================================
 
+_REGISTRATION_TERMINAL_STATUSES = {"success", "failed", "stopped", "cancelled"}
+
+
+def _parse_local_datetime(value: Any) -> datetime | None:
+    """解析项目内不带时区的 ISO 时间，异常值按空处理。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _elapsed_seconds(started_at: Any, completed_at: Any = None, *, now: datetime | None = None) -> int:
+    """计算非负墙钟耗时秒数，供前端格式化为时:分:秒。"""
+    start = _parse_local_datetime(started_at)
+    end = _parse_local_datetime(completed_at) or now or datetime.now()
+    if start is None:
+        return 0
+    try:
+        return max(0, int((end - start).total_seconds()))
+    except TypeError:
+        # 兼容历史数据中带时区和不带时区时间混用的情况。
+        return 0
+
+
+def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime | None = None) -> dict:
+    """根据批次关联任务生成实时统计，不依赖前端自行猜测任务状态。"""
+    current_time = now or datetime.now()
+    if str(batch.get("status") or "") == "completed" and batch.get("completed_at"):
+        # 批次终态一旦落盘就保持不变；后续删除单任务记录不应改写历史成功/失败统计。
+        result = dict(batch)
+        result["elapsed_seconds"] = _elapsed_seconds(batch.get("started_at"), batch.get("completed_at"), now=current_time)
+        return result
+    batch_id = int(batch.get("id") or 0)
+    configured_ids = {
+        int(item) for item in (batch.get("job_ids") or [])
+        if str(item).strip().lstrip("-").isdigit()
+    }
+    related = [
+        row for row in jobs
+        if int(row.get("batch_id") or 0) == batch_id
+        or (configured_ids and int(row.get("id") or 0) in configured_ids)
+    ]
+    status_counts: dict[str, int] = {}
+    for row in related:
+        status = str(row.get("status") or "pending")
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    requested = max(0, int(batch.get("requested_count") or batch.get("submitted_count") or len(related)))
+    sealed = bool(batch.get("sealed_at"))
+    missing = max(0, requested - len(related))
+    success_count = int(status_counts.get("success", 0) or 0)
+    failed_count = sum(int(status_counts.get(status, 0) or 0) for status in ("failed", "stopped", "cancelled"))
+    if sealed:
+        # 已封口后仍缺失的任务代表队列创建未完整落盘，计入失败，保证成功+失败与注册量一致。
+        failed_count += missing
+        pending_count = int(status_counts.get("pending", 0) or 0)
+    else:
+        pending_count = int(status_counts.get("pending", 0) or 0) + missing
+    running_count = sum(int(status_counts.get(status, 0) or 0) for status in ("running", "stopping"))
+    terminal_count = success_count + failed_count
+    is_completed = sealed and requested > 0 and terminal_count >= requested and running_count == 0 and pending_count == 0
+
+    completed_at = str(batch.get("completed_at") or "").strip() or None
+    if is_completed and not completed_at:
+        job_completed = [
+            _parse_local_datetime(row.get("completed_at"))
+            for row in related
+            if str(row.get("status") or "") in _REGISTRATION_TERMINAL_STATUSES
+        ]
+        valid_completed = [item for item in job_completed if item is not None]
+        completed_at = (max(valid_completed) if valid_completed else current_time).isoformat(timespec="seconds")
+
+    result = dict(batch)
+    result.update({
+        "submitted_count": len(related),
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "running_count": running_count,
+        "pending_count": pending_count,
+        "completed_count": terminal_count,
+        "status": "completed" if is_completed else "running",
+        "completed_at": completed_at,
+        "elapsed_seconds": _elapsed_seconds(batch.get("started_at"), completed_at, now=current_time),
+    })
+    return result
+
+
+def create_registration_batch(*, requested_count: int, workers: int, email_source: str) -> dict:
+    """创建一次“开始注册”操作对应的持久化批次日志。"""
+    with _LOCK:
+        rows = _load_registration_batches()
+        now_iso = _now()
+        row = {
+            "id": _next_id(rows),
+            "started_at": now_iso,
+            "completed_at": None,
+            "sealed_at": None,
+            "requested_count": max(0, int(requested_count or 0)),
+            "submitted_count": 0,
+            "workers": max(1, int(workers or 1)),
+            "email_source": str(email_source or ""),
+            "job_ids": [],
+            "success_count": 0,
+            "failed_count": 0,
+            "running_count": 0,
+            "pending_count": max(0, int(requested_count or 0)),
+            "status": "running",
+            "created_at": now_iso,
+        }
+        rows.append(row)
+        _save_registration_batches(rows)
+        return dict(row)
+
+
+def seal_registration_batch(batch_id: int, job_ids: list[int]) -> dict | None:
+    """提交完本批全部任务后封口，使批次可准确判断完成和失败数量。"""
+    with _LOCK:
+        batches = _load_registration_batches()
+        row = next((item for item in batches if int(item.get("id") or 0) == int(batch_id)), None)
+        if row is None:
+            return None
+        row["job_ids"] = [int(item) for item in job_ids]
+        row["submitted_count"] = len(row["job_ids"])
+        row["sealed_at"] = _now()
+        snapshot = _registration_batch_snapshot(row, _load_jobs())
+        row.update(snapshot)
+        _save_registration_batches(batches)
+        return dict(snapshot)
+
+
+def list_registration_batches(limit: int = 200) -> list[dict]:
+    """返回最新批次历史，并实时刷新执行中批次的耗时和成功/失败统计。"""
+    with _LOCK:
+        batches = _load_registration_batches()
+        jobs = _load_jobs()
+        now = datetime.now()
+        changed = False
+        snapshots: list[dict] = []
+        for row in batches:
+            snapshot = _registration_batch_snapshot(row, jobs, now=now)
+            snapshots.append(snapshot)
+            # 终态字段只需在完成时固化；执行中耗时保持实时计算，避免每秒写盘。
+            if snapshot.get("status") == "completed" and any(
+                row.get(key) != snapshot.get(key)
+                for key in ("completed_at", "success_count", "failed_count", "running_count", "pending_count", "completed_count", "status", "elapsed_seconds")
+            ):
+                row.update(snapshot)
+                changed = True
+        if changed:
+            _save_registration_batches(batches)
+        snapshots.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
+        return [dict(item) for item in snapshots[:max(1, int(limit or 200))]]
+
+
+def get_registration_batch(batch_id: int) -> dict | None:
+    """按批次 ID 获取实时统计。"""
+    return next((item for item in list_registration_batches(limit=1_000_000) if int(item.get("id") or 0) == int(batch_id)), None)
+
+
+def clear_registration_batches(*, keep_active: bool = True) -> dict:
+    """清空批次历史；默认保留仍有任务执行或排队的批次。"""
+    with _LOCK:
+        batches = _load_registration_batches()
+        jobs = _load_jobs()
+        snapshots = [_registration_batch_snapshot(row, jobs) for row in batches]
+        active_ids = {
+            int(item.get("id") or 0)
+            for item in snapshots
+            if item.get("status") != "completed"
+        } if keep_active else set()
+        kept = [row for row in batches if int(row.get("id") or 0) in active_ids]
+        cleared = len(batches) - len(kept)
+        _save_registration_batches(kept)
+        return {"cleared": cleared, "kept_active": len(kept)}
+
 def _new_job_row(
     rows: list[dict],
     *,
@@ -3043,6 +3239,7 @@ def _new_job_row(
     retry_action: str | None = None,
     email: str | None = None,
     account_id: int | None = None,
+    batch_id: int | None = None,
 ) -> dict:
     job_uuid = str(uuid.uuid4())
     log_file = str(_LOG_DIR / f"{job_uuid}.log")
@@ -3063,15 +3260,16 @@ def _new_job_row(
         "started_at": None,
         "completed_at": None,
         "account_id": account_id,
+        "batch_id": batch_id,
         "created_at": _now(),
     }
 
 
-def create_job(email_source: str) -> dict:
+def create_job(email_source: str, *, batch_id: int | None = None) -> dict:
     """创建一个首次执行的 pending 注册任务。"""
     with _LOCK:
         rows = _load_jobs()
-        row = _new_job_row(rows, email_source=email_source)
+        row = _new_job_row(rows, email_source=email_source, batch_id=batch_id)
         rows.append(row)
         _save_jobs(rows)
         return dict(row)
@@ -3373,6 +3571,7 @@ def storage_paths() -> dict:
         "codex_export_state": str(_CODEX_EXPORT_STATE),
         "viewer_html": str(_VIEWER_HTML),
         "jobs_json": str(_JOBS_JSON),
+        "registration_batches_json": str(_REGISTRATION_BATCHES_JSON),
         "logs_dir": str(_LOG_DIR),
     }
 

@@ -88,6 +88,8 @@ def _sqlite_db_patch(root: Path):
         "_JOBS_JSON": root / "jobs.json",
         "_DEFAULT_JOBS_JSON": root / "jobs.json",
         "_LEGACY_JOBS_JSON": root / "legacy-jobs.json",
+        "_REGISTRATION_BATCHES_JSON": root / "registration-batches.json",
+        "_DEFAULT_REGISTRATION_BATCHES_JSON": root / "registration-batches.json",
         "_DOMAIN_EMAIL_JSON": root / "domain.json",
         "_DEFAULT_DOMAIN_EMAIL_JSON": root / "domain.json",
         "_GROUPS_JSON": root / "groups.json",

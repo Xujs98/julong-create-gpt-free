@@ -251,7 +251,7 @@ def _compact_job_for_list(row: dict) -> dict:
         "status": row.get("status"),
     }
     for key in (
-        "parent_job_id", "retry_attempt", "email", "started_at", "completed_at",
+        "parent_job_id", "retry_attempt", "batch_id", "email", "started_at", "completed_at",
         "display_status", "retryable", "retry_action", "retry_label",
         "manual_otp_required",
     ):
@@ -272,6 +272,16 @@ def _job_status_counts(rows: list[dict]) -> dict:
         counts[status] = counts.get(status, 0) + 1
     counts["active"] = sum(int(counts.get(s, 0) or 0) for s in ("pending", "running", "stopping"))
     return counts
+
+
+def _registration_batch_for_jobs(jobs: list[dict]) -> dict | None:
+    """从本次提交结果定位批次，兼容旧服务或测试桩没有 batch_id 的情况。"""
+    if not jobs or jobs[0].get("batch_id") is None:
+        return None
+    try:
+        return db.get_registration_batch(int(jobs[0]["batch_id"]))
+    except (TypeError, ValueError):
+        return None
 
 def create_app(auth_code: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
@@ -2398,9 +2408,24 @@ def create_app(auth_code: str | None = None) -> Flask:
             result = _paginate_items(rows, page=page, page_size=page_size)
             result["items"] = [_compact_job_for_list(r) for r in (result.get("items") or [])]
             result["status_counts"] = _job_status_counts(rows)
+            batches = db.list_registration_batches(limit=1)
+            result["current_batch"] = batches[0] if batches else None
             result["compact"] = True
             return jsonify(result)
         return jsonify(rows)
+
+    @app.get("/api/registration-batches")
+    def api_registration_batches():
+        """返回注册批次历史，包含实时耗时与成功、失败数量。"""
+        limit = max(1, min(1000, request.args.get("limit", default=200, type=int) or 200))
+        items = db.list_registration_batches(limit=limit)
+        return jsonify({"ok": True, "items": items, "total": len(items)})
+
+    @app.post("/api/registration-batches/clear")
+    def api_registration_batches_clear():
+        """清空已完成的任务日志，仍在执行的批次继续保留。"""
+        result = db.clear_registration_batches(keep_active=True)
+        return jsonify({"ok": True, **result})
 
     @app.post("/api/jobs")
     def api_jobs_create():
@@ -2449,6 +2474,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "jobs": jobs,
                 "warning": f"手动 OTP 模式：将使用 {reg_email}；验证码请在任务页提交",
                 "workers": workers,
+                "batch": _registration_batch_for_jobs(jobs),
             })
         sources = parse_email_sources(source_override or _email_cfg.EMAIL_SOURCE)
         effective_source = ",".join(sources)
@@ -2546,6 +2572,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             "warning": warning,
             "workers": workers,
             "email_source": effective_source,
+            "batch": _registration_batch_for_jobs(jobs),
         })
 
     @app.get("/api/manual-otp/waiting")
