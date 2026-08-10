@@ -80,7 +80,7 @@ class Browser2FABridgeTests(unittest.TestCase):
         self.assertEqual(kwargs["exclude_codes"], {"683938"})
         self.assertIsInstance(kwargs["after_ts"], float)
 
-    def test_activate_totp_uses_minimal_payload(self):
+    def test_activate_totp_sends_required_factor_type(self):
         session = Mock()
         session.device_id = "device"
         session.navigator_language.return_value = "ja-JP"
@@ -97,6 +97,7 @@ class Browser2FABridgeTests(unittest.TestCase):
         assert kwargs["headers"]["origin"] == "https://chatgpt.com"
         assert json.loads(kwargs["data"]) == {
             "code": "123456",
+            "factor_type": "totp",
             "session_id": "ENROLL_SESSION",
         }
 

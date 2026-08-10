@@ -119,7 +119,7 @@ EDITABLE_FIELDS = [
     {
         "key": "CLOAK_AGENT_MODE", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
         "label": "Agent 运行模式", "help": "hybrid=固定流程优先，仅异常页面介入；takeover=每个注册阶段主动识别并操作",
-        "choices": ["hybrid", "takeover"],
+        "choices": ["takeover", "hybrid"],
     },
 
     # ---- 页面 Agent ----

@@ -417,15 +417,35 @@ def _activate_totp(
     headers["oai-language"] = session.navigator_language()
     headers["origin"] = "https://chatgpt.com"
 
-    # activate_enrollment 只接受验证码和 enroll 返回的会话 ID。
-    # ``factor_type`` 是 enroll 请求字段，继续带到 activate 会被新版接口按
-    # 未知字段处理为 400 invalid_request。
+    # 2026-08 当前 activate_enrollment 明确要求 factor_type；缺少该字段会
+    # 返回 422 body.factor_type Field required。部分旧接口曾拒绝额外字段，
+    # 因此保留一次兼容回退，但主请求始终发送完整字段。
     totp = pyotp.TOTP(str(secret).replace(" ", "").strip())
     totp_code = totp.now()
-    body = json.dumps({"code": totp_code, "session_id": str(session_id)})
+
+    def _activate(code: str, *, include_factor_type: bool = True):
+        payload = {"code": str(code), "session_id": str(session_id)}
+        if include_factor_type:
+            payload["factor_type"] = "totp"
+        return session.post(url, headers=headers, data=json.dumps(payload))
 
     logger.info(f"[2FA] 激活 enrollment, code={totp_code}")
-    resp = session.post(url, headers=headers, data=body)
+    include_factor_type = True
+    resp = _activate(totp_code, include_factor_type=include_factor_type)
+    try:
+        error_text = str(resp.text or "").lower()
+    except Exception:
+        error_text = ""
+
+    # 兼容曾经把 factor_type 视为额外字段的旧接口版本。
+    if resp.status_code in {400, 422} and (
+        "factor_type" in error_text
+        and any(word in error_text for word in ("extra", "unexpected", "unknown", "not permitted", "not allowed"))
+    ):
+        include_factor_type = False
+        logger.info("[2FA] 当前接口拒绝 factor_type，使用旧版最小字段重试")
+        resp = _activate(totp_code, include_factor_type=include_factor_type)
+
     # 30 秒窗口边界附近生成的验证码可能在请求抵达时刚好轮换；仅对
     # 明确的 invalid_request 重试一次，并重新生成验证码，避免重复提交旧码。
     if resp.status_code == 400:
@@ -436,9 +456,8 @@ def _activate_totp(
         if "invalid_request" in error_text or "invalid request" in error_text:
             next_code = totp.now()
             if next_code != totp_code:
-                body = json.dumps({"code": next_code, "session_id": str(session_id)})
                 logger.info("[2FA] 激活验证码跨越时间窗口，使用新验证码重试")
-                resp = session.post(url, headers=headers, data=body)
+                resp = _activate(next_code, include_factor_type=include_factor_type)
     if resp.status_code != 200:
         logger.error(f"[2FA] activate 失败 {resp.status_code}: {resp.text}")
         resp.raise_for_status()
