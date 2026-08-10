@@ -98,6 +98,36 @@ class CloudflareChallengeWaitTests(unittest.TestCase):
         self.assertTrue(_wait_for_cloudflare_challenge(driver, timeout=30, headless=False))
         self.assertTrue(sleep.called)
 
+    @patch("core.roxy_registration.time.sleep")
+    def test_takeover_agent_handles_challenge_before_waiting(self, sleep):
+        """检测到验证盾后应立即调用 Agent，而不是先进入固定等待。"""
+        driver = Mock()
+        driver.execute_script.side_effect = [
+            {"challenge": True, "title": "Just a moment..."},
+            {"challenge": False, "title": "Log in"},
+        ]
+        agent = Mock()
+        agent.snapshot.return_value = {
+            "challenge_frames": [{"selector": "#challenge-frame", "tag": "iframe"}]
+        }
+        result = Mock()
+        result.executed = 1
+        result.executed_actions = [{"type": "click", "selector": "#challenge-frame"}]
+        agent.assist.return_value = result
+
+        self.assertTrue(
+            _wait_for_cloudflare_challenge(
+                driver,
+                timeout=30,
+                headless=False,
+                agent=agent,
+            )
+        )
+
+        agent.snapshot.assert_called_once_with(driver)
+        self.assertEqual(agent.assist.call_args.args[1:4], ("challenge", {}))
+        self.assertTrue(agent.assist.call_args.kwargs["force"])
+
 
 if __name__ == "__main__":
     unittest.main()

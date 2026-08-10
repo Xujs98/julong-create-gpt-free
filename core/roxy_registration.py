@@ -432,8 +432,8 @@ def _cloudflare_challenge_state(driver) -> dict:
         }
 
 
-def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool = False) -> bool:
-    """检测到验证盾后等待用户在可见浏览器中完成，完成后自动续跑。"""
+def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool = False, agent=None) -> bool:
+    """检测验证盾；完全接管时立即调用 Agent 处理，超时值只作为最终上限。"""
     state = _cloudflare_challenge_state(driver)
     if not state.get("challenge"):
         if state.get("normalAuthPage"):
@@ -448,13 +448,48 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
 
     wait_seconds = max(30, int(timeout or 300))
     logger.warning(
-        "%s 检测到 Cloudflare 人机验证，请在浏览器窗口完成验证；最长等待 %ss",
-        _log_prefix(driver), wait_seconds,
+        "%s 检测到 Cloudflare 人机验证%s；最长处理上限 %ss",
+        _log_prefix(driver),
+        "，立即交给完全接管 Agent" if agent is not None else "，请在浏览器窗口完成验证",
+        wait_seconds,
     )
     deadline = time.time() + wait_seconds
     next_log_at = 0.0
+    next_agent_at = 0.0
+    agent_round = 0
     while time.time() < deadline:
         _check_manual_stop()
+        now = time.time()
+        if agent is not None and now >= next_agent_at:
+            agent_round += 1
+            try:
+                snapshot = agent.snapshot(driver)
+                result = agent.assist(
+                    driver,
+                    "challenge",
+                    {},
+                    force=True,
+                    snapshot=snapshot,
+                    max_actions=1,
+                )
+                if result.executed:
+                    logger.info(
+                        "%s [Agent] 人机验证第 %s 轮已执行：action=%s",
+                        _log_prefix(driver), agent_round, result.executed_actions[0],
+                    )
+                    next_agent_at = time.time() + 2.0
+                else:
+                    logger.info(
+                        "%s [Agent] 人机验证第 %s 轮未发现动作，1s 后重读 HTML",
+                        _log_prefix(driver), agent_round,
+                    )
+                    next_agent_at = time.time() + 1.0
+            except Exception as exc:
+                logger.info(
+                    "%s [Agent] 人机验证第 %s 轮处理异常，1s 后重试：%s: %s",
+                    _log_prefix(driver), agent_round, type(exc).__name__, str(exc)[:160],
+                )
+                next_agent_at = time.time() + 1.0
         state = _cloudflare_challenge_state(driver)
         if not state.get("challenge"):
             logger.info("%s Cloudflare 人机验证已完成，继续注册", _log_prefix(driver))
@@ -463,11 +498,13 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
         now = time.time()
         if now >= next_log_at:
             logger.info(
-                "%s 等待完成 Cloudflare 人机验证：title=%s remaining=%ss",
-                _log_prefix(driver), state.get("title") or "-", max(0, int(deadline - now)),
+                "%s %s Cloudflare 人机验证：title=%s remaining=%ss",
+                _log_prefix(driver),
+                "Agent 正在处理" if agent is not None else "等待完成",
+                state.get("title") or "-", max(0, int(deadline - now)),
             )
-            next_log_at = now + 10.0
-        time.sleep(1.0)
+            next_log_at = now + (3.0 if agent is not None else 10.0)
+        time.sleep(0.5 if agent is not None else 1.0)
     raise RuntimeError(f"等待 Cloudflare 人机验证超时（{wait_seconds}s）")
 
 

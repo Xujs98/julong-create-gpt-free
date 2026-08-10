@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from core.cloakbrowser_driver import CloakElement, _resolve_cloak_launch_identity
+from core.cloakbrowser_driver import CloakElement, CloakSeleniumDriver, _resolve_cloak_launch_identity
 
 
 class CloakElementTests(unittest.TestCase):
@@ -118,6 +118,23 @@ class CloakLaunchOptionsTests(unittest.TestCase):
 
 
 class CloakPageRecoveryTests(unittest.TestCase):
+    def test_agent_clicks_visible_cloudflare_checkbox_inside_frame(self):
+        """验证 iframe 已加载时优先进入 frame 点击可见复选控件。"""
+        checkbox = Mock()
+        checkbox.is_visible.return_value = True
+        frame = Mock()
+        frame.url = "https://challenges.cloudflare.com/turnstile/v0/"
+        frame.locator.return_value.first = checkbox
+        page = Mock()
+        page.is_closed.return_value = False
+        page.frames = [frame]
+        driver = CloakSeleniumDriver(browser=Mock(), context=Mock(), page=page)
+
+        self.assertTrue(driver.click_challenge_frame("#challenge-frame"))
+
+        frame.locator.assert_called_once_with("input[type='checkbox']")
+        checkbox.click.assert_called_once_with(timeout=3000)
+
     def test_switches_to_live_page_after_challenge_navigation(self):
         """验证盾完成后旧页面关闭时，适配层自动切换到新页面。"""
         from core.cloakbrowser_driver import CloakSeleniumDriver

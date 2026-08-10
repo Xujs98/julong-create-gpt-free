@@ -122,7 +122,14 @@ class PageAgent:
           tag: el.tagName.toLowerCase(), text: (el.innerText || el.textContent || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
           aria: el.getAttribute('aria-label') || '', disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true'
         }}));
-        return {{url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 2400), inputs, buttons}};
+        const challengeFrames = nodes('iframe[src*="challenges.cloudflare.com"],iframe[title*="Cloudflare"],iframe[src*="turnstile"],.cf-turnstile,[data-cf-challenge]', 12).map((el, i) => ({{
+          selector: selector(el, 'challenge-' + i),
+          tag: el.tagName.toLowerCase(),
+          title: el.getAttribute('title') || '',
+          src: el.getAttribute('src') || '',
+          aria: el.getAttribute('aria-label') || ''
+        }}));
+        return {{url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 2400), inputs, buttons, challenge_frames: challengeFrames}};
         """
         try:
             return driver.execute_script(script) or {}
@@ -146,7 +153,12 @@ class PageAgent:
             return None
 
         actions: list[dict] = []
-        if stage == "email" and context.get("email"):
+        if stage == "challenge":
+            # Turnstile 控件位于跨域 iframe，交由浏览器适配层按 frame 选择器点击。
+            target = next((item for item in (snapshot.get("challenge_frames") or []) if item.get("selector")), None)
+            if target:
+                actions.append({"type": "click", "selector": target.get("selector"), "target": "challenge"})
+        elif stage == "email" and context.get("email"):
             target = match_input(("email", "username")) or next((x for x in inputs if x.get("tag") == "input" and not x.get("disabled")), None)
             if target and not target.get("valuePresent"):
                 actions.append({"type": "fill", "selector": target.get("selector"), "value_ref": "email"})
@@ -292,6 +304,16 @@ class PageAgent:
             for item in list(snapshot.get("inputs") or []) + list(snapshot.get("buttons") or [])
             if item.get("selector")
         }
+        allowed_selectors.update(
+            str(item.get("selector") or "")
+            for item in (snapshot.get("challenge_frames") or [])
+            if item.get("selector")
+        )
+        challenge_selectors = {
+            str(item.get("selector") or "")
+            for item in (snapshot.get("challenge_frames") or [])
+            if item.get("selector")
+        }
         input_by_selector = {
             str(item.get("selector") or ""): item
             for item in (snapshot.get("inputs") or [])
@@ -327,6 +349,9 @@ class PageAgent:
                 ).lower()
                 if any(word in button_text for word in ("google", "apple", "microsoft", "facebook", "github")):
                     continue
+                if selector in challenge_selectors:
+                    # 标记为 challenge 后由 CloakBrowser 适配层进入对应 iframe。
+                    action["target"] = "challenge"
             action["type"] = kind
             actions.append(action)
         return actions
@@ -340,6 +365,11 @@ class PageAgent:
         if kind == "done":
             return True
         if not selector or any(token in selector for token in ("javascript:", "<", ">")):
+            return False
+        if kind == "click" and str(action.get("target") or "").lower() == "challenge":
+            clicker = getattr(driver, "click_challenge_frame", None)
+            if callable(clicker):
+                return bool(clicker(selector))
             return False
         if kind == "click":
             result = driver.execute_script("const el=document.querySelector(arguments[0]); if(!el) return false; el.scrollIntoView({block:'center'}); el.click(); return true;", selector)
@@ -376,7 +406,12 @@ class PageAgent:
         snapshot = snapshot if snapshot is not None else self.snapshot(driver)
         try:
             reason = "actions_executed"
-            if self.provider == "local":
+            if stage == "challenge":
+                # 验证盾属于结构明确的 iframe 控件，直接走本地快速处理，
+                # 避免先等待一次模型网络请求再点击。
+                actions = self._local_actions(stage, snapshot, context)
+                reason = "challenge_fast_path"
+            elif self.provider == "local":
                 actions = self._local_actions(stage, snapshot, context)
             else:
                 try:

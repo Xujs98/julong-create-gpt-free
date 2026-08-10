@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from core.page_agent import PageAgent, PageAgentConfigError, _post_model_request
 
@@ -87,6 +87,34 @@ class PageAgentTests(unittest.TestCase):
         }
         actions = agent._local_actions("password", snapshot, {"password": "secret"})
         self.assertEqual(actions, [{"type": "click", "selector": "#next"}])
+
+    def test_challenge_stage_uses_immediate_local_fast_path(self):
+        """完全接管遇到验证盾时直接调用 iframe 处理，不等待模型请求。"""
+        agent = self._agent(provider="openai_compatible")
+        driver = Mock()
+        driver.click_challenge_frame.return_value = True
+        snapshot = {
+            "challenge_frames": [
+                {"selector": '[data-page-agent-id="page-agent-challenge-0"]', "tag": "iframe"}
+            ]
+        }
+
+        with patch.object(agent, "_model_actions") as model_actions:
+            result = agent.assist(
+                driver,
+                "challenge",
+                {},
+                force=True,
+                snapshot=snapshot,
+                max_actions=1,
+            )
+
+        model_actions.assert_not_called()
+        driver.click_challenge_frame.assert_called_once_with(
+            '[data-page-agent-id="page-agent-challenge-0"]'
+        )
+        self.assertEqual(result.reason, "challenge_fast_path")
+        self.assertEqual(result.executed, 1)
 
     @patch("core.page_agent.requests.Session")
     def test_model_request_direct_ignores_environment_proxy(self, session_factory):

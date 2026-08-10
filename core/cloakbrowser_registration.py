@@ -134,6 +134,7 @@ def _run_agent_takeover_until_input(
             driver,
             timeout=int(getattr(_cfg, "CLOAK_CHALLENGE_TIMEOUT", 300) or 300),
             headless=bool(getattr(_cfg, "CLOAK_HEADLESS", False)),
+            agent=agent,
         )
         snapshot = agent.snapshot(driver)
         state, snapshot = _agent_page_state(driver, snapshot)
@@ -216,6 +217,12 @@ def _run_agent_takeover_after_otp(
     profile_seen = False
     while time.time() < end:
         _check_manual_stop()
+        _wait_for_cloudflare_challenge(
+            driver,
+            timeout=int(getattr(_cfg, "CLOAK_CHALLENGE_TIMEOUT", 300) or 300),
+            headless=bool(getattr(_cfg, "CLOAK_HEADLESS", False)),
+            agent=agent,
+        )
         snapshot = agent.snapshot(driver)
         state, snapshot = _agent_page_state(driver, snapshot)
         logger.info(
@@ -335,6 +342,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             if agent is None:
                 raise RuntimeError("页面 Agent 开关已开启但 Agent 配置未成功")
 
+        takeover_active = bool(agent and agent.mode == "takeover")
         otp_after_ts = time.time()
         logger.info("[Cloak注册] 打开登录页：https://chatgpt.com/auth/login")
         driver.get("https://chatgpt.com/auth/login")
@@ -343,11 +351,11 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             driver,
             timeout=int(getattr(_cfg, "CLOAK_CHALLENGE_TIMEOUT", 300) or 300),
             headless=bool(getattr(_cfg, "CLOAK_HEADLESS", False)),
+            agent=agent if takeover_active else None,
         )
         _maybe_accept(driver)
         _check_manual_stop()
 
-        takeover_active = bool(agent and agent.mode == "takeover")
         current_otp = otp_code
         next_state = None
         profile_submitted = False

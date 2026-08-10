@@ -329,6 +329,45 @@ class CloakSeleniumDriver:
         self._ensure_live_page()
         return self._evaluate(script, args=args, async_mode=False)
 
+    def click_challenge_frame(self, selector: str) -> bool:
+        """进入 Cloudflare 验证 iframe 点击可见控件，返回是否触发动作。"""
+        self._ensure_live_page()
+        page = self.page
+        # 优先进入跨域 frame，避免只点击外层 iframe DOM 节点。
+        for frame in list(getattr(page, "frames", []) or []):
+            frame_url = str(getattr(frame, "url", "") or "").lower()
+            if "challenges.cloudflare.com" not in frame_url and "turnstile" not in frame_url:
+                continue
+            for frame_selector in ("input[type='checkbox']", "[role='checkbox']", "button"):
+                try:
+                    locator = frame.locator(frame_selector).first
+                    if locator.is_visible(timeout=500):
+                        locator.click(timeout=3000)
+                        logger.info("[Cloak] Agent 已点击 Cloudflare 验证控件：frame=%s", frame_url[:180])
+                        return True
+                except Exception:
+                    continue
+
+        # iframe 内部控件尚未挂载时，先点击外层区域，下一轮再读取状态。
+        try:
+            locator = page.locator(selector).first
+            if locator.is_visible(timeout=500):
+                box = locator.bounding_box()
+                if box:
+                    # Turnstile 复选框通常位于 iframe 左侧约 30px、垂直居中处。
+                    page.mouse.click(
+                        box["x"] + min(32.0, max(12.0, box["width"] * 0.12)),
+                        box["y"] + box["height"] / 2,
+                    )
+                    logger.info("[Cloak] Agent 已点击 Cloudflare 验证 iframe：selector=%s", selector[:180])
+                    return True
+        except Exception as exc:
+            logger.debug(
+                "[Cloak] Agent 点击 Cloudflare 控件失败：%s: %s",
+                type(exc).__name__, str(exc)[:160],
+            )
+        return False
+
     def execute_async_script(self, script: str, *args: Any) -> Any:
         self._ensure_live_page()
         return self._evaluate(script, args=args, async_mode=True)
