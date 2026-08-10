@@ -3634,6 +3634,9 @@ async function startRegistrationFromInputs(countEl, workersEl, startBtn) {
     if (emailSource) body.email_source = emailSource;
     const r = await api('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
     REGISTRATION_BATCH_WARNING = r.warning || '';
+    if (Number(r.proxy_check?.removed || 0) > 0) {
+      showToast(`已自动删除 ${Number(r.proxy_check.removed)} 个不可用代理，保留 ${Number(r.proxy_check.available || 0)} 个可用代理`);
+    }
     CURRENT_REGISTRATION_BATCH = r.batch || {
       id: 0,
       requested_count: Number(r.submitted || count),

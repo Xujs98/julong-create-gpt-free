@@ -2444,8 +2444,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "workers 非法"}), 400
 
-        # 开关开启时先检查代理池全部出口，检查通过前不创建批次、不领取邮箱、
-        # 不向线程池提交任何注册任务。
+        # 开关开启时先检查代理池全部出口：失败项自动从配置中删除，至少
+        # 保留一个可用代理才继续创建批次、领取邮箱并提交线程池。
         proxy_check = None
         from config import proxy as _proxy_cfg
         if bool(getattr(_proxy_cfg, "PROXY_CHECK_BEFORE_REGISTRATION", False)):
@@ -2453,10 +2453,33 @@ def create_app(auth_code: str | None = None) -> Flask:
 
             try:
                 proxy_check = test_proxy_pool(list(getattr(_proxy_cfg, "PROXY_POOL", []) or []))
+                valid_proxy_urls = list(proxy_check.pop("valid_proxy_urls", []) or [])
                 proxy_check["enabled"] = True
+                proxy_check["removed"] = int(proxy_check.get("failed") or 0)
+                if proxy_check["removed"]:
+                    # 写入 .env 并热加载，确保本批后续随机抽取只会命中已通过检查的代理。
+                    config_editor.update_config({"PROXY_POOL": valid_proxy_urls})
+                    import config as _config_pkg
+
+                    _config_pkg.reload_all()
+                    logger.warning(
+                        "注册前代理池已自动清理：removed=%s kept=%s",
+                        proxy_check["removed"], proxy_check.get("available"),
+                    )
+                if not proxy_check.get("ok"):
+                    total = int(proxy_check.get("total") or 0)
+                    logger.warning("注册任务已终止：%s 个代理全部不可用，代理池已清空", total)
+                    return jsonify({
+                        "ok": False,
+                        "code": "proxy_pool_preflight_failed",
+                        "error": f"代理池中的 {total} 个代理全部不可用，失败项已自动删除",
+                        "task_ended": True,
+                        "jobs_created": 0,
+                        "proxy_check": proxy_check,
+                    }), 400
                 logger.info(
-                    "注册任务启动前代理池检查通过：available=%s total=%s",
-                    proxy_check.get("available"), proxy_check.get("total"),
+                    "注册任务启动前代理池检查完成：available=%s removed=%s total=%s",
+                    proxy_check.get("available"), proxy_check.get("removed"), proxy_check.get("total"),
                 )
             except Exception as exc:
                 reason = str(exc) if isinstance(exc, ProxyTestError) else f"{type(exc).__name__}: 代理检查异常"

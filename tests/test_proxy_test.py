@@ -40,21 +40,24 @@ class ProxyTestTests(unittest.TestCase):
         )
 
     @patch("core.proxy_test.test_proxy")
-    def test_pool_preflight_requires_every_proxy_to_pass(self, test_one):
-        """代理池中任一项失败时，注册前检查整体失败。"""
+    def test_pool_preflight_keeps_passed_proxy_and_reports_failed_proxy(self, test_one):
+        """代理池中失败项被标记移除，可用项继续保留。"""
         test_one.side_effect = [
             {"ok": True, "proxy": "http://proxy-a.test:8080", "ip": "203.0.113.1"},
             ProxyTestError("连接超时"),
         ]
 
-        with self.assertRaisesRegex(ProxyTestError, "1/2 个代理不可用"):
-            run_proxy_pool_test(
-                ["http://proxy-a.test:8080", "http://user:secret@proxy-b.test:8080"],
-                timeout=2,
-                max_workers=1,
-            )
+        result = run_proxy_pool_test(
+            ["http://proxy-a.test:8080", "http://user:secret@proxy-b.test:8080"],
+            timeout=2,
+            max_workers=1,
+        )
 
         self.assertEqual(test_one.call_count, 2)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["available"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["valid_proxy_urls"], ["http://proxy-a.test:8080"])
 
     @patch("core.proxy_test.test_proxy")
     def test_pool_preflight_returns_summary_when_all_proxies_pass(self, test_one):
@@ -74,6 +77,27 @@ class ProxyTestTests(unittest.TestCase):
         self.assertEqual(result["total"], 2)
         self.assertEqual(result["available"], 2)
         self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["valid_proxy_urls"], [
+            "http://proxy-a.test:8080",
+            "http://proxy-b.test:8080",
+        ])
+
+    @patch("core.proxy_test.test_proxy")
+    def test_pool_preflight_reports_no_available_proxy_without_leaking_urls(self, test_one):
+        """全部失败时返回失败汇总，失败信息只包含脱敏代理地址。"""
+        test_one.side_effect = [RuntimeError("连接超时"), RuntimeError("拒绝连接")]
+
+        result = run_proxy_pool_test(
+            ["http://user:secret@proxy-a.test:8080", "http://proxy-b.test:8080"],
+            timeout=2,
+            max_workers=1,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["available"], 0)
+        self.assertEqual(result["failed"], 2)
+        self.assertEqual(result["valid_proxy_urls"], [])
+        self.assertNotIn("secret", str(result["failures"]))
 
 
 if __name__ == "__main__":

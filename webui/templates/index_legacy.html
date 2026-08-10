@@ -936,6 +936,9 @@ $('#btnStart').addEventListener('click', async () => {
   try {
     const r = await api('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({count, workers}) });
     $('#regWarn').innerHTML = r.warning ? `<div class="banner warn">${esc(r.warning)}（本次并发 ${r.workers || workers}）</div>` : `<div class="banner info">已提交 ${r.submitted} 个任务，本次并发 ${r.workers || workers}</div>`;
+    if (Number(r.proxy_check?.removed || 0) > 0) {
+      showToast(`已自动删除 ${Number(r.proxy_check.removed)} 个不可用代理，保留 ${Number(r.proxy_check.available || 0)} 个可用代理`);
+    }
     refreshJobs();
   } catch(e) {
     $('#regWarn').innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;

@@ -559,7 +559,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PROXY_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
-        "label": "注册前强制检查代理", "help": "开启后，每次开始注册任务都会检查代理池全部出口；任一代理不通则弹窗提示并终止本次任务",
+        "label": "注册前检查并清理代理", "help": "开启后，每次开始注册任务都会检查代理池全部出口；自动删除失败项并保留可用项，没有可用代理时才终止任务",
     },
     {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",

@@ -19,7 +19,7 @@ PROXY_POOL = [
     "socks5://127.0.0.1:7897",
 ]
 
-# 开启后，每次创建注册批次前必须检查代理池内全部代理；任一项失败则终止提交。
+# 开启后，每次创建注册批次前检查代理池全部出口；失败项自动删除，至少一项可用即继续。
 PROXY_CHECK_BEFORE_REGISTRATION = False
 
 # 套餐/Plus 试用资格查询与 Codex Agent Token 生成共用这组独立网络策略，

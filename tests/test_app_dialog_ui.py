@@ -45,3 +45,4 @@ def test_registration_proxy_failure_uses_shared_alert_dialog():
         assert "proxy_pool_preflight_failed" in source
         assert "await appAlert(" in source
         assert "本次注册任务已结束，未创建任何任务" in source
+        assert "自动删除" in source

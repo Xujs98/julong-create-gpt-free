@@ -96,7 +96,7 @@ def test_proxy_pool(
     *,
     max_workers: int = 8,
 ) -> dict:
-    """并发检查代理池全部出口；只有全部代理连通时返回成功。"""
+    """并发检查代理池全部出口，返回可用代理和应移除的失败项。"""
     proxies = []
     seen = set()
     for item in proxy_urls or []:
@@ -128,22 +128,20 @@ def test_proxy_pool(
                     "error": f"{type(exc).__name__}: 连接测试失败",
                 })
 
-    if failures:
-        failures.sort(key=lambda item: int(item.get("index") or 0))
-        preview = "；".join(
-            f"第{item['index']}项 {item['proxy']}"
-            for item in failures[:5]
-        )
-        if len(failures) > 5:
-            preview += f"；另有 {len(failures) - 5} 项失败"
-        raise ProxyTestError(
-            f"代理池连通性检查未通过：{len(failures)}/{len(proxies)} 个代理不可用（{preview}）"
-        )
+    failures.sort(key=lambda item: int(item.get("index") or 0))
+    valid_proxy_urls = [
+        proxies[index]
+        for index, result in enumerate(results)
+        if isinstance(result, dict)
+    ]
 
     return {
-        "ok": True,
+        "ok": bool(valid_proxy_urls),
         "total": len(proxies),
-        "available": len(proxies),
-        "failed": 0,
+        "available": len(valid_proxy_urls),
+        "failed": len(failures),
         "results": [item for item in results if isinstance(item, dict)],
+        "failures": failures,
+        # 仅供后端持久化清洗后的代理池，API 返回前会移除此内部字段。
+        "valid_proxy_urls": valid_proxy_urls,
     }
