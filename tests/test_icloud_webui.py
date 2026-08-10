@@ -53,6 +53,7 @@ class ICloudWebUiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["inserted"], 1)
+        self.assertEqual(response.get_json()["as_registered"], False)
         import_icloud.assert_called_once_with([
             {
                 "email": "sample@icloud.com",
@@ -61,6 +62,37 @@ class ICloudWebUiTests(unittest.TestCase):
                 "totp_secret": "",
             }
         ])
+
+    @patch("webui.app.db.import_icloud_emails")
+    def test_import_route_rejects_invalid_material_before_writing(self, import_icloud):
+        """待修正素材会整批阻断，且不会调用数据库导入。"""
+        response = self.client.post(
+            "/api/outlook/import",
+            json={
+                "source": "icloud",
+                "text": "bad-email----not-a-url\nvalid@icloud.com----https://mail.example/code",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        body = response.get_json()
+        self.assertEqual(body["input_count"], 2)
+        self.assertEqual(body["valid_count"], 1)
+        self.assertEqual(body["invalid_count"], 1)
+        self.assertIn("待修正", body["error"])
+        import_icloud.assert_not_called()
+
+    def test_import_dialog_defaults_to_pool_mode_and_shows_validation_counts(self):
+        """导入弹窗默认按邮箱池模式导入，并展示三类格式检查统计。"""
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('<input id="importAsRegisteredV2" type="checkbox">', html)
+        self.assertIn('id="importCheckResultV2"', html)
+        self.assertIn("有效邮箱 <strong>${check.validCount}</strong> 条", html)
+        self.assertIn("待修正 <strong>${check.invalidCount}</strong> 条", html)
+        self.assertIn("submitBtn.disabled = check.inputCount === 0 || check.invalidCount > 0", html)
 
     @patch("core.proxy_test.test_proxy")
     def test_proxy_route_returns_ip_and_location(self, test_proxy):

@@ -12,6 +12,7 @@ Flask 本地控制台。
 """
 import logging
 import json
+import re
 import threading
 import time
 import uuid
@@ -25,6 +26,62 @@ from core import registration_service as svc
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
+
+# 中文注释：邮箱池导入格式检查统一放在后端，确保前端绕过时也不会写入脏数据。
+_IMPORT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_IMPORT_URL_RE = re.compile(r"^(?:https?://|data:)[^\s]+$", re.IGNORECASE)
+
+
+def _parse_email_import_text(text: str, source: str) -> dict:
+    """解析并校验邮箱素材，返回统计信息、有效记录及逐行错误。"""
+    source = str(source or "").strip().lower()
+    expected = 4 if source == "outlook" else 2
+    input_count = 0
+    invalid = []
+    records = []
+    for line_no, raw_line in enumerate(str(text or "").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        input_count += 1
+        delimiter = "----" if "----" in line else "====" if "====" in line else ""
+        parts = [part.strip() for part in line.split(delimiter)] if delimiter else [line]
+        errors = []
+        if len(parts) < expected:
+            errors.append(f"字段不足（需要至少 {expected} 段）")
+        email = parts[0] if parts else ""
+        if not _IMPORT_EMAIL_RE.fullmatch(email):
+            errors.append("邮箱格式有误")
+        if delimiter and any(not part for part in parts[:expected]):
+            errors.append("必填字段不能为空")
+        if source in ("generic_api", "icloud") and len(parts) >= 2 and not _IMPORT_URL_RE.fullmatch(parts[1]):
+            errors.append("取码地址需为 http(s) 或 data 地址")
+        if errors:
+            invalid.append({"line": line_no, "text": line, "email": email, "errors": errors})
+            continue
+        if source in ("generic_api", "icloud"):
+            records.append({
+                "email": email,
+                "code_url": parts[1],
+                "access_token": parts[2] if len(parts) > 2 else "",
+                "totp_secret": parts[3] if len(parts) > 3 else "",
+            })
+        else:
+            records.append({
+                "email": email,
+                "password": parts[1],
+                "client_id": parts[2],
+                "refresh_token": parts[3],
+                "access_token": parts[4] if len(parts) > 4 else "",
+                "totp_secret": parts[5] if len(parts) > 5 else "",
+            })
+    return {
+        "input_count": input_count,
+        "valid_count": len(records),
+        "invalid_count": len(invalid),
+        "invalid": invalid,
+        "records": records,
+    }
 
 def _pool_source_arg(default: str = "outlook") -> str:
     src = (request.args.get("source") or "").strip()
@@ -1661,33 +1718,22 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook、通用 API 或 iCloud"}), 400
         text = data.get("text") or ""
         as_registered = bool(data.get("as_registered", False))
-        records = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("----") if "----" in line else line.split("====")
-            parts = [p.strip() for p in parts]
-            if source in ("generic_api", "icloud"):
-                if len(parts) < 2:
-                    continue
-                records.append({
-                    "email": parts[0],
-                    "code_url": parts[1],
-                    "access_token": parts[2] if len(parts) > 2 else "",
-                    "totp_secret": parts[3] if len(parts) > 3 else "",
-                })
-                continue
-            if len(parts) < 4:
-                continue
-            records.append({
-                "email": parts[0],
-                "password": parts[1],
-                "client_id": parts[2],
-                "refresh_token": parts[3],
-                "access_token": parts[4] if len(parts) > 4 else "",
-                "totp_secret": parts[5] if len(parts) > 5 else "",
-            })
+        check = _parse_email_import_text(text, source)
+        if not check["input_count"]:
+            need = "2 段：邮箱----HTML 取码地址" if source in ("generic_api", "icloud") else "4 段：email----password----clientId----refreshToken"
+            return jsonify({"ok": False, "error": f"未解析到邮箱素材（需 {need}，---- 或 ==== 分隔）", **{k: check[k] for k in ("input_count", "valid_count", "invalid_count", "invalid")}}), 400
+        if check["invalid_count"]:
+            details = "；".join(
+                f"第 {item['line']} 行：{'、'.join(item['errors'])}"
+                for item in check["invalid"][:8]
+            )
+            suffix = "；其余错误已省略" if check["invalid_count"] > 8 else ""
+            return jsonify({
+                "ok": False,
+                "error": f"有 {check['invalid_count']} 条素材待修正，暂不允许导入：{details}{suffix}",
+                **{k: check[k] for k in ("input_count", "valid_count", "invalid_count", "invalid")},
+            }), 400
+        records = check["records"]
         if not records:
             need = "2 段：邮箱----HTML 取码地址" if source in ("generic_api", "icloud") else "4 段：email----password----clientId----refreshToken"
             return jsonify({"ok": False, "error": f"未解析到有效邮箱行（需 {need}，---- 或 ==== 分隔）"}), 400
@@ -1704,6 +1750,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             "inserted": inserted,
             "skipped": skipped,
             "parsed": len(records),
+            "input_count": check["input_count"],
+            "valid_count": check["valid_count"],
+            "invalid_count": check["invalid_count"],
             "as_registered": as_registered,
         })
 

@@ -2188,7 +2188,27 @@
       outline: none; border-color: #377DFF;
       box-shadow: 0 0 0 3px rgba(55,125,255,.12);
     }
+    .outlook-import-body textarea.is-invalid {
+      border-color: #e64545; box-shadow: 0 0 0 3px rgba(230,69,69,.10);
+    }
     .outlook-import-result:empty { display: none; }
+    .outlook-import-check-result {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-top: -4px;
+    }
+    .outlook-import-check-tag {
+      display: inline-flex; align-items: center; gap: 5px;
+      min-height: 28px; padding: 0 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 700; border: 1px solid transparent;
+    }
+    .outlook-import-check-tag strong { font-size: 14px; line-height: 1; }
+    .outlook-import-check-tag--input { color: #1d4ed8; background: #eef4ff; border-color: #c3d4fb; }
+    .outlook-import-check-tag--valid { color: #166534; background: #edf8f1; border-color: #b9dfc9; }
+    .outlook-import-check-tag--invalid { color: #b42318; background: #fff0f0; border-color: #f5b5b5; }
+    .outlook-import-check-detail {
+      width: 100%; color: #b42318; font-size: 12px; line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
     .outlook-import-foot {
       display: flex; justify-content: flex-end; gap: 10px;
       padding: 14px 20px 18px; border-top: 1px solid #ebeef5; background: #fafbfc;
@@ -3090,13 +3110,14 @@ try {
         <span class="outlook-import-hint">注册来源可在配置里填多个，例如：outlook,generic_api,icloud</span>
       </label>
       <label class="outlook-import-check">
-        <input id="importAsRegisteredV2" type="checkbox" checked>
+        <input id="importAsRegisteredV2" type="checkbox">
         <span>导入后默认视为「注册成功账号」（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex）</span>
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
         <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken&#10;通用API / iCloud: email----取码地址"></textarea>
       </label>
+      <div class="outlook-import-check-result" id="importCheckResultV2" aria-live="polite"></div>
     </div>
     <div class="outlook-import-foot">
       <button type="button" class="jobs-tb-btn" id="btnCancelOutlookImport">取消</button>
@@ -6487,6 +6508,51 @@ const IMPORT_SOURCE_LABELS = {
   generic_api: '通用 API 取码邮箱',
   icloud: 'iCloud 邮箱池',
 };
+
+// 中文注释：前端实时预检只负责给出即时反馈，最终写入仍由后端再次校验。
+const IMPORT_EMAIL_RE_V2 = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const IMPORT_URL_RE_V2 = /^(https?:\/\/|data:)[^\s]+$/i;
+// 中文注释：按非空素材行统计，并保留原始行号用于定位待修正内容。
+function parseImportTextV2(text, source) {
+  const input = String(text || '').split(/\r?\n/)
+    .map((line, index) => ({ line: index + 1, text: line.trim() }))
+    .filter(item => item.text && !item.text.startsWith('#'));
+  const expected = source === 'outlook' ? 4 : 2;
+  const invalid = [];
+  let valid = 0;
+  input.forEach(item => {
+    const line = item.text;
+    const delimiter = line.includes('----') ? '----' : line.includes('====') ? '====' : '';
+    const parts = delimiter ? line.split(delimiter).map(part => part.trim()) : [line];
+    const errors = [];
+    if (parts.length < expected) errors.push(`字段不足（需要至少 ${expected} 段）`);
+    if (!IMPORT_EMAIL_RE_V2.test(parts[0] || '')) errors.push('邮箱格式有误');
+    if (delimiter && parts.slice(0, expected).some(part => !part)) errors.push('必填字段不能为空');
+    if (source !== 'outlook' && parts.length >= 2 && !IMPORT_URL_RE_V2.test(parts[1] || '')) errors.push('取码地址格式有误');
+    if (errors.length) invalid.push({ line: item.line, errors });
+    else valid += 1;
+  });
+  return { inputCount: input.length, validCount: valid, invalidCount: invalid.length, invalid };
+}
+// 中文注释：刷新三类彩色统计标签，并在存在待修正素材时锁定导入按钮。
+function renderImportCheckV2() {
+  const result = document.getElementById('importCheckResultV2');
+  const submitBtn = document.getElementById('btnSubmitOutlookImport');
+  if (!result) return { inputCount: 0, validCount: 0, invalidCount: 0, invalid: [] };
+  const text = document.getElementById('importTextV2')?.value || '';
+  const textEl = document.getElementById('importTextV2');
+  const source = document.getElementById('importSourceV2')?.value || 'outlook';
+  const check = parseImportTextV2(text, source);
+  const details = check.invalid.slice(0, 8).map(item => `第 ${item.line} 行：${item.errors.join('、')}`).join('；');
+  result.innerHTML = `
+    <span class="outlook-import-check-tag outlook-import-check-tag--input">输入 <strong>${check.inputCount}</strong> 条</span>
+    <span class="outlook-import-check-tag outlook-import-check-tag--valid">有效邮箱 <strong>${check.validCount}</strong> 条</span>
+    <span class="outlook-import-check-tag outlook-import-check-tag--invalid">待修正 <strong>${check.invalidCount}</strong> 条</span>
+    ${details ? `<div class="outlook-import-check-detail">${esc(details)}${check.invalidCount > 8 ? '；其余错误已省略' : ''}</div>` : ''}`;
+  if (submitBtn) submitBtn.disabled = check.inputCount === 0 || check.invalidCount > 0;
+  if (textEl) textEl.classList.toggle('is-invalid', check.invalidCount > 0);
+  return check;
+}
 function setImportSourceV2(val) {
   const hidden = document.getElementById('importSourceV2');
   const btn = document.getElementById('importSourceV2Btn');
@@ -6500,6 +6566,7 @@ function setImportSourceV2(val) {
       item.classList.toggle('is-active', item.dataset.value === next);
     });
   }
+  renderImportCheckV2();
 }
 function openOutlookImportModal() {
   const modal = $('#outlookImportModal');
@@ -6512,6 +6579,7 @@ function openOutlookImportModal() {
   modal.classList.remove('hidden');
   updateModalScrollLock();
   const ta = $('#importTextV2');
+  renderImportCheckV2();
   if (ta) setTimeout(() => ta.focus(), 50);
 }
 function closeOutlookImportModal() {
@@ -6560,6 +6628,8 @@ function bindOutlookImportModal() {
       btn.setAttribute('aria-expanded', 'false');
     });
   }
+  const textEl = $('#importTextV2');
+  if (textEl) textEl.addEventListener('input', renderImportCheckV2);
   if (submitBtn) submitBtn.addEventListener('click', () => doImportOutlook());
 }
 async function doImportOutlook() {
@@ -6570,10 +6640,15 @@ async function doImportOutlook() {
   const submitBtn = $('#btnSubmitOutlookImport');
   const text = textEl ? textEl.value : '';
   if (!text.trim()) { showToast('请粘贴邮箱素材'); return; }
+  const source = sourceEl ? sourceEl.value : 'outlook';
+  const check = renderImportCheckV2();
+  if (check.invalidCount > 0) {
+    showToast(`有 ${check.invalidCount} 条素材待修正，请修正后再导入`);
+    return;
+  }
   if (submitBtn) submitBtn.disabled = true;
   try {
-    const source = sourceEl ? sourceEl.value : 'outlook';
-    const as_registered = registeredEl ? !!registeredEl.checked : true;
+    const as_registered = registeredEl ? !!registeredEl.checked : false;
     const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
     const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}`;
