@@ -46,6 +46,10 @@ EDITABLE_FIELDS = [
         "label": "启用 Codex OAuth", "help": "注册成功后自动跑 Codex 授权（全新session+接码），落盘 codex-邮箱.json",
     },
     {
+        "key": "PROTOCOL_BROWSER_LIKE_FLOW", "file": "openai_protocol.py", "type": "bool", "group": "功能开关",
+        "label": "协议注册网页化流程", "help": "仅 protocol 纯协议驱动生效；开启后先访问 ChatGPT 登录页、补齐 CES/Statsig 前端上下文，并使用 login_or_signup 入口；关闭保持原协议流程",
+    },
+    {
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },

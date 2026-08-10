@@ -62,6 +62,20 @@ def _protocol_create_password_enabled() -> bool:
     return bool(getattr(_register_cfg, "ENABLE_CREATE_PASSWORD", False))
 
 
+def _protocol_browser_like_flow_enabled() -> bool:
+    """是否启用纯协议的网页化登录页/前端上下文分支。"""
+    return bool(getattr(_protocol_cfg, "PROTOCOL_BROWSER_LIKE_FLOW", False))
+
+
+def _protocol_signin_screen_hint(password_requested: bool, browser_like: bool) -> str | None:
+    """集中决定 protocol OAuth 入口，便于确保开关关闭时完全兼容旧分支。"""
+    if browser_like:
+        return "login_or_signup"
+    if password_requested:
+        return "signup"
+    return None
+
+
 def _is_protocol_password_landing(url: str) -> bool:
     text = str(url or "").lower()
     return any(path in text for path in (
@@ -307,6 +321,17 @@ def run_registration(
         network_preflight(session)
         human_delay("navigate")
 
+        protocol_browser_like = _protocol_browser_like_flow_enabled()
+        if protocol_browser_like:
+            # 开关开启时先走真实 ChatGPT 首页/登录页导航，再进入 NextAuth
+            # signin；关闭时不增加任何网页化请求，保持原有纯协议顺序。
+            from core.chatgpt_bootstrap import browser_like_registration_bootstrap
+            browser_like_registration_bootstrap(
+                session,
+                strict=bool(getattr(_protocol_cfg, "CHATGPT_BOOTSTRAP_STRICT", False)),
+            )
+            human_delay("navigate")
+
         # 根据 2026-07-19 HAR 补齐匿名态 ChatGPT 首屏/模型预热链路。
         if getattr(_protocol_cfg, "CHATGPT_ANON_BOOTSTRAP_ENABLED", True):
             from core.chatgpt_bootstrap import anonymous_bootstrap
@@ -325,11 +350,12 @@ def run_registration(
         csrf_token = get_csrf_token(session)
         human_delay("api")
 
-        # 步骤3: 发起 OAuth signin。密码注册必须显式请求 signup screen，
-        # 否则服务端会按默认 login_or_signup 直接落到 passwordless OTP。
+        # 步骤3: 发起 OAuth signin。网页化开关使用真实页面默认的
+        # login_or_signup；关闭时密码分支继续显式使用 signup，保持历史行为。
         password_requested = _protocol_create_password_enabled()
-        if password_requested:
-            authorize_url = signin_openai(session, csrf_token, email, "signup")
+        signin_screen_hint = _protocol_signin_screen_hint(password_requested, protocol_browser_like)
+        if signin_screen_hint:
+            authorize_url = signin_openai(session, csrf_token, email, signin_screen_hint)
         else:
             # 保留原三参数调用形态，兼容外部驱动/测试对 signin_openai 的包装。
             authorize_url = signin_openai(session, csrf_token, email)
@@ -350,6 +376,15 @@ def run_registration(
             authorize_url,
             allow_password_page=password_requested,
         )
+        if protocol_browser_like:
+            # 真实页面在 auth 重定向后会继续 flush 前端事件；该步骤失败只记录，
+            # 不阻断核心 OAuth/OTP 注册链路（严格模式除外）。
+            from core.chatgpt_bootstrap import frontend_context_bootstrap
+            frontend_context_bootstrap(
+                session,
+                stage="signup",
+                strict=bool(getattr(_protocol_cfg, "CHATGPT_BOOTSTRAP_STRICT", False)),
+            )
         create_password = False
         if password_requested:
             password_landing = get_create_account_page(session)

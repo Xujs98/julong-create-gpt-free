@@ -106,6 +106,8 @@ EMAIL_SOURCE=icloud
 ENABLE_CREATE_PASSWORD=True
 ENABLE_2FA=False
 AUTO_BROWSER_LOCALE_FROM_IP=True
+# 仅 protocol 纯协议驱动：开启后增加登录页/前端上下文预热，关闭保持原流程
+PROTOCOL_BROWSER_LIKE_FLOW=False
 ```
 
 代理池建议在 WebUI「配置 → 代理」中填写，每行一个代理地址。也可以在 `.env` 使用带换行转义的值：
@@ -200,3 +202,14 @@ python -m pip install -r requirements.txt
 ```
 
 如果浏览器注册无法启动，重点检查：注册驱动、代理连通性、浏览器工具/API Key、邮箱取码配置以及 `logs/webui.log`。
+
+### 纯协议网页化流程开关
+
+在 WebUI「配置 → 功能开关」打开「协议注册网页化流程」，或在 `.env` 设置
+`PROTOCOL_BROWSER_LIKE_FLOW=True`。开启后，`protocol` 驱动会先导航 ChatGPT 首页和登录页，
+补齐 CES/Statsig 前端上下文，并使用 `login_or_signup` 入口；协议注册的 OTP、密码、OAuth
+和 Sentinel 步骤仍按原业务逻辑执行。关闭开关即可恢复原有纯协议请求顺序。
+
+该开关只影响 `REGISTRATION_DRIVER=protocol`，RoxyBrowser、CloakBrowser、Browser Use
+和 Skyvern 驱动不受影响。前端预热默认是 best-effort，失败会记录日志并继续主注册；如需把
+预热错误作为硬失败，可同时设置 `CHATGPT_BOOTSTRAP_STRICT=True`。

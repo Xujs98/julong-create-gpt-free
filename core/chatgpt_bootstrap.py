@@ -7,17 +7,29 @@
 """
 from __future__ import annotations
 
+import gzip
 import json
 import logging
+import time
 from typing import Iterable
+from urllib.parse import urlencode
 
 from core.session import BrowserSession
 from core.sentinel import generate_requirements_token
+from config import (
+    STATSIG_CLIENT_KEY,
+    STATSIG_SDK_VERSION,
+    STATSIG_SDK_TYPE,
+)
 
 logger = logging.getLogger(__name__)
 
 _ANON_BASE = "https://chatgpt.com/backend-anon"
 _API_BASE = "https://chatgpt.com/backend-api"
+_CES_BASE = "https://chatgpt.com/ces/v1"
+_CHATGPT_HOME = "https://chatgpt.com/"
+_CHATGPT_LOGIN = "https://chatgpt.com/auth/login"
+_AUTH_LOGIN = "https://auth.openai.com/log-in"
 
 
 def _json_post(session: BrowserSession, url: str, payload: dict, referer: str, headers: dict | None = None):
@@ -37,6 +49,98 @@ def _safe_request(label: str, fn, *, strict: bool = False):
             raise
         logger.debug("[Bootstrap] %s 跳过/失败：%s: %s", label, type(exc).__name__, str(exc)[:180])
         return None
+
+
+def _statsig_event(stage: str, *, now_ms: int | None = None) -> dict:
+    """构造一条轻量前端事件；批量发送使用 gzip，与浏览器 SDK 形态一致。"""
+    timestamp = int(now_ms or time.time() * 1000)
+    return {
+        "eventName": "page_view",
+        "value": str(stage or "protocol"),
+        "metadata": {
+            "source": "chatgpt_web",
+            "route": "/auth/login" if stage in {"login", "signup"} else "/",
+        },
+        "time": timestamp,
+    }
+
+
+def _statsig_register(session: BrowserSession, stage: str, referer: str, *, strict: bool = False):
+    """发送与 ChatGPT Web 前端同形态的 CES/Statsig 注册批次。"""
+    now_ms = int(time.time() * 1000)
+    events = [_statsig_event(stage, now_ms=now_ms)]
+    query = urlencode({
+        "k": STATSIG_CLIENT_KEY,
+        "st": STATSIG_SDK_TYPE,
+        "sv": STATSIG_SDK_VERSION,
+        "t": now_ms,
+        "sid": getattr(session, "oai_session_id", None) or getattr(session, "device_id", ""),
+        "ec": len(events),
+        "gz": 1,
+    })
+    headers = session.get_chatgpt_headers(referer=referer)
+    headers.update({
+        "content-type": "application/octet-stream",
+        "content-encoding": "gzip",
+        "origin": "https://chatgpt.com",
+        "statsig-event-count": str(len(events)),
+        "statsig-sdk-type": STATSIG_SDK_TYPE,
+        "statsig-sdk-version": STATSIG_SDK_VERSION,
+    })
+    payload = gzip.compress(json.dumps({"events": events}, separators=(",", ":")).encode("utf-8"))
+    return _safe_request(
+        "CES/Statsig rgstr",
+        lambda: session.post(f"{_CES_BASE}/rgstr?{query}", headers=headers, data=payload),
+        strict=strict,
+    )
+
+
+def frontend_context_bootstrap(session: BrowserSession, *, stage: str = "protocol", strict: bool = False) -> None:
+    """预热 CES/Statsig 前端上下文；所有请求均为可失败的 best-effort。"""
+    referer = _CHATGPT_LOGIN if stage in {"login", "signup"} else _CHATGPT_HOME
+    _statsig_register(session, stage, referer, strict=strict)
+    _safe_request(
+        "CES project settings",
+        lambda: session.get(
+            f"{_CES_BASE}/projects/oai/settings",
+            headers=session.get_chatgpt_headers(referer=referer),
+        ),
+        strict=strict,
+    )
+
+
+def browser_like_registration_bootstrap(session: BrowserSession, *, strict: bool = False) -> None:
+    """打开真实登录页并补齐前端初始化，再进入协议 OAuth 注册。"""
+    logger.info("[Bootstrap] 协议网页化流程：登录页/前端上下文预热开始")
+    _safe_request(
+        "ChatGPT home document",
+        lambda: session.get(
+            _CHATGPT_HOME,
+            headers=session.get_chatgpt_navigate_headers(referer="https://chatgpt.com/", user_initiated=True),
+            allow_redirects=True,
+        ),
+        strict=strict,
+    )
+    _safe_request(
+        "ChatGPT auth login document",
+        lambda: session.get(
+            _CHATGPT_LOGIN,
+            headers=session.get_chatgpt_navigate_headers(referer=_CHATGPT_HOME, user_initiated=True),
+            allow_redirects=True,
+        ),
+        strict=strict,
+    )
+    _safe_request(
+        "OpenAI auth login document",
+        lambda: session.get(
+            _AUTH_LOGIN,
+            headers=session.get_auth_navigate_headers(referer=_CHATGPT_LOGIN, user_initiated=True),
+            allow_redirects=True,
+        ),
+        strict=strict,
+    )
+    frontend_context_bootstrap(session, stage="login", strict=strict)
+    logger.info("[Bootstrap] 协议网页化流程：登录页/前端上下文预热完成")
 
 
 def _system_hint_paths(modes: Iterable[str], base: str) -> list[str]:

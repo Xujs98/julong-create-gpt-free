@@ -7,6 +7,8 @@ SENTINEL_SV 是 sdk.js 的版本号，会随 OpenAI 更新而变化，
 更新时去 https://sentinel.openai.com/sentinel/<version>/sdk.js 找当前版本。
 """
 
+from config.env_loader import apply_env_overrides
+
 # OAuth 客户端 ID（固定）
 OPENAI_CLIENT_ID = "app_X8zY6vW2pQ9tR3dE7nK1jL5gH"
 
@@ -48,3 +50,16 @@ CHATGPT_ANON_BOOTSTRAP_ENABLED = True
 CHATGPT_AUTH_BOOTSTRAP_ENABLED = True
 # True 时预热失败会中断主流程；默认 False，仅记录日志并继续。
 CHATGPT_BOOTSTRAP_STRICT = False
+
+# 纯协议注册是否补齐真实 ChatGPT 登录页、CES/Statsig 前端上下文，并使用
+# login_or_signup 入口。默认关闭，保持原有协议流程和请求量不变。
+PROTOCOL_BROWSER_LIKE_FLOW = False
+
+# ---- .env overrides for WebUI editable fields ----
+apply_env_overrides(globals(), {
+    "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE": "bool",
+    "CHATGPT_ANON_BOOTSTRAP_ENABLED": "bool",
+    "CHATGPT_AUTH_BOOTSTRAP_ENABLED": "bool",
+    "CHATGPT_BOOTSTRAP_STRICT": "bool",
+    "PROTOCOL_BROWSER_LIKE_FLOW": "bool",
+})
