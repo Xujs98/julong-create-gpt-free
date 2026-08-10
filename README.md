@@ -1,4 +1,8 @@
-# Turb GPT Free Register
+# julong-create-gpt-free
+
+GitHub：<https://github.com/Xujs98/julong-create-gpt-free>
+
+快速上手：[从拉取项目到启动 WebUI 的完整教程](docs/quickstart.md)
 
 ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目支持三套注册驱动：
 
@@ -84,6 +88,27 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 配置页支持热加载，保存后无需重启。
 - Roxy 团队/项目可在配置页获取并保存。
 
+### 账号搜索联合语法
+
+账号列表搜索框支持普通文本搜索与联合条件搜索：
+
+- `&&`：所有条件同时满足。
+- `!`：排除条件；`!**free` 兼容带 Markdown 星号的输入。
+- 普通邮箱、Token、来源文本搜索保持原有功能。
+
+示例：
+
+```text
+!free                         排除当前套餐为 free 的账号
+free(可Plus试用)&&[2FA]       筛选可 Plus 试用且已启用 2FA
+free&&![2FA]                  筛选 free 且未启用 2FA
+[提链]&&[2FA]                筛选已提链且有 2FA
+```
+
+可用状态标签：
+
+`[2FA]`、`[无2FA]`、`[提链]`、`[未提链]`、`[接码]`、`[Token]`、`[Codex]`、`[Agent]`、`[归档]`、`[查活正常]`、`[查活失败]`、`[套餐查询失败]`。
+
 ---
 
 ## 环境要求
@@ -132,6 +157,12 @@ WebUI 配置页保存这些字段时会写入 `.env`（不是 config 源码）�
 ---
 
 ## 快速开始
+
+### 0. 直接启动
+
+完整的 Git 拉取、Python/Node 环境、全部依赖、浏览器工具、`.env` 配置和启动步骤，请查看：
+
+**[docs/quickstart.md：快速启动与使用教程](docs/quickstart.md)**
 
 ### WebUI 授权码
 

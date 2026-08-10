@@ -57,4 +57,31 @@ def test_account_search_inputs_explain_formula_syntax():
     for relative in ("webui/templates/index.html", "webui/templates/index_legacy.html"):
         source = (root / relative).read_text(encoding="utf-8")
         assert "free(可Plus试用)&&[2FA]" in source
-        assert "&& 组合，! 排除" in source
+        assert "搜索邮箱、Token、来源；&& 联合，! 排除" in source
+        assert "free&&![2FA]" in source
+        assert "[提链]&&[2FA]" in source
+        for label in (
+            "[2FA]", "[无2FA]", "[提链]", "[未提链]", "[接码]", "[Token]",
+            "[Codex]", "[Agent]", "[归档]", "[查活正常]", "[查活失败]", "[套餐查询失败]",
+        ):
+            assert label in source
+        assert "!**free" in source
+
+
+def test_account_search_supports_all_documented_status_aliases():
+    cases = [
+        ("[2FA]", {"twofa": True}),
+        ("[无2FA]", {"twofa": False}),
+        ("[提链]", {"link_completed": True}),
+        ("[未提链]", {"link_completed": False}),
+        ("[接码]", {"sms_completed": True}),
+        ("[Token]", {"access_token": "ACCESS_TOKEN"}),
+        ("[Codex]", {"codex_status": "success"}),
+        ("[Agent]", {"codex_agent_status": "success"}),
+        ("[归档]", {"archived": True}),
+        ("[查活正常]", {"live_check_ok": True}),
+        ("[查活失败]", {"live_check_ok": False}),
+        ("[套餐查询失败]", {"plan_check_status": "failed"}),
+    ]
+    for query, options in cases:
+        assert _account_matches_query(_row(**options), query), query
