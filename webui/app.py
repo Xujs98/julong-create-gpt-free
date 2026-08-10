@@ -2741,6 +2741,34 @@ def create_app(auth_code: str | None = None) -> Flask:
             logger.warning("代理测试失败: %s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    @app.post("/api/agent/test")
+    def api_agent_test():
+        """校验页面 Agent 配置；local 模式执行本地配置检查，模型模式发最小探测请求。"""
+        try:
+            data = request.get_json(silent=True) or {}
+            raw_updates = data.get("updates") if isinstance(data, dict) else {}
+            # 测试按钮允许先保存页面 Agent 表单，再执行探测请求，避免用户
+            # 必须先点击一次通用“保存”才能建立验证状态。只接受 Agent 白名单键。
+            agent_updates = {
+                str(key): value
+                for key, value in (raw_updates.items() if isinstance(raw_updates, dict) else [])
+                if str(key).startswith("PAGE_AGENT_") and str(key) != "PAGE_AGENT_VALIDATED"
+            }
+            saved = None
+            if agent_updates:
+                saved = config_editor.update_config(agent_updates)
+                import config as _config_pkg
+
+                _config_pkg.reload_all()
+            from core.page_agent import test_configuration
+            result = test_configuration()
+            if saved is not None:
+                result["saved"] = saved
+            return jsonify(result), (200 if result.get("ok", result.get("configured", False)) else 400)
+        except Exception as exc:
+            logger.warning("页面 Agent 配置测试失败: %s: %s", type(exc).__name__, exc)
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
+
     @app.post("/api/cloudmail/gen-token")
     def api_cloudmail_gen_token():
         """手动生成 CloudMail Authorization Token，并把本次填写的 CloudMail 配置一并写入 .env。"""

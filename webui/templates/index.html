@@ -6860,6 +6860,7 @@ function configSectionIntro(name) {
   if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
   if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
   if (name === 'RoxyBrowser') return 'RoxyBrowser API、环境与代理相关设置。';
+  if (name === '页面 Agent') return '页面识别与自动操作 Agent。先完成 Agent 配置测试，再到本地指纹浏览器开启 Agent。';
   if (name === 'Codex') return 'Codex 授权驱动、CPA 与 sub2api 相关设置。';
   if (name === '邮箱 / OTP') return '邮箱来源、OTP 等待与各邮箱服务商参数。';
   if (name === '接码平台') return '接码通道、国家代码与本地取号服务参数。';
@@ -6994,6 +6995,7 @@ function renderFeatureSwitchField(f, opts = {}) {
   const on = !!fv;
   const withIcon = opts.withIcon !== false;
   const icon = withIcon ? configFeatureIcon(f.key) : null;
+  const agentReady = !f.requires_agent || !!(CONFIG.find(x => x.key === 'PAGE_AGENT_STATUS') || {}).status_ok;
   return `
     <div class="config-switch-v2">
       ${withIcon ? `
@@ -7003,15 +7005,20 @@ function renderFeatureSwitchField(f, opts = {}) {
         </span>
         <div class="config-switch-v2-label">${esc(f.label)}</div>
       </div>` : `<div class="config-switch-v2-label">${esc(f.label)}</div>`}
-      <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(f.key)}"${on ? ' checked' : ''} aria-label="${attrEsc(f.label)}">
+      <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(f.key)}"${on ? ' checked' : ''}${agentReady ? '' : ' disabled aria-disabled="true"'} aria-label="${attrEsc(f.label)}">
       <p class="config-switch-v2-help">${esc(f.help || '')}</p>
+      ${f.requires_agent && !agentReady ? '<p class="config-switch-v2-help" style="color:var(--orange);">请先在“页面 Agent”中完成配置并点击测试</p>' : ''}
     </div>
   `;
 }
 function renderConfigPlainFieldV2(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let control = '';
-  if (f.type === 'int') {
+  if (f.readonly && f.type === 'status') {
+    control = `<div class="config-agent-status ${f.status_ok ? 'is-ok' : 'is-failed'}">${esc(fv == null ? '' : fv)}</div>`;
+  } else if (Array.isArray(f.choices) && f.choices.length) {
+    control = `<select data-key="${attrEsc(f.key)}">${f.choices.map(x => `<option value="${attrEsc(x)}"${String(x) === String(fv) ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`;
+  } else if (f.type === 'int') {
     control = `<input type="number" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'float') {
     control = `<input type="number" step="0.1" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
@@ -7061,6 +7068,8 @@ function renderMixedConfigSectionV2(name, fields, intro) {
   const inputs = fields.filter(f => f.type !== 'bool');
   const extra = name === 'RoxyBrowser'
     ? renderRoxyWorkspaceToolsV2()
+    : name === '页面 Agent'
+      ? renderPageAgentToolsV2()
     : name === '代理池'
       ? renderProxyTestToolsV2()
       : '';
@@ -7075,6 +7084,50 @@ function renderMixedConfigSectionV2(name, fields, intro) {
       </div>
     </section>
   `;
+}
+
+function renderPageAgentToolsV2() {
+  const status = (CONFIG.find(f => f.key === 'PAGE_AGENT_STATUS') || {}).value || '未测试';
+  return `
+    <div class="roxy-workspace-box" style="margin-top:18px;margin-bottom:4px;">
+      <div>
+        <b>Agent 配置测试</b>
+        <div class="hint">local 模式执行本地 DOM Agent 校验；openai_compatible 模式发送最小模型请求。</div>
+      </div>
+      <div class="action-cell"><button class="btn" type="button" id="btnTestPageAgentV2">测试 Agent 配置</button></div>
+      <div id="pageAgentTestStatusV2" class="muted" style="font-size:12px;">${esc(status)}</div>
+    </div>
+  `;
+}
+
+function bindPageAgentToolsV2() {
+  const btn = $('#btnTestPageAgentV2');
+  const status = $('#pageAgentTestStatusV2');
+  if (!btn || !status || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    status.textContent = '正在测试 Agent 配置...';
+    try {
+      const section = btn.closest('[data-config-section="页面 Agent"]');
+      const updates = {};
+      section?.querySelectorAll('[data-key]').forEach(el => {
+        const f = CONFIG.find(x => x.key === el.dataset.key);
+        if (f && !f.readonly) updates[f.key] = readConfigElementValue(el, f);
+      });
+      const r = await api('/api/agent/test', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({updates}),
+      });
+      status.innerHTML = `<span style="color:var(--green);">✅ ${esc(r.message || '配置成功')}</span>`;
+      showToast('Agent 配置测试成功');
+      Object.keys(updates).forEach(k => { delete CONFIG_PENDING_UPDATES[k]; });
+      await loadConfig();
+    } catch (e) {
+      status.innerHTML = `<span style="color:var(--red);">测试失败：${esc(e.message)}</span>`;
+    } finally { btn.disabled = false; }
+  });
 }
 
 function renderProxyTestToolsV2() {
@@ -7453,6 +7506,7 @@ function renderConfigLayoutV2() {
   bindRoxyWorkspaceToolsV2();
   bindCloudMailToolsV2();
   bindProxyTestToolsV2();
+  bindPageAgentToolsV2();
   syncRegionProfileControlV2();
 }
 function scrollToConfigSection(slug) {

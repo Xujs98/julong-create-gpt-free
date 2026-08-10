@@ -111,6 +111,48 @@ EDITABLE_FIELDS = [
         "key": "CLOAK_KEEP_BROWSER_OPEN_ON_ERROR", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
         "label": "失败时保留Cloak窗口", "help": "注册异常时保留当前页面，便于查看失败原因",
     },
+    {
+        "key": "CLOAK_ENABLE_AGENT", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
+        "label": "启用页面 Agent", "help": "只有“页面 Agent”配置成功后才可开启；Agent 会根据下方模式介入页面操作",
+        "requires_agent": True,
+    },
+    {
+        "key": "CLOAK_AGENT_MODE", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
+        "label": "Agent 运行模式", "help": "hybrid=固定流程优先，仅异常页面介入；takeover=每个注册阶段主动识别并操作",
+        "choices": ["hybrid", "takeover"],
+    },
+
+    # ---- 页面 Agent ----
+    {
+        "key": "PAGE_AGENT_PROVIDER", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
+        "label": "Agent Provider", "help": "disabled=关闭；local=本地 DOM 识别；openai_compatible=调用兼容 Chat Completions 的模型服务",
+        "choices": ["disabled", "local", "openai_compatible"],
+    },
+    {
+        "key": "PAGE_AGENT_API_BASE", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
+        "label": "Agent API 地址", "help": "兼容 Chat Completions 的服务地址，例如 http://HOST/v1；local 模式留空",
+    },
+    {
+        "key": "PAGE_AGENT_API_KEY", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
+        "label": "Agent API Key", "help": "模型服务密钥，写入 .env；local 模式留空",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "PAGE_AGENT_MODEL", "file": "page_agent.py", "type": "str", "group": "页面 Agent",
+        "label": "Agent 模型", "help": "兼容模型名称；local 模式留空",
+    },
+    {
+        "key": "PAGE_AGENT_TIMEOUT", "file": "page_agent.py", "type": "int", "group": "页面 Agent",
+        "label": "Agent 请求超时(秒)", "help": "单次模型请求最大等待时间",
+    },
+    {
+        "key": "PAGE_AGENT_MAX_STEPS", "file": "page_agent.py", "type": "int", "group": "页面 Agent",
+        "label": "Agent 最大动作数", "help": "单个页面阶段最多执行的动作数量，建议 3-6",
+    },
+    {
+        "key": "PAGE_AGENT_TEMPERATURE", "file": "page_agent.py", "type": "float", "group": "页面 Agent",
+        "label": "Agent 温度", "help": "模型动作随机性；页面操作建议 0",
+    },
 
     # ---- Browser Use Cloud ----
     {
@@ -848,6 +890,26 @@ def get_config() -> list[dict]:
         item["storage"] = "env"
         item["value"] = value
         out.append(item)
+    try:
+        from config.page_agent import configuration_status
+        status = configuration_status()
+        out.append({
+            "key": "PAGE_AGENT_STATUS",
+            "file": "page_agent.py",
+            "type": "status",
+            "group": "页面 Agent",
+            "label": "Agent 配置状态",
+            "help": "只有状态为“配置成功”时，本地指纹浏览器的 Agent 开关才允许开启",
+            "readonly": True,
+            "value": "配置成功" if status.get("configured") else f"未配置：{status.get('reason') or '未知原因'}",
+            "status_ok": bool(status.get("configured")),
+        })
+    except Exception as exc:
+        out.append({
+            "key": "PAGE_AGENT_STATUS", "file": "page_agent.py", "type": "status",
+            "group": "页面 Agent", "label": "Agent 配置状态", "help": "读取 Agent 配置失败",
+            "readonly": True, "value": f"读取失败：{type(exc).__name__}", "status_ok": False,
+        })
     return out
 
 
@@ -986,13 +1048,82 @@ def update_config(updates: dict) -> dict:
     updated, ignored = [], []
     env_updates: dict[str, str] = {}
 
+    # 配置页面一次提交整个表单，因此不能仅按 key 是否出现来判断 Agent
+    # 配置发生变化。以当前有效值做比较，避免每次保存其他分组时意外使
+    # Agent 验证状态失效。
+    current_values = {
+        item["key"]: item.get("value")
+        for item in get_config()
+        if isinstance(item, dict) and item.get("key")
+    }
+    agent_keys = {
+        "PAGE_AGENT_PROVIDER",
+        "PAGE_AGENT_API_BASE",
+        "PAGE_AGENT_API_KEY",
+        "PAGE_AGENT_MODEL",
+        "PAGE_AGENT_TIMEOUT",
+        "PAGE_AGENT_MAX_STEPS",
+        "PAGE_AGENT_TEMPERATURE",
+    }
+
+    def _same_value(key: str, value) -> bool:
+        field = _FIELD_BY_KEY.get(key)
+        if not field:
+            return True
+        vtype = field["type"]
+        if vtype in {"str", "list_str_multiline"}:
+            left = _normalize_config_value(current_values.get(key), vtype)
+            right = _normalize_config_value(value, vtype)
+            return left == right
+        if vtype == "bool":
+            def _as_bool(raw) -> bool:
+                if isinstance(raw, str):
+                    return raw.strip().lower() in {"true", "1", "yes", "on", "y"}
+                return bool(raw)
+
+            return _as_bool(current_values.get(key)) == _as_bool(value)
+        try:
+            return float(current_values.get(key)) == float(value)
+        except (TypeError, ValueError):
+            return str(current_values.get(key)) == str(value)
+
+    changed_agent_keys = {
+        key for key in agent_keys if key in updates and not _same_value(key, updates.get(key))
+    }
+
+    raw_enable_agent = updates.get("CLOAK_ENABLE_AGENT")
+    enable_agent = (
+        raw_enable_agent.strip().lower() in {"true", "1", "yes", "on", "y"}
+        if isinstance(raw_enable_agent, str)
+        else bool(raw_enable_agent)
+    )
+    if "CLOAK_ENABLE_AGENT" in updates and enable_agent:
+        from config.page_agent import configuration_status
+        if changed_agent_keys:
+            raise ValueError("页面 Agent 配置已变化，请先单独保存并测试成功后再开启")
+        status = configuration_status()
+        if not status.get("configured"):
+            raise ValueError(f"页面 Agent 尚未配置成功：{status.get('reason') or '请先完成 Agent 配置'}")
+    if "CLOAK_AGENT_MODE" in updates:
+        mode = str(updates.get("CLOAK_AGENT_MODE") or "hybrid").strip().lower()
+        if mode not in {"hybrid", "takeover"}:
+            raise ValueError("CLOAK_AGENT_MODE 仅支持 hybrid 或 takeover")
+
     for key, value in updates.items():
         field = _FIELD_BY_KEY.get(key)
         if field is None:
             ignored.append(key)
             continue
+        if field.get("readonly"):
+            ignored.append(key)
+            continue
         env_updates[key] = _format_env_value(value, field["type"])
         updated.append(key)
+
+    if changed_agent_keys:
+        # 任何关键 Agent 配置变化都使之前的连接验证失效；测试成功后
+        # core.page_agent.test_configuration() 会再次写入 True。
+        env_updates["PAGE_AGENT_VALIDATED"] = "False"
 
 
     env_updated = write_env_values(env_updates) if env_updates else []

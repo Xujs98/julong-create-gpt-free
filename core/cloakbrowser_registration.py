@@ -14,6 +14,7 @@ from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.session_state import build_saved_session, capture_browser_cookies
+from core.page_agent import PageAgentConfigError, attach_agent
 
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
@@ -23,9 +24,25 @@ from core.roxy_registration import (  # noqa: F401
     _click_resend_email_otp, _complete_profile_page, _fetch_chatgpt_session, _check_manual_stop,
     _wait_for_cloudflare_challenge,
     _require_password_if_enabled, _create_password_enabled,
+    _registration_password,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _agent_checkpoint(agent, driver, stage: str, context: dict, *, force: bool = False):
+    if agent is None:
+        return None
+    result = agent.assist(driver, stage, context, force=force)
+    logger.info(
+        "[Cloak注册][Agent] stage=%s mode=%s ok=%s executed=%s reason=%s",
+        stage, agent.mode, result.ok, result.executed, result.reason,
+    )
+    return result
+
+
+def _registration_password_for_agent() -> str:
+    return _registration_password()
 
 
 def _run_in_isolated_thread(fn, *args, **kwargs):
@@ -91,9 +108,20 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
     create_acknowledged = False
     keep_browser_on_error = False
     openai_password: str | None = None
+    agent = None
     try:
         driver, opened = build_cloak_driver(proxy=proxy)
         logger.info("[Cloak注册] 开始：%s，profile=%s", email, opened.profile_id)
+        if bool(getattr(_cfg, "CLOAK_ENABLE_AGENT", False)):
+            mode = str(getattr(_cfg, "CLOAK_AGENT_MODE", "hybrid") or "hybrid").strip().lower()
+            if mode not in {"hybrid", "takeover"}:
+                raise RuntimeError(f"CLOAK_AGENT_MODE 配置无效：{mode}")
+            try:
+                agent = attach_agent(driver, mode=mode)
+            except PageAgentConfigError as exc:
+                raise RuntimeError(f"页面 Agent 开关已开启但配置未成功：{exc}") from exc
+            if agent is None:
+                raise RuntimeError("页面 Agent 开关已开启但 Agent 配置未成功")
 
         otp_after_ts = time.time()
         logger.info("[Cloak注册] 打开登录页：https://chatgpt.com/auth/login")
@@ -108,6 +136,8 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         _check_manual_stop()
 
         next_state = _submit_email_and_wait_next(driver, email, attempts=3)
+        if agent and agent.mode == "takeover":
+            _agent_checkpoint(agent, driver, next_state, {"email": email, "password": openai_password}, force=True)
         _wait_for_cloudflare_challenge(
             driver,
             timeout=int(getattr(_cfg, "CLOAK_CHALLENGE_TIMEOUT", 300) or 300),
@@ -123,9 +153,16 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         # 新版 Auth 的 OTP 页会提供“使用密码继续”按钮。密码开关开启时，
         # 必须先点击该分支并提交 create-account/password，再开始邮箱取码。
         if next_state == "otp":
-            openai_password = _ensure_password_before_otp(
-                driver, email, next_state, openai_password, driver_name="CloakBrowser"
-            )
+            try:
+                openai_password = _ensure_password_before_otp(
+                    driver, email, next_state, openai_password, driver_name="CloakBrowser"
+                )
+            except Exception:
+                if not agent:
+                    raise
+                _agent_checkpoint(agent, driver, "password", {"email": email, "password": _registration_password_for_agent()}, force=True)
+                openai_password = _fill_password_page_if_present(driver, email, timeout=20, allow_login_password=True)
+                _require_password_if_enabled(openai_password, email, driver_name="CloakBrowser")
         elif next_state != "logged_in":
             openai_password = _fill_password_page_if_present(driver, email, timeout=25)
             _require_password_if_enabled(openai_password, email, driver_name="CloakBrowser")
@@ -159,8 +196,20 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                     current_otp = None
                     continue
             logger.info("[Cloak注册][OTP] 收到验证码：%s", current_otp)
+            if agent and agent.mode == "takeover":
+                agent_result = _agent_checkpoint(agent, driver, "otp", {"email": email, "otp": current_otp}, force=True)
+                if agent_result and agent_result.executed:
+                    outcome = _wait_after_email_otp_submit(driver, timeout=10)
+                    if outcome == "accepted":
+                        break
             _clear_otp_inputs(driver)
-            _type_otp(driver, current_otp)
+            try:
+                _type_otp(driver, current_otp)
+            except RuntimeError:
+                if not agent:
+                    raise
+                _agent_checkpoint(agent, driver, "otp", {"email": email, "otp": current_otp}, force=True)
+                _type_otp(driver, current_otp)
             human_delay("otp_input")
             try:
                 _click_continue(driver)

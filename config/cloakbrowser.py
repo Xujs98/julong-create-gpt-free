@@ -47,5 +47,10 @@ CLOAK_KEEP_BROWSER_OPEN: bool = False
 # 注册异常时保留窗口，便于查看实际页面状态；成功完成后仍按 CLOAK_KEEP_BROWSER_OPEN 清理。
 CLOAK_KEEP_BROWSER_OPEN_ON_ERROR: bool = True
 
+# 页面 Agent：必须先在“页面 Agent”配置中选择 provider 并通过配置校验，
+# 本开关才允许开启。模式可选 hybrid（异常时介入）或 takeover（每个阶段主动接管）。
+CLOAK_ENABLE_AGENT: bool = False
+CLOAK_AGENT_MODE: str = "hybrid"
+
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH': 'bool', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_CHALLENGE_TIMEOUT': 'int', 'CLOAK_KEEP_BROWSER_OPEN': 'bool', 'CLOAK_KEEP_BROWSER_OPEN_ON_ERROR': 'bool'})
+apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH': 'bool', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_CHALLENGE_TIMEOUT': 'int', 'CLOAK_KEEP_BROWSER_OPEN': 'bool', 'CLOAK_KEEP_BROWSER_OPEN_ON_ERROR': 'bool', 'CLOAK_ENABLE_AGENT': 'bool', 'CLOAK_AGENT_MODE': 'str'})
