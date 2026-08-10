@@ -415,16 +415,30 @@ def _activate_totp(
     headers["authorization"] = f"Bearer {access_token}"
     headers["oai-device-id"] = session.device_id
     headers["oai-language"] = session.navigator_language()
+    headers["origin"] = "https://chatgpt.com"
 
-    totp_code = pyotp.TOTP(secret).now()
-    body = json.dumps({
-        "code": totp_code,
-        "factor_type": "totp",
-        "session_id": session_id,
-    })
+    # activate_enrollment 只接受验证码和 enroll 返回的会话 ID。
+    # ``factor_type`` 是 enroll 请求字段，继续带到 activate 会被新版接口按
+    # 未知字段处理为 400 invalid_request。
+    totp = pyotp.TOTP(str(secret).replace(" ", "").strip())
+    totp_code = totp.now()
+    body = json.dumps({"code": totp_code, "session_id": str(session_id)})
 
     logger.info(f"[2FA] 激活 enrollment, code={totp_code}")
     resp = session.post(url, headers=headers, data=body)
+    # 30 秒窗口边界附近生成的验证码可能在请求抵达时刚好轮换；仅对
+    # 明确的 invalid_request 重试一次，并重新生成验证码，避免重复提交旧码。
+    if resp.status_code == 400:
+        try:
+            error_text = resp.text.lower()
+        except Exception:
+            error_text = ""
+        if "invalid_request" in error_text or "invalid request" in error_text:
+            next_code = totp.now()
+            if next_code != totp_code:
+                body = json.dumps({"code": next_code, "session_id": str(session_id)})
+                logger.info("[2FA] 激活验证码跨越时间窗口，使用新验证码重试")
+                resp = session.post(url, headers=headers, data=body)
     if resp.status_code != 200:
         logger.error(f"[2FA] activate 失败 {resp.status_code}: {resp.text}")
         resp.raise_for_status()

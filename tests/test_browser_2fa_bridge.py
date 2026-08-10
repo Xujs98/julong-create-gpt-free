@@ -1,7 +1,8 @@
+import json
 import unittest
 from unittest.mock import Mock, patch
 
-from core.account_export import browser_session_from_driver, setup_2fa, setup_2fa_from_browser
+from core.account_export import _activate_totp, browser_session_from_driver, setup_2fa, setup_2fa_from_browser
 
 
 class Browser2FABridgeTests(unittest.TestCase):
@@ -78,6 +79,26 @@ class Browser2FABridgeTests(unittest.TestCase):
         kwargs = wait_for_otp.call_args.kwargs
         self.assertEqual(kwargs["exclude_codes"], {"683938"})
         self.assertIsInstance(kwargs["after_ts"], float)
+
+    def test_activate_totp_uses_minimal_payload(self):
+        session = Mock()
+        session.device_id = "device"
+        session.navigator_language.return_value = "ja-JP"
+        session.get_chatgpt_headers.return_value = {"content-type": "application/json"}
+        response = Mock(status_code=200)
+        response.json.return_value = {"success": True}
+        session.post.return_value = response
+
+        with patch("core.account_export.pyotp.TOTP") as totp_factory:
+            totp_factory.return_value.now.return_value = "123456"
+            assert _activate_totp(session, "ACCESS", "SECRET", "ENROLL_SESSION") is True
+
+        kwargs = session.post.call_args.kwargs
+        assert kwargs["headers"]["origin"] == "https://chatgpt.com"
+        assert json.loads(kwargs["data"]) == {
+            "code": "123456",
+            "session_id": "ENROLL_SESSION",
+        }
 
 
 if __name__ == "__main__":

@@ -1262,67 +1262,92 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
 
 
-def _type_otp(driver, code: str) -> None:
+def _type_otp(driver, code: str, timeout: int = 15) -> None:
     from selenium.webdriver.common.by import By
 
-    # 单输入框
-    for selector in [
-        "input[autocomplete='one-time-code']",
-        "input[name='code']",
-        "input[inputmode='numeric']",
-        "input[type='tel']",
-    ]:
-        els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
-        if len(els) == 1:
+    expected = str(code or "").strip()
+    if not expected:
+        raise ValueError("OTP 为空")
+    end = time.time() + max(1, int(timeout or 15))
+    last_state = {}
+    while time.time() < end:
+        # 单输入框：新版页面可能先停在 email-otp/send 的过渡文档，
+        # 因此必须轮询 DOM，而不是首次查找失败就终止任务。
+        for selector in (
+            "input[autocomplete='one-time-code']",
+            "input[name='code']",
+            "input[inputmode='numeric']",
+            "input[type='tel']",
+        ):
+            try:
+                els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
+            except Exception:
+                els = []
+            if len(els) != 1:
+                continue
             target = els[0]
-            # Cloak 的 React OTP 输入框偶尔丢失逐字符 key event，造成 6 位码只剩 5 位。
-            # 优先使用 Playwright fill 原子写入，再派发 input/change；普通 Selenium 元素
-            # 仍走原有人工化输入并回读校验。
             fill = getattr(target, "fill", None)
             if callable(fill):
                 try:
-                    fill(str(code))
+                    fill(expected)
                     driver.execute_script(
                         "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
                         "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
                         target,
                     )
                 except Exception:
-                    _human_type_text(driver, target, code, clear=True)
+                    _human_type_text(driver, target, expected, clear=True)
             else:
-                _human_type_text(driver, target, code, clear=True)
+                _human_type_text(driver, target, expected, clear=True)
             try:
                 observed = str(driver.execute_script("return String(arguments[0].value || '');", target) or "")
             except Exception:
                 observed = ""
-            if observed != str(code):
-                _set_element_value(driver, target, str(code))
+            if observed != expected:
+                _set_element_value(driver, target, expected)
                 try:
                     observed = str(driver.execute_script("return String(arguments[0].value || '');", target) or "")
                 except Exception:
                     observed = ""
-            if observed != str(code):
-                raise RuntimeError(f"OTP 输入值校验失败：expected={code!r}, observed={observed!r}")
+            if observed == expected:
+                return
+            raise RuntimeError(f"OTP 输入值校验失败：expected={expected!r}, observed={observed!r}")
+
+        # 分格输入框：部分 React Aria 版本只留下 data-index/tabindex，
+        # 不再暴露 inputmode/name/autocomplete，因此按属性命中后再按 6 格兜底。
+        try:
+            boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
+        except Exception:
+            boxes = []
+        numeric_boxes = []
+        for e in boxes:
+            try:
+                attrs = " ".join(
+                    str(e.get_attribute(k) or "")
+                    for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type", "data-index", "tabindex")
+                ).lower()
+            except Exception:
+                attrs = ""
+            if any(x in attrs for x in ("numeric", "one-time", "code", "otp", "tel", "data-index")):
+                numeric_boxes.append(e)
+        if len(numeric_boxes) < len(expected) and len(boxes) == len(expected):
+            numeric_boxes = boxes
+        if len(numeric_boxes) >= len(expected):
+            for e, ch in zip(numeric_boxes, expected):
+                if _browser_actions_enabled():
+                    _human_scroll_to(driver, e)
+                    time.sleep(random.uniform(0.04, 0.18))
+                e.send_keys(ch)
+                if _browser_actions_enabled():
+                    human_delay("keystroke")
             return
+        try:
+            last_state = _email_otp_page_state(driver)
+        except Exception:
+            last_state = {"url": getattr(driver, "current_url", "")}
+        time.sleep(0.35)
 
-    # 6 个分格输入框
-    boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
-    numeric_boxes = []
-    for e in boxes:
-        attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
-        if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
-            numeric_boxes.append(e)
-    if len(numeric_boxes) >= len(code):
-        for e, ch in zip(numeric_boxes, code):
-            if _browser_actions_enabled():
-                _human_scroll_to(driver, e)
-                time.sleep(random.uniform(0.04, 0.18))
-            e.send_keys(ch)
-            if _browser_actions_enabled():
-                human_delay("keystroke")
-        return
-
-    raise RuntimeError("找不到 OTP 输入框")
+    raise RuntimeError(f"找不到 OTP 输入框：timeout={timeout}s state={last_state}")
 
 
 def _email_otp_page_state(driver) -> dict:
@@ -1835,6 +1860,19 @@ def _is_login_password_page(driver) -> bool:
     return '/log-in/password' in url
 
 
+def _has_visible_password_input(driver) -> bool:
+    """检查当前文档是否已经渲染可交互的密码输入框。"""
+    state = _password_page_state(driver)
+    return any(
+        i.get('visible') and (
+            str(i.get('type') or '').lower() == 'password'
+            or 'password' in str(i.get('name') or '').lower()
+            or str(i.get('autocomplete') or '').lower() in {'new-password', 'current-password'}
+        )
+        for i in (state.get('inputs') or [])
+    )
+
+
 def _click_passwordless_signup_if_present(driver) -> dict:
     """
     新版注册/登录流在 password 页可能默认要求密码。
@@ -1968,7 +2006,9 @@ def _click_create_password_entry_if_present(driver, timeout: int = 30) -> dict:
 
         if clicked:
             time.sleep(0.5)
-            if _is_signup_password_page(driver):
+            if _is_signup_password_page(driver) or (
+                _is_login_password_page(driver) and _has_visible_password_input(driver)
+            ):
                 return {"ok": True, "reason": "clicked_create_password_entry", "selector": last.get("selector")}
             time.sleep(0.5)
             continue
@@ -2060,12 +2100,20 @@ def _ensure_password_before_otp(
             f"创建密码已启用，但邮箱 OTP 页未找到“使用密码继续”入口：{email}；state={entry}"
         )
     logger.info("%s 已从 OTP 页进入创建密码页，开始填写密码：%s", _log_prefix(driver), email)
-    password = _fill_password_page_if_present(driver, email, timeout=20)
+    password = _fill_password_page_if_present(
+        driver, email, timeout=20, allow_login_password=True
+    )
     _require_password_if_enabled(password, email, driver_name=driver_name)
     return password
 
 
-def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str | None:
+def _fill_password_page_if_present(
+    driver,
+    email: str,
+    timeout: int = 25,
+    *,
+    allow_login_password: bool = False,
+) -> str | None:
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
@@ -2074,13 +2122,21 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
             return None
         # 密码分支可能在 URL 仍包含 email-verification 时先渲染密码表单；
         # 先检查密码表单，避免误判为纯 OTP 流程。
-        if _is_signup_password_page(driver):
+        signup_password_page = _is_signup_password_page(driver)
+        password_form_page = signup_password_page or (
+            allow_login_password and _is_login_password_page(driver) and _has_visible_password_input(driver)
+        )
+        if password_form_page:
             pass
         elif _is_email_verification_page(driver):
             return None
         last = _password_page_state(driver)
-        is_signup_password = _is_signup_password_page(driver)
-        is_login_password = _is_login_password_page(driver)
+        is_signup_password = password_form_page
+        # 由 OTP 页明确点击“使用密码继续”后，/log-in/password 也是创建密码
+        # 分支的实际落点；此时不要再次按已注册登录页处理。
+        is_login_password = _is_login_password_page(driver) and not (
+            allow_login_password and password_form_page
+        )
         if not (is_signup_password or is_login_password):
             time.sleep(0.5)
             continue
@@ -2166,7 +2222,10 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
             if _has_access_token(driver):
                 logger.info("%s 密码提交后已检测到登录态", _log_prefix(driver))
                 return password
-            if not _is_signup_password_page(driver):
+            current_password_page = _is_signup_password_page(driver) or (
+                allow_login_password and _is_login_password_page(driver) and _has_visible_password_input(driver)
+            )
+            if not current_password_page:
                 return password
             time.sleep(0.5)
         return password

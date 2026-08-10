@@ -254,6 +254,49 @@ def test_password_page_uses_real_elements_without_language_copy():
     click.assert_called_once_with(driver, submit_button, label="password_submit")
 
 
+def test_password_entry_accepts_login_password_route_after_signup_branch():
+    """新版日语密码分支会落到 /log-in/password，仍需按创建密码表单处理。"""
+    from core.roxy_registration import _fill_password_page_if_present
+
+    driver = Mock()
+    password_input = Mock()
+    password_input.is_displayed.return_value = True
+    password_input.is_enabled.return_value = True
+    submit_button = Mock()
+    submit_button.is_displayed.return_value = True
+    submit_button.is_enabled.return_value = True
+    driver.execute_script.return_value = {
+        "ok": True,
+        "reason": "password_targets",
+        "inputSelector": '[data-codex-password-input="marker"]',
+        "buttonSelector": '[data-codex-password-submit="marker"]',
+    }
+    driver.find_elements.side_effect = [[password_input], [submit_button]]
+
+    with patch("core.roxy_registration._has_access_token", return_value=False), patch(
+        "core.roxy_registration._is_signup_password_page", return_value=False
+    ), patch(
+        "core.roxy_registration._is_login_password_page", return_value=True
+    ), patch(
+        "core.roxy_registration._has_visible_password_input", return_value=True
+    ), patch(
+        "core.roxy_registration._password_page_state", return_value={"url": "/log-in/password"}
+    ), patch("core.roxy_registration._create_password_enabled", return_value=True), patch(
+        "core.roxy_registration._registration_password", return_value="Universal1!Password"
+    ), patch("core.roxy_registration._human_type_text") as type_text, patch(
+        "core.roxy_registration._human_click"
+    ) as click, patch("core.roxy_registration.human_delay"), patch(
+        "core.roxy_registration._is_email_verification_page", return_value=True
+    ):
+        result = _fill_password_page_if_present(
+            driver, "user@example.test", timeout=3, allow_login_password=True
+        )
+
+    assert result == "Universal1!Password"
+    type_text.assert_called_once_with(driver, password_input, "Universal1!Password", clear=True)
+    click.assert_called_once_with(driver, submit_button, label="password_submit")
+
+
 def test_otp_single_input_uses_atomic_fill_and_verifies_six_digits():
     from core.roxy_registration import _type_otp
 
@@ -268,6 +311,26 @@ def test_otp_single_input_uses_atomic_fill_and_verifies_six_digits():
 
     otp_input.fill.assert_called_once_with("603241")
     assert driver.execute_script.call_count == 2
+
+
+def test_otp_falls_back_to_plain_six_visible_inputs():
+    from core.roxy_registration import _type_otp
+
+    driver = Mock()
+    boxes = []
+    for _ in range(6):
+        box = Mock()
+        box.is_displayed.return_value = True
+        box.is_enabled.return_value = True
+        box.get_attribute.return_value = ""
+        boxes.append(box)
+    # Specific selectors find nothing; the generic input query returns six plain boxes.
+    driver.find_elements.side_effect = [[], [], [], [], boxes]
+
+    _type_otp(driver, "603241", timeout=1)
+
+    for box, char in zip(boxes, "603241"):
+        box.send_keys.assert_called_once_with(char)
 
 
 def test_cloak_flow_isolated_from_asyncio_loop_and_inherits_job_context():
