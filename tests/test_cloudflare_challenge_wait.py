@@ -65,6 +65,36 @@ class CloudflareChallengeWaitTests(unittest.TestCase):
         assert state["challenge"] is False
         assert state["normalAuthPage"] is True
 
+    def test_registration_profile_with_stale_cloudflare_marker_is_not_wait(self):
+        """资料填写页残留 iframe 时必须立即返回注册状态机。"""
+        driver = Mock()
+        driver.execute_script.return_value = {
+            "challenge": True,  # 模拟旧逻辑只看 iframe 标记时的误判
+            "title": "How old are you? - OpenAI",
+            "url": "https://chatgpt.com/",
+            "markers": ['iframe[title*="Cloudflare"]'],
+            "textChallenge": False,
+            "registrationProfile": True,
+        }
+        state = _cloudflare_challenge_state(driver)
+        self.assertFalse(state["challenge"])
+        self.assertTrue(state["normalWorkflowPage"])
+
+    def test_registration_profile_with_explicit_challenge_still_waits(self):
+        """资料字段出现但有明确验证文案时，仍保留挑战等待。"""
+        driver = Mock()
+        driver.execute_script.return_value = {
+            "challenge": True,
+            "title": "Verify you are human",
+            "url": "https://auth.example.test/",
+            "markers": ['iframe[title*="Cloudflare"]'],
+            "textChallenge": True,
+            "registrationProfile": True,
+        }
+        state = _cloudflare_challenge_state(driver)
+        self.assertTrue(state["challenge"])
+        self.assertFalse(state["normalWorkflowPage"])
+
     def test_auth_page_with_visible_turnstile_still_waits(self):
         """认证页若确有可见 Turnstile，仍按验证盾处理。"""
         driver = Mock()

@@ -375,6 +375,19 @@ def _cloudflare_challenge_state(driver) -> dict:
           el.getAttribute('aria-label')
         ].join(' ').toLowerCase()).join(' ');
         const otpOrPasswordForm = /one-time|otp|verification|code|password|email/.test(authInputAttrs);
+        const profileControls = [...document.querySelectorAll('input, button, [role="button"]')]
+          .filter(visible)
+          .map(el => [
+            el.type, el.name, el.id, el.autocomplete, el.inputMode,
+            el.getAttribute('aria-label'), el.placeholder, el.value,
+            el.closest('label')?.innerText, el.innerText, el.textContent,
+          ].filter(Boolean).join(' ').toLowerCase()).join(' ');
+        // 注册资料页可能保留上一阶段的 Cloudflare iframe。资料字段已出现时，
+        // 这些残留标记不代表验证仍在进行，必须优先交回注册状态机。
+        const registrationProfile = visibleInputs.length >= 2 && (
+          /how old are you|finish creating account|full name|date of birth|complete (?:your )?profile|年龄|姓名|创建账户/.test(visibleText)
+          || /full.?name|given.?name|\bage\b|birth.?date|finish creating account|创建账户/.test(profileControls)
+        );
         const selectors = [
           'iframe[src*="challenges.cloudflare.com"]',
           'iframe[title*="Cloudflare"]',
@@ -390,11 +403,15 @@ def _cloudflare_challenge_state(driver) -> dict:
           || /__cf_chl_|\/cdn-cgi\/challenge-platform/i.test(url)
           || markers.length > 0
           || html.includes('/cdn-cgi/challenge-platform/');
-        // 邮箱验证码/密码页优先级高于弱文本或普通站点资源；只有明确的
-        // Cloudflare 结构仍可在认证页上触发等待。
-        const normalAuthPage = authFlow && otpOrPasswordForm && !textChallenge
-          && !markers.length && !/__cf_chl_|\/cdn-cgi\/challenge-platform/i.test(url);
-        const challenge = normalAuthPage ? false : strongChallenge;
+        // 邮箱验证码/密码页与资料填写页优先级高于残留 iframe 标记；只有
+        // 明确挑战文案、挑战 URL 或“Just a moment”标题才继续进入验证等待。
+        const explicitChallenge = textChallenge
+          || /just a moment/i.test(title)
+          || /__cf_chl_|\/cdn-cgi\/challenge-platform/i.test(url);
+        const normalAuthPage = authFlow && otpOrPasswordForm && !explicitChallenge
+          && !markers.length;
+        const normalWorkflowPage = normalAuthPage || (registrationProfile && !explicitChallenge);
+        const challenge = normalWorkflowPage ? false : strongChallenge;
         return {
           challenge,
           title,
@@ -405,23 +422,35 @@ def _cloudflare_challenge_state(driver) -> dict:
           strongChallenge,
           authFlow,
           otpOrPasswordForm,
+          registrationProfile,
           normalAuthPage,
+          normalWorkflowPage,
         };
         """) or {}
         if not isinstance(state, dict):
             return {}
         # 保留 Python 侧兜底，兼容驱动返回已序列化诊断对象的情况。
-        # 认证页标记明确时，禁止进入 Cloudflare 等待循环。
+        # 资料填写页和认证页存在时，残留 iframe 标记不能继续触发验证等待。
         state_url = str(state.get("url") or "")
+        explicit_challenge = bool(
+            state.get("textChallenge")
+            or "just a moment" in str(state.get("title") or "").lower()
+            or "__cf_chl_" in state_url
+            or "/cdn-cgi/challenge-platform" in state_url
+        )
         normal_auth_page = bool(
             (state.get("normalAuthPage") or (state.get("authFlow") and state.get("otpOrPasswordForm")))
             and not state.get("markers")
-            and not state.get("textChallenge")
-            and "__cf_chl_" not in state_url
-            and "/cdn-cgi/challenge-platform" not in state_url
+            and not explicit_challenge
+        )
+        normal_workflow_page = bool(
+            state.get("normalWorkflowPage")
+            or normal_auth_page
+            or (state.get("registrationProfile") and not explicit_challenge)
         )
         state["normalAuthPage"] = normal_auth_page
-        if normal_auth_page:
+        state["normalWorkflowPage"] = normal_workflow_page
+        if normal_workflow_page:
             state["challenge"] = False
         return state
     except Exception as exc:
@@ -436,10 +465,10 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
     """检测验证盾；完全接管时立即调用 Agent 处理，超时值只作为最终上限。"""
     state = _cloudflare_challenge_state(driver)
     if not state.get("challenge"):
-        if state.get("normalAuthPage"):
-            # 认证页（邮箱验证码/密码）不是验证盾，直接交给后续状态机。
+        if state.get("normalWorkflowPage"):
+            # 认证与资料填写都属于真实注册阶段，立即退出验证等待循环。
             logger.info(
-                "%s 当前为认证页面，跳过 Cloudflare 等待：url=%s",
+                "%s 当前为注册流程页面，跳过 Cloudflare 等待：url=%s",
                 _log_prefix(driver), str(state.get("url") or "")[:180],
             )
         return False
@@ -479,11 +508,13 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
                     )
                     next_agent_at = time.time() + 2.0
                 else:
-                    logger.info(
-                        "%s [Agent] 人机验证第 %s 轮未发现动作，1s 后重读 HTML",
-                        _log_prefix(driver), agent_round,
-                    )
-                    next_agent_at = time.time() + 1.0
+                    # 无新动作时不逐秒刷屏；保留首轮和每 10 轮摘要，便于定位页面状态。
+                    if agent_round == 1 or agent_round % 10 == 0:
+                        logger.info(
+                            "%s [Agent] 人机验证第 %s 轮未发现动作，2s 后重读 HTML",
+                            _log_prefix(driver), agent_round,
+                        )
+                    next_agent_at = time.time() + 2.0
             except Exception as exc:
                 logger.info(
                     "%s [Agent] 人机验证第 %s 轮处理异常，1s 后重试：%s: %s",
