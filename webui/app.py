@@ -68,6 +68,34 @@ def _account_saved_session(row: dict) -> dict:
     return session if isinstance(session, dict) else {}
 
 
+def _account_registration_method(row: dict) -> str:
+    """返回账号注册方式；兼容改造前没有 registration_method 的历史记录。"""
+    raw = str(row.get("registration_method") or row.get("registration_driver") or "").strip().lower()
+    aliases = {
+        "api": "protocol", "http": "protocol",
+        "roxybrowser": "roxy", "fingerprint": "roxy", "browser": "roxy",
+        "cloakbrowser": "cloak",
+        "browseruse": "browser_use", "browser-use": "browser_use", "bu": "browser_use",
+        "sv": "skyvern",
+    }
+    if raw:
+        return aliases.get(raw, raw)
+    try:
+        extra = json.loads(str(row.get("extra_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        extra = {}
+    if isinstance(extra, dict):
+        for key, method in (
+            ("roxybrowser", "roxy"),
+            ("cloakbrowser", "cloak"),
+            ("skyvern", "skyvern"),
+            ("browser_use", "browser_use"),
+        ):
+            if key in extra:
+                return method
+    return "protocol"
+
+
 
 
 def _matches_query(row: dict, q: str | None) -> bool:
@@ -107,6 +135,7 @@ def _compact_account_for_list(row: dict) -> dict:
     out = {
         "id": row.get("id"),
         "email": row.get("email"),
+        "registration_method": _account_registration_method(row),
         "group_name": row.get("group_name") or db.DEFAULT_ACCOUNT_GROUP,
         "has_access_token": bool(str(row.get("access_token") or "").strip()),
         "has_session": bool(_account_saved_session(row)),

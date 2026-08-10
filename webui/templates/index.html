@@ -753,7 +753,7 @@
     }
     .accounts-table-v2 {
       width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px;
-      min-width: 1430px;
+      min-width: 1560px;
     }
     .accounts-table-v2 th, .accounts-table-v2 td {
       padding: 12px 12px; border-bottom: 1px solid #ebeef5;
@@ -775,6 +775,7 @@
     .accounts-table-v2 .col-id { width: 60px; }
     .accounts-table-v2 .col-email { width: 280px; min-width: 280px; }
     .accounts-table-v2 .col-source { width: 80px; }
+    .accounts-table-v2 .col-registration { width: 138px; min-width: 138px; }
     .accounts-table-v2 .col-group { width: 130px; min-width: 120px; }
     .accounts-table-v2 .col-token { width: 150px; min-width: 150px; }
     .accounts-table-v2 .col-plan { width: 200px; }
@@ -999,6 +1000,31 @@
     }
     .accounts-table-v2 .pill.status-running {
       color: #fa8c16; background: #fff7e6; border-color: #ffd591;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 112px; height: 26px; padding: 0 9px;
+      border-radius: 5px; border: 1px solid transparent;
+      box-sizing: border-box; font-size: 12px; font-weight: 600;
+      line-height: 1; white-space: nowrap;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill.is-protocol {
+      color: #377DFF; background: #eef4ff; border-color: #b8cffb;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill.is-roxy {
+      color: #7c4dba; background: #f4edff; border-color: #d8c2f5;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill.is-cloak {
+      color: #23856c; background: #ecf9f5; border-color: #9ed8c9;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill.is-browser-use {
+      color: #b26a00; background: #fff7e6; border-color: #ffd591;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill.is-skyvern {
+      color: #d14b61; background: #fff0f3; border-color: #f2b8c3;
+    }
+    .accounts-table-v2 .acc-v2-registration-pill.is-unknown {
+      color: #7a7f8c; background: #f5f6f8; border-color: #dfe2e8;
     }
     /* 付费套餐主标签只保留摘要，完整权益通过 body 级悬浮卡展示，避免被滚动表格裁切。 */
     .accounts-table-v2 .plan-summary-pill,
@@ -1967,6 +1993,7 @@
     .accounts-table-v2.is-col-hidden-id .col-id,
     .accounts-table-v2.is-col-hidden-email .col-email,
     .accounts-table-v2.is-col-hidden-source .col-source,
+    .accounts-table-v2.is-col-hidden-registration .col-registration,
     .accounts-table-v2.is-col-hidden-group .col-group,
     .accounts-table-v2.is-col-hidden-token .col-token,
     .accounts-table-v2.is-col-hidden-plan .col-plan,
@@ -2702,6 +2729,7 @@ try {
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="id" role="menuitemcheckbox" aria-checked="true"><span>ID</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="email" role="menuitemcheckbox" aria-checked="true"><span>邮箱</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="source" role="menuitemcheckbox" aria-checked="true"><span>来源</span><span class="accounts-view-check">✓</span></button>
+              <button type="button" class="accounts-view-item-v2 is-active" data-account-column="registration" role="menuitemcheckbox" aria-checked="true"><span>注册方式</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="group" role="menuitemcheckbox" aria-checked="true"><span>分组</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="token" role="menuitemcheckbox" aria-checked="true"><span>AT / Session</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="plan" role="menuitemcheckbox" aria-checked="true"><span>套餐</span><span class="accounts-view-check">✓</span></button>
@@ -2763,7 +2791,7 @@ try {
       <div class="accounts-table-v2-wrap">
         <table class="accounts-table-v2">
           <colgroup>
-            <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source"><col class="col-group">
+            <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source"><col class="col-registration"><col class="col-group">
             <col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-completion"><col class="col-small">
             <col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions">
           </colgroup>
@@ -2773,6 +2801,7 @@ try {
               <th class="col-id">ID</th>
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
+              <th class="col-registration">注册方式</th>
               <th class="col-group">分组</th>
               <th class="col-token">AT / Session</th>
               <th class="col-plan">套餐</th>
@@ -4465,6 +4494,18 @@ function _accountPasswordCell(r) {
   if (!r.password_available) return '<span class="acc-v2-password-none" title="该账号注册时未保存创建密码；开启创建密码只对新注册任务生效">未设置密码</span>';
   return `<button type="button" class="acc-v2-password-copy" data-account-copy-secret="password" data-account-id="${esc(r.id)}" title="点击复制账号密码" aria-label="复制账号密码">密码${accountV2Icons().copy}</button>`;
 }
+function _accountRegistrationMethodCell(r) {
+  const method = String(r.registration_method || '').trim().toLowerCase();
+  const map = {
+    protocol: {label: '纯协议注册', cls: 'is-protocol'},
+    roxy: {label: 'RoxyBrowser', cls: 'is-roxy'},
+    cloak: {label: '本地指纹浏览器', cls: 'is-cloak'},
+    browser_use: {label: 'browser_use', cls: 'is-browser-use'},
+    skyvern: {label: 'skyvern', cls: 'is-skyvern'},
+  };
+  const item = map[method] || {label: method || '未知', cls: 'is-unknown'};
+  return `<span class="acc-v2-registration-pill ${item.cls}" title="注册方式：${esc(item.label)}">${esc(item.label)}</span>`;
+}
 function _accountTotpCell(r, accountIcons) {
   if (r.totp_enabled) {
     return `<button type="button" class="acc-v2-totp-copy" data-account-copy-secret="totp_code" data-account-id="${esc(r.id)}" title="复制当前 30 秒动态验证码" aria-label="复制当前 2FA 动态验证码">${accountIcons.copy}</button>`;
@@ -4509,6 +4550,7 @@ function renderAccounts() {
         <div class="acc-v2-sub">${esc(r.user_name || '-')}</div>${_accountPasswordCell(r)}
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
+      <td class="col-registration">${_accountRegistrationMethodCell(r)}</td>
       <td class="col-group" title="${esc(r.group_name || '默认分组')}"><span class="pill status-used">${esc(r.group_name || '默认分组')}</span></td>
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
@@ -4531,7 +4573,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="14" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="15" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);

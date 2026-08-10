@@ -2652,6 +2652,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             email_source=resolve_email_source(email),
             proxy_used=proxy or None,
             batch_dir=batch_dir,
+            registration_method="roxy",
             extra={
                 "user": session_info.get("user"),
                 "account": session_info.get("account"),

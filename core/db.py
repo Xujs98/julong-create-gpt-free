@@ -1175,6 +1175,7 @@ def insert_account(
     extra: dict | None = None,
     codex_status: str | None = None,   # success / failed / skipped / missing
     codex_error: str | None = None,    # 失败原因（仅 codex_status=failed 时有意义）
+    registration_method: str | None = None,
 ) -> int:
     """插入或更新注册成功账号，返回本地文件中的 id。"""
     with _LOCK:
@@ -1227,6 +1228,9 @@ def insert_account(
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
             "email_source": email_source if email_source is not None else row.get("email_source"),
+            "registration_method": (
+                str(registration_method or row.get("registration_method") or "protocol").strip().lower()
+            ),
             "registration_password": (
                 str((extra or {}).get("registration_password") or "").strip()
                 or row.get("registration_password")

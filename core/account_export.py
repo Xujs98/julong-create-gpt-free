@@ -527,6 +527,7 @@ def save_account_data(
     email_source: str | None = None,
     proxy_used: str | None = None,
     batch_dir: Path | None = None,
+    registration_method: str | None = None,
 ) -> int:
     """
     将账号信息保存到本地 JSON/TXT 文件存储。
@@ -534,6 +535,22 @@ def save_account_data(
     """
     from core.db import insert_account
     extra = extra or {}
+    if not registration_method:
+        # 兼容旧调用方：从驱动专属 extra 节点推断注册方式；没有浏览器节点的
+        # 历史账号按纯协议处理，后续仍可由数据库字段覆盖。
+        explicit = str(extra.get("registration_method") or extra.get("registration_driver") or "").strip()
+        if explicit:
+            registration_method = explicit
+        elif "roxybrowser" in extra:
+            registration_method = "roxy"
+        elif "cloakbrowser" in extra:
+            registration_method = "cloak"
+        elif "skyvern" in extra:
+            registration_method = "skyvern"
+        elif "browser_use" in extra:
+            registration_method = "browser_use"
+        else:
+            registration_method = "protocol"
     user = extra.get("user") or {}
     account = extra.get("account") or {}
     # 从 extra.codex 抽出顶层 codex 状态/错误，方便 WebUI 直接读账号字段
@@ -557,6 +574,7 @@ def save_account_data(
         extra=extra,
         codex_status=codex_status,
         codex_error=codex_error,
+        registration_method=registration_method,
     )
     batch_folder = _append_batch_archive(
         row_id=row_id,
