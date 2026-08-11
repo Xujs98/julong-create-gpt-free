@@ -66,7 +66,7 @@ EDITABLE_FIELDS = [
         "key": "LIVE_CHECK_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
         "label": "查活方式", "help": "仅用于账号查活；协议=纯协议请求，Cloak/Roxy=在对应指纹浏览器中恢复 Session 或重新登录，不改变注册方式",
         "choices": ["cloak", "roxy", "protocol"],
-        "choice_labels": {"cloak": "CloakBrowser", "roxy": "RoxyBrowser", "protocol": "纯协议"},
+        "choice_labels": {"cloak": "本地指纹浏览器（CloakBrowser）", "roxy": "RoxyBrowser", "protocol": "纯协议"},
     },
     {
         "key": "LIVE_CHECK_HEADLESS", "file": "live_check.py", "type": "bool", "group": "账号查活",

@@ -18,6 +18,7 @@ def test_live_check_driver_config_is_independent_from_registration_browser_setti
     assert 'LIVE_CHECK_DRIVER: str = "cloak"' in source
     assert "LIVE_CHECK_HEADLESS: bool = False" in source
     assert fields["LIVE_CHECK_DRIVER"]["choices"] == ["cloak", "roxy", "protocol"]
+    assert fields["LIVE_CHECK_DRIVER"]["choice_labels"]["cloak"] == "本地指纹浏览器（CloakBrowser）"
     assert fields["LIVE_CHECK_DRIVER"]["group"] == "账号查活"
     assert fields["LIVE_CHECK_HEADLESS"]["group"] == "账号查活"
     assert fields["LIVE_CHECK_DRIVER"]["file"] == "live_check.py"
