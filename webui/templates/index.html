@@ -214,6 +214,84 @@
     #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
     #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    /* 注册任务单条日志：深色逐行视图，便于快速区分时间、级别与正文。 */
+    #logPanel:not(.hidden) {
+      width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
+      max-height: none; padding: 0; border-color: #24324a; border-radius: 10px;
+      background: #0b1220; color: #d7deea; display: flex; flex-direction: column;
+    }
+    .job-log-head {
+      min-height: 68px; padding: 14px 18px; box-sizing: border-box;
+      display: flex; align-items: center; gap: 14px; flex: 0 0 auto;
+      border-bottom: 1px solid #25324a; background: #111a2c;
+    }
+    .job-log-head-main { min-width: 0; flex: 1; }
+    #logPanel .job-log-title {
+      margin: 0; display: flex; align-items: center; gap: 8px;
+      color: #f4f7fb; font-size: 16px; line-height: 1.3; letter-spacing: 0;
+    }
+    .job-log-live-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: #38d39f;
+      box-shadow: 0 0 0 4px rgba(56,211,159,.12); flex: 0 0 auto;
+    }
+    .job-log-live-dot.is-failed { background: #e45b69; box-shadow: 0 0 0 4px rgba(228,91,105,.12); }
+    .job-log-live-dot.is-stopped { background: #8b98ac; box-shadow: 0 0 0 4px rgba(139,152,172,.12); }
+    .job-log-meta {
+      min-height: 18px; margin-top: 5px; color: #8492a8; font-size: 12px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .job-log-close {
+      width: 34px; height: 34px; padding: 0; flex: 0 0 auto;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid #31405a; border-radius: 6px; background: #172238;
+      color: #aab5c7; cursor: pointer;
+    }
+    .job-log-close:hover { color: #fff; border-color: #536582; background: #22304a; }
+    .job-log-close svg {
+      width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+    #logPanel .job-log-content {
+      min-height: 0; max-height: none; flex: 1; margin: 0; padding: 12px 0 18px;
+      border-radius: 0; background: #0b1220; overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; line-height: 1.55; white-space: normal;
+      scrollbar-color: #36445e #0b1220; scrollbar-width: thin;
+    }
+    .job-log-row {
+      display: grid; grid-template-columns: 82px 72px minmax(0, 1fr); gap: 10px;
+      align-items: start; min-height: 30px; padding: 5px 18px; box-sizing: border-box;
+      border-left: 2px solid transparent;
+    }
+    .job-log-row:hover { background: rgba(148,163,184,.055); }
+    .job-log-row--error { border-left-color: #e45b69; background: rgba(228,91,105,.035); }
+    .job-log-time { color: #66758d; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .job-log-level {
+      min-width: 64px; height: 20px; padding: 0 7px; box-sizing: border-box;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid #2c4967; border-radius: 4px; background: #12283d;
+      color: #6dc4f2; font-size: 10px; font-weight: 800; line-height: 1;
+    }
+    .job-log-level--success { color: #72dda9; border-color: #245945; background: #12362d; }
+    .job-log-level--warn { color: #f2c56f; border-color: #695228; background: #392c17; }
+    .job-log-level--error { color: #ff8f9b; border-color: #71313d; background: #3a1d29; }
+    .job-log-level--debug { color: #c3a6ff; border-color: #59427c; background: #2a2140; }
+    .job-log-level--plain { visibility: hidden; }
+    .job-log-message { min-width: 0; color: #c9d2df; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; }
+    .job-log-row--success .job-log-message { color: #81deb0; }
+    .job-log-row--warn .job-log-message { color: #e9c67d; }
+    .job-log-row--error .job-log-message { color: #f39aa3; }
+    .job-log-row--debug .job-log-message { color: #b9a4e5; }
+    .job-log-empty {
+      height: 100%; min-height: 220px; display: flex; align-items: center; justify-content: center;
+      color: #66758d; font-size: 13px;
+    }
+    @media (max-width: 640px) {
+      #logPanel:not(.hidden) { width: calc(100vw - 24px); height: calc(100vh - 24px); }
+      .job-log-head { min-height: 62px; padding: 12px 14px; }
+      .job-log-row { grid-template-columns: 68px 60px minmax(0, 1fr); gap: 7px; padding: 5px 10px; }
+      .job-log-level { min-width: 56px; padding: 0 5px; }
+    }
     .registration-task-log-head {
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
       margin-bottom: 12px;
@@ -3200,9 +3278,17 @@ try {
     </div>
   </div>
 </div>
-<div class="body hidden" id="logPanel">
-  <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
-  <div class="log" id="logContent">加载中…</div>
+<div class="body hidden" id="logPanel" role="dialog" aria-modal="true" aria-labelledby="jobLogTitle">
+  <div class="job-log-head">
+    <div class="job-log-head-main">
+      <h3 class="job-log-title" id="jobLogTitle"><span class="job-log-live-dot" aria-hidden="true"></span>任务 #<span id="logJobId"></span> 日志</h3>
+      <div class="job-log-meta" id="logJobMeta">正在读取任务日志...</div>
+    </div>
+    <button type="button" class="job-log-close" id="btnCloseLog" title="关闭日志" aria-label="关闭日志">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="job-log-content" id="logContent" role="log" aria-live="polite"><div class="job-log-empty">加载中...</div></div>
 </div>
 <div class="body hidden" id="registrationTaskLogPanel" role="dialog" aria-modal="true" aria-labelledby="registrationTaskLogTitle">
   <div class="registration-task-log-head">
@@ -3922,6 +4008,7 @@ function updateModalScrollLock() {
 function closeLogModal() {
   activeLogJob = null;
   clearInterval(logTimer);
+  logTimer = null;
   $('#logPanel').classList.add('hidden');
   updateModalScrollLock();
 }
@@ -4147,26 +4234,110 @@ async function retrySelectedJobs() {
   }
 }
 
-function openLog(jobId) {
+// 中文注释：移除终端 ANSI 控制码，避免颜色控制字符污染网页日志。
+function cleanJobLogText(value) {
+  return String(value || '').replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '').replace(/\r/g, '');
+}
+// 中文注释：结合日志级别与正文关键词，将普通 INFO 中的成功结果提升为 SUCCESS 展示。
+function classifyJobLogLevel(rawLevel, message) {
+  const level = String(rawLevel || '').trim().toUpperCase();
+  const text = String(message || '');
+  if (['ERROR', 'CRITICAL', 'FATAL', 'EXCEPTION'].includes(level) || /失败|错误|异常|超时|timed?\s*out|timeout|HTTP\s*[45]\d\d/i.test(text)) return 'error';
+  if (['WARNING', 'WARN'].includes(level)) return 'warn';
+  if (level === 'DEBUG' || level === 'TRACE') return 'debug';
+  if (level === 'SUCCESS' || /成功|已完成|完成注册|验证通过|已通过|已保存|已写入|同步完成|同步成功/i.test(text)) return 'success';
+  return level ? 'info' : 'plain';
+}
+// 中文注释：解析标准 Python 日志行；堆栈和其它无时间续行保留为普通正文。
+function parseJobLogEntries(rawLog) {
+  return cleanJobLogText(rawLog).split('\n').filter(line => line.length > 0).map(line => {
+    const match = line.match(/^(?:\d{4}-\d{2}-\d{2}\s+)?(\d{2}:\d{2}:\d{2})(?:[,.]\d+)?\s+\[([^\]]+)\]\s*(.*)$/);
+    if (!match) return { time: '', label: '', tone: 'plain', message: line };
+    const rawLevel = String(match[2] || '').trim().toUpperCase();
+    const message = match[3] || '';
+    const tone = classifyJobLogLevel(rawLevel, message);
+    const label = ({success:'SUCCESS', error:'ERROR', warn:'WARN', debug:'DEBUG', info:'INFO'})[tone] || rawLevel;
+    return { time: match[1], label, tone, message };
+  });
+}
+// 中文注释：把解析后的日志渲染为时间、级别、正文三列的高可读列表。
+function renderJobLogContent(rawLog) {
+  const entries = parseJobLogEntries(rawLog);
+  if (!entries.length) return '<div class="job-log-empty">暂无日志</div>';
+  return entries.map(entry => `
+    <div class="job-log-row job-log-row--${entry.tone}">
+      <span class="job-log-time">${entry.time ? `[${esc(entry.time)}]` : ''}</span>
+      <span><span class="job-log-level job-log-level--${entry.tone}">${esc(entry.label || 'LOG')}</span></span>
+      <span class="job-log-message">${esc(entry.message)}</span>
+    </div>`).join('');
+}
+// 中文注释：从配置页读取日志轮询开关和间隔，配置尚未加载时使用稳定默认值。
+function getJobLogRefreshSettings() {
+  const enabledField = CONFIG.find(item => item.key === 'WEBUI_JOB_LOG_AUTO_REFRESH');
+  const intervalField = CONFIG.find(item => item.key === 'WEBUI_JOB_LOG_REFRESH_INTERVAL');
+  const enabled = enabledField ? !!enabledField.value : true;
+  const interval = Math.max(1, Math.min(60, Number(intervalField?.value || 2) || 2));
+  return { enabled, interval };
+}
+// 中文注释：打开日志前补充读取配置，避免用户没有先进入“配置”页时使用旧默认值。
+async function ensureJobLogConfig() {
+  if (CONFIG.some(item => item.key === 'WEBUI_JOB_LOG_AUTO_REFRESH') && CONFIG.some(item => item.key === 'WEBUI_JOB_LOG_REFRESH_INTERVAL')) return;
+  try { CONFIG = await api('/api/config'); } catch (_) {}
+}
+// 中文注释：同步任务状态和邮箱摘要，让日志所属任务一眼可辨。
+function renderJobLogMeta(job) {
+  const meta = $('#logJobMeta');
+  if (!meta) return;
+  const statusLabels = {queued:'排队中', running:'运行中', stopping:'停止中', stopped:'已停止', cancelled:'已取消', success:'成功', failed:'失败'};
+  const rawStatus = String(job?.status || '');
+  const status = statusLabels[rawStatus] || rawStatus || '未知';
+  const email = String(job?.email || '等待分配邮箱');
+  const isActive = ['queued', 'running', 'stopping'].includes(rawStatus);
+  const refreshSettings = getJobLogRefreshSettings();
+  const refreshText = !isActive
+    ? '任务已结束，日志已停止刷新'
+    : refreshSettings.enabled
+      ? `每 ${refreshSettings.interval} 秒同步日志`
+      : '实时刷新已关闭';
+  meta.textContent = `状态：${status} · 邮箱：${email} · ${refreshText}`;
+  const dot = document.querySelector('#logPanel .job-log-live-dot');
+  if (dot) {
+    dot.classList.toggle('is-failed', rawStatus === 'failed');
+    dot.classList.toggle('is-stopped', ['stopped', 'cancelled'].includes(rawStatus));
+  }
+}
+async function openLog(jobId) {
   activeLogJob = jobId;
+  clearInterval(logTimer);
+  logTimer = null;
   $('#logJobId').textContent = jobId;
   $('#logPanel').classList.remove('hidden');
   updateModalScrollLock();
-  $('#logContent').textContent = '加载中…';
-  pollLog();
-  clearInterval(logTimer);
-  logTimer = setInterval(pollLog, 2000);
+  $('#logJobMeta').textContent = '正在读取任务日志...';
+  $('#logContent').innerHTML = '<div class="job-log-empty">加载中...</div>';
+  await ensureJobLogConfig();
+  if (activeLogJob !== jobId) return;
+  const first = await pollLog();
+  if (activeLogJob !== jobId) return;
+  const settings = getJobLogRefreshSettings();
+  const terminal = first?.job && ['success','failed','stopped','cancelled'].includes(first.job.status);
+  if (settings.enabled && !terminal) logTimer = setInterval(pollLog, settings.interval * 1000);
 }
 async function pollLog() {
-  if (activeLogJob == null) return;
+  if (activeLogJob == null) return null;
   try {
     const r = await api(`/api/jobs/${activeLogJob}/log`);
     const c = $('#logContent');
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-    c.textContent = r.log || '(暂无日志)';
+    c.innerHTML = renderJobLogContent(r.log || '');
+    renderJobLogMeta(r.job || {});
     if (atBottom) c.scrollTop = c.scrollHeight;
-    if (r.job && ['success','failed','stopped','cancelled'].includes(r.job.status)) clearInterval(logTimer);
-  } catch(e) {}
+    if (r.job && ['success','failed','stopped','cancelled'].includes(r.job.status)) {
+      clearInterval(logTimer);
+      logTimer = null;
+    }
+    return r;
+  } catch(e) { return null; }
 }
 
 // ---------- 账号 ----------
@@ -7204,6 +7375,7 @@ function getConfigGroupNames() {
 }
 function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
+  if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';

@@ -40,6 +40,14 @@ EDITABLE_FIELDS = [
         "label": "Session 签名密钥", "help": "可选，保存在 .env（WEBUI_SESSION_SECRET）；不填则从固定授权码派生，修改授权码会使已有登录失效",
         "storage": "env", "secret": True,
     },
+    {
+        "key": "WEBUI_JOB_LOG_AUTO_REFRESH", "file": "webui.py", "type": "bool", "group": "WebUI",
+        "label": "任务日志实时刷新", "help": "开启后，运行中的任务日志按刷新间隔自动同步；任务成功、失败、停止或取消后自动终止刷新",
+    },
+    {
+        "key": "WEBUI_JOB_LOG_REFRESH_INTERVAL", "file": "webui.py", "type": "int", "group": "WebUI",
+        "label": "日志刷新间隔(秒)", "help": "任务日志实时刷新间隔，建议 1-10 秒；关闭实时刷新时此项不生效",
+    },
     # ---- 功能开关 ----
     {
         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",
