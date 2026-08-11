@@ -1,10 +1,15 @@
 import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from core.account_export import (
     Browser2FARequestError,
     _activate_totp,
+    _enroll_totp,
+    _browser_activate_totp,
+    _browser_enroll_totp,
+    _browser_fetch,
+    _totp_code_with_margin,
     browser_session_from_driver,
     setup_2fa,
     setup_2fa_from_browser,
@@ -128,6 +133,112 @@ class Browser2FABridgeTests(unittest.TestCase):
             "factor_type": "totp",
             "session_id": "ENROLL_SESSION",
         }
+
+    def test_browser_fetch_aborts_hung_requests_inside_browser(self):
+        driver = Mock()
+        driver.execute_async_script.return_value = {
+            "ok": False,
+            "status": 0,
+            "timedOut": True,
+            "error": "AbortError: twofa_fetch_timeout",
+        }
+
+        with self.assertRaises(Browser2FARequestError) as caught:
+            _browser_fetch(driver, "/backend-api/test", stage="activate_fetch", timeout_ms=4321)
+
+        self.assertEqual(caught.exception.stage, "activate_fetch")
+        self.assertEqual(caught.exception.status, 0)
+        script, *args = driver.execute_async_script.call_args.args
+        self.assertIn("AbortController", script)
+        self.assertEqual(args[-1], 4321)
+        driver.set_script_timeout.assert_called_once_with(25.0)
+
+    def test_browser_fetch_normalizes_driver_script_timeout(self):
+        driver = Mock()
+        driver.execute_async_script.side_effect = TimeoutError("script timeout")
+
+        with self.assertRaises(Browser2FARequestError) as caught:
+            _browser_fetch(driver, "/backend-api/test", stage="activate_fetch")
+
+        self.assertEqual(caught.exception.stage, "activate_fetch")
+        self.assertEqual(caught.exception.status, 0)
+        self.assertIn("异步脚本超时", caught.exception.detail)
+        driver.set_script_timeout.assert_called_once_with(25.0)
+
+    @patch("core.account_export._totp_code_with_margin", side_effect=["111111", "222222"])
+    @patch("core.account_export._browser_fetch")
+    def test_browser_activate_retries_invalid_code_in_next_window(self, browser_fetch, fresh_code):
+        browser_fetch.side_effect = [
+            {"ok": True, "status": 403, "body": '{"code":"invalid_code","message":"Invalid code"}'},
+            {"ok": True, "status": 200, "data": {"success": True}, "body": '{"success":true}'},
+        ]
+        driver = Mock()
+        driver.get_cookies.return_value = [{"name": "oai-did", "value": "device"}]
+        driver.execute_script.return_value = "en-US"
+
+        _browser_activate_totp(driver, "ACCESS", "SECRET", "ENROLL_SESSION")
+
+        self.assertEqual(browser_fetch.call_count, 2)
+        first = json.loads(browser_fetch.call_args_list[0].kwargs["body"])
+        second = json.loads(browser_fetch.call_args_list[1].kwargs["body"])
+        self.assertEqual(first["code"], "111111")
+        self.assertEqual(second["code"], "222222")
+        fresh_code.assert_called_with(ANY, force_next=True)
+
+    @patch("core.account_export._browser_mfa_enabled", return_value=True)
+    @patch("core.account_export._browser_fetch")
+    def test_browser_activate_accepts_timeout_when_session_confirms_mfa(self, browser_fetch, mfa_enabled):
+        browser_fetch.side_effect = Browser2FARequestError("activate_fetch", 0, "timeout")
+        driver = Mock()
+        driver.get_cookies.return_value = [{"name": "oai-did", "value": "device"}]
+        driver.execute_script.return_value = "en-US"
+
+        with patch("core.account_export._totp_code_with_margin", return_value="123456"):
+            _browser_activate_totp(driver, "ACCESS", "SECRET", "ENROLL_SESSION")
+
+        mfa_enabled.assert_called_once_with(driver)
+
+    @patch("core.account_export.time.sleep")
+    @patch("core.account_export._browser_fetch")
+    def test_browser_enroll_retries_transient_server_errors(self, browser_fetch, sleep):
+        browser_fetch.side_effect = [
+            {"ok": True, "status": 500, "body": '{"detail":"Internal Server Error"}'},
+            {"ok": True, "status": 200, "data": {"secret": "SECRET", "session_id": "SESSION"}, "body": "{}"},
+        ]
+        driver = Mock()
+        driver.get_cookies.return_value = []
+        driver.execute_script.return_value = "en-US"
+
+        self.assertEqual(_browser_enroll_totp(driver, "ACCESS"), ("SECRET", "SESSION"))
+        self.assertEqual(browser_fetch.call_count, 2)
+        sleep.assert_called_once_with(2.0)
+
+    def test_protocol_enroll_retries_transient_server_errors(self):
+        session = Mock()
+        session.device_id = "device"
+        session.navigator_language.return_value = "en-US"
+        session.get_chatgpt_headers.return_value = {"content-type": "application/json"}
+        first = Mock(status_code=500, text='{"detail":"Internal Server Error"}')
+        second = Mock(status_code=200, text='{}')
+        second.json.return_value = {"secret": "SECRET", "session_id": "SESSION"}
+        session.post.side_effect = [first, second]
+
+        with patch("core.account_export.time.sleep"):
+            self.assertEqual(_enroll_totp(session, "ACCESS"), ("SECRET", "SESSION"))
+
+        self.assertEqual(session.post.call_count, 2)
+
+    def test_totp_code_waits_out_near_expiry_window(self):
+        totp = Mock(interval=30)
+        totp.now.return_value = "654321"
+        with patch("core.account_export.time.time", return_value=29.5), patch(
+            "core.account_export.time.sleep"
+        ) as sleep:
+            code = _totp_code_with_margin(totp)
+
+        self.assertEqual(code, "654321")
+        sleep.assert_called_once()
+        self.assertGreaterEqual(sleep.call_args.args[0], 0.8)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,511 @@
+diff --git a/core/account_export.py b/core/account_export.py
+index fae6c38..3bc0945 100644
+--- a/core/account_export.py
++++ b/core/account_export.py
+@@ -24,6 +24,11 @@ from core.humanize import delay as human_delay
+
+ logger = logging.getLogger(__name__)
+
++_TWOFA_BROWSER_FETCH_TIMEOUT_MS = 20_000
++_TWOFA_BROWSER_SCRIPT_TIMEOUT_SECONDS = 25.0
++_TWOFA_ACTIVATE_ATTEMPTS = 3
++_TWOFA_MIN_CODE_LIFETIME_SECONDS = 12.0
++
+ # 输出目录（与项目根 .claude/ 工作区分离，单独放在 accounts/）
+ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+ _ACCOUNTS_DIR = _PROJECT_ROOT / "accounts"
+@@ -388,10 +393,18 @@ def _enroll_totp(session: BrowserSession, access_token: str) -> tuple[str, str]:
+     body = json.dumps({"factor_type": "totp"})
+
+     logger.info("[2FA] 注册 TOTP...")
+-    resp = session.post(url, headers=headers, data=body)
+-    if resp.status_code != 200:
++    resp = None
++    for attempt in range(1, _TWOFA_ACTIVATE_ATTEMPTS + 1):
++        resp = session.post(url, headers=headers, data=body)
++        if resp.status_code == 200:
++            break
++        if attempt < _TWOFA_ACTIVATE_ATTEMPTS and resp.status_code in {429, 500, 502, 503, 504}:
++            logger.warning("[2FA] enroll 暂时异常 HTTP %s，第 %s/%s 次重试", resp.status_code, attempt + 1, _TWOFA_ACTIVATE_ATTEMPTS)
++            time.sleep(min(2.0 * attempt, 5.0))
++            continue
+         logger.error(f"[2FA] enroll 失败 {resp.status_code}: {resp.text}")
+         resp.raise_for_status()
++    assert resp is not None
+     data = resp.json()
+     secret = data.get("secret")
+     session_id = data.get("session_id")
+@@ -421,7 +434,7 @@ def _activate_totp(
+     # 返回 422 body.factor_type Field required。部分旧接口曾拒绝额外字段，
+     # 因此保留一次兼容回退，但主请求始终发送完整字段。
+     totp = pyotp.TOTP(str(secret).replace(" ", "").strip())
+-    totp_code = totp.now()
++    totp_code = _totp_code_with_margin(totp)
+
+     def _activate(code: str, *, include_factor_type: bool = True):
+         payload = {"code": str(code), "session_id": str(session_id)}
+@@ -429,35 +442,33 @@ def _activate_totp(
+             payload["factor_type"] = "totp"
+         return session.post(url, headers=headers, data=json.dumps(payload))
+
+-    logger.info(f"[2FA] 激活 enrollment, code={totp_code}")
+     include_factor_type = True
+-    resp = _activate(totp_code, include_factor_type=include_factor_type)
+-    try:
+-        error_text = str(resp.text or "").lower()
+-    except Exception:
+-        error_text = ""
+-
+-    # 兼容曾经把 factor_type 视为额外字段的旧接口版本。
+-    if resp.status_code in {400, 422} and (
+-        "factor_type" in error_text
+-        and any(word in error_text for word in ("extra", "unexpected", "unknown", "not permitted", "not allowed"))
+-    ):
+-        include_factor_type = False
+-        logger.info("[2FA] 当前接口拒绝 factor_type，使用旧版最小字段重试")
++    resp = None
++    for attempt in range(1, _TWOFA_ACTIVATE_ATTEMPTS + 1):
++        logger.info("[2FA] 激活 enrollment（第 %s/%s 次）", attempt, _TWOFA_ACTIVATE_ATTEMPTS)
+         resp = _activate(totp_code, include_factor_type=include_factor_type)
+-
+-    # 30 秒窗口边界附近生成的验证码可能在请求抵达时刚好轮换；仅对
+-    # 明确的 invalid_request 重试一次，并重新生成验证码，避免重复提交旧码。
+-    if resp.status_code == 400:
+-        try:
+-            error_text = resp.text.lower()
+-        except Exception:
+-            error_text = ""
+-        if "invalid_request" in error_text or "invalid request" in error_text:
+-            next_code = totp.now()
+-            if next_code != totp_code:
+-                logger.info("[2FA] 激活验证码跨越时间窗口，使用新验证码重试")
+-                resp = _activate(next_code, include_factor_type=include_factor_type)
++        error_text = _response_error_text(resp)
++
++        # 兼容曾经把 factor_type 视为额外字段的旧接口版本。
++        if resp.status_code in {400, 422} and _factor_type_is_rejected(error_text):
++            include_factor_type = False
++            logger.info("[2FA] 当前接口拒绝 factor_type，使用旧版最小字段重试")
++            resp = _activate(totp_code, include_factor_type=include_factor_type)
++            error_text = _response_error_text(resp)
++
++        if resp.status_code == 200:
++            break
++        if attempt < _TWOFA_ACTIVATE_ATTEMPTS and _is_invalid_totp_response(resp.status_code, error_text):
++            logger.info("[2FA] 激活验证码已失效，等待下一时间窗口重试")
++            totp_code = _totp_code_with_margin(totp, force_next=True)
++            continue
++        if attempt < _TWOFA_ACTIVATE_ATTEMPTS and resp.status_code in {429, 500, 502, 503, 504}:
++            logger.warning("[2FA] 激活接口暂时异常 HTTP %s，短暂等待后重试", resp.status_code)
++            time.sleep(min(2.0 * attempt, 5.0))
++            totp_code = _totp_code_with_margin(totp)
++            continue
++        break
++    assert resp is not None
+     if resp.status_code != 200:
+         logger.error(f"[2FA] activate 失败 {resp.status_code}: {resp.text}")
+         resp.raise_for_status()
+@@ -546,26 +557,87 @@ class Browser2FARequestError(RuntimeError):
+         super().__init__(f"{self.stage} HTTP {self.status}: {self.detail}".rstrip())
+
+
+-def _browser_fetch(driver, url: str, *, method: str = "GET", headers: dict | None = None, body: str | None = None) -> dict:
++def _response_error_text(response) -> str:
++    try:
++        return str(response.text or "").lower()
++    except Exception:
++        return ""
++
++
++def _factor_type_is_rejected(error_text: str) -> bool:
++    return "factor_type" in str(error_text or "").lower() and any(
++        word in str(error_text or "").lower()
++        for word in ("extra", "unexpected", "unknown", "not permitted", "not allowed")
++    )
++
++
++def _is_invalid_totp_response(status: int, error_text: str) -> bool:
++    text = str(error_text or "").lower()
++    return int(status or 0) in {400, 403, 422} and any(
++        marker in text for marker in ("invalid_code", "invalid code", "invalid_request", "invalid request")
++    )
++
++
++def _totp_code_with_margin(totp, *, force_next: bool = False) -> str:
++    """生成至少保留一段提交时间的 TOTP，失败重试时进入下一窗口。"""
++    try:
++        interval = max(1.0, float(getattr(totp, "interval", 30) or 30))
++    except (TypeError, ValueError):
++        interval = 30.0
++    remaining = interval - (time.time() % interval)
++    if force_next or remaining < _TWOFA_MIN_CODE_LIFETIME_SECONDS:
++        wait_seconds = remaining + 0.35
++        logger.info("[2FA] 等待 %.1fs 进入稳定 TOTP 时间窗口", wait_seconds)
++        time.sleep(wait_seconds)
++    return str(totp.now())
++
++
++def _browser_fetch(
++    driver,
++    url: str,
++    *,
++    method: str = "GET",
++    headers: dict | None = None,
++    body: str | None = None,
++    stage: str = "browser_fetch",
++    timeout_ms: int = _TWOFA_BROWSER_FETCH_TIMEOUT_MS,
++) -> dict:
+     """在当前指纹浏览器页面内发送请求，复用真实 TLS、Cookie 和浏览器指纹。"""
+-    result = driver.execute_async_script(
+-        r"""
++    # 注册流程可能把 Selenium 异步脚本超时设为 8/12 秒；若小于浏览器
++    # 内 AbortController 的 20 秒，驱动会先抛 TimeoutException，无法返回
++    # 可重试的阶段信息。2FA 请求期间提升到略大于 fetch 超时的值。
++    set_script_timeout = getattr(driver, "set_script_timeout", None)
++    if callable(set_script_timeout):
++        try:
++            set_script_timeout(max(_TWOFA_BROWSER_SCRIPT_TIMEOUT_SECONDS, timeout_ms / 1000.0 + 5.0))
++        except Exception:
++            logger.debug("[2FA] 设置浏览器异步脚本超时失败", exc_info=True)
++
++    try:
++        result = driver.execute_async_script(
++            r"""
+         const url = String(arguments[0] || '');
+         const method = String(arguments[1] || 'GET');
+         const headers = arguments[2] || {};
+         const body = arguments[3];
++        const timeoutMs = Math.max(1000, Number(arguments[4] || 20000));
+         const done = arguments[arguments.length - 1];
+         (async () => {
++          const controller = new AbortController();
++          const timer = setTimeout(() => controller.abort('twofa_fetch_timeout'), timeoutMs);
+           try {
+-            const options = {method, headers, credentials: 'include', redirect: 'follow'};
++            const options = {method, headers, credentials: 'include', redirect: 'follow', signal: controller.signal};
+             if (body !== null && body !== undefined) options.body = String(body);
+             const resp = await fetch(url, options);
+             const text = await resp.text();
+             let data = null;
+             try { data = JSON.parse(text); } catch (_) {}
++            clearTimeout(timer);
+             done({ok: true, status: resp.status, url: resp.url, data, body: text.slice(0, 1200)});
+           } catch (e) {
+-            done({ok: false, status: 0, error: String(e && (e.stack || e.message) || e).slice(0, 700)});
++            clearTimeout(timer);
++            const timedOut = e && (e.name === 'AbortError' || String(e).includes('twofa_fetch_timeout'));
++            done({ok: false, status: 0, timedOut, error: String(e && (e.stack || e.message) || e).slice(0, 700)});
+           }
+         })();
+         """,
+@@ -573,9 +645,19 @@ def _browser_fetch(driver, url: str, *, method: str = "GET", headers: dict | Non
+         str(method or "GET").upper(),
+         dict(headers or {}),
+         body,
+-    ) or {}
++        int(timeout_ms),
++        ) or {}
++    except Exception as exc:
++        # Selenium TimeoutException 的具体类来自驱动实现；用类名和消息
++        # 归一化，便于激活阶段进入 session 状态确认与重试分支。
++        detail = str(exc).strip() or type(exc).__name__
++        marker = f"{type(exc).__name__} {detail}".lower()
++        if "timeout" in marker or "timed out" in marker:
++            raise Browser2FARequestError(stage, 0, f"浏览器异步脚本超时: {detail[:600]}") from exc
++        raise
+     if not result.get("ok"):
+-        raise Browser2FARequestError("browser_fetch", int(result.get("status") or 0), result.get("error") or "浏览器请求未返回结果")
++        detail = result.get("error") or (f"浏览器请求超过 {int(timeout_ms)}ms" if result.get("timedOut") else "浏览器请求未返回结果")
++        raise Browser2FARequestError(stage, int(result.get("status") or 0), detail)
+     return result
+
+
+@@ -610,6 +692,7 @@ def _browser_session_info(driver) -> dict:
+         driver,
+         "/api/auth/session",
+         headers={"accept": "application/json", "cache-control": "no-cache", "pragma": "no-cache"},
++        stage="session_fetch",
+     )
+     data = _browser_response_data(result, "session")
+     if not data.get("accessToken"):
+@@ -621,19 +704,33 @@ def _browser_enroll_totp(driver, access_token: str) -> tuple[str, str]:
+     """使用当前浏览器网络栈注册 TOTP enrollment。"""
+     device_id = _browser_device_id(driver)
+     language = str(driver.execute_script("return navigator.language || 'en-US';") or "en-US")
+-    result = _browser_fetch(
+-        driver,
+-        "/backend-api/accounts/mfa/enroll",
+-        method="POST",
+-        headers={
+-            "accept": "application/json",
+-            "authorization": f"Bearer {access_token}",
+-            "content-type": "application/json",
+-            "oai-device-id": device_id,
+-            "oai-language": language,
+-        },
+-        body=json.dumps({"factor_type": "totp"}),
+-    )
++    result = None
++    for attempt in range(1, _TWOFA_ACTIVATE_ATTEMPTS + 1):
++        result = _browser_fetch(
++            driver,
++            "/backend-api/accounts/mfa/enroll",
++            method="POST",
++            headers={
++                "accept": "application/json",
++                "authorization": f"Bearer {access_token}",
++                "content-type": "application/json",
++                "oai-device-id": device_id,
++                "oai-language": language,
++                "origin": "https://chatgpt.com",
++                "referer": "https://chatgpt.com/",
++            },
++            body=json.dumps({"factor_type": "totp"}),
++            stage="enroll_fetch",
++        )
++        status = int(result.get("status") or 0)
++        if 200 <= status < 300:
++            break
++        if attempt < _TWOFA_ACTIVATE_ATTEMPTS and status in {429, 500, 502, 503, 504}:
++            logger.warning("[2FA] enrollment 暂时异常 HTTP %s，第 %s/%s 次重试", status, attempt + 1, _TWOFA_ACTIVATE_ATTEMPTS)
++            time.sleep(min(2.0 * attempt, 5.0))
++            continue
++        break
++    assert result is not None
+     data = _browser_response_data(result, "enroll")
+     secret = str(data.get("secret") or "").strip()
+     session_id = str(data.get("session_id") or "").strip()
+@@ -663,31 +760,66 @@ def _browser_activate_totp(driver, access_token: str, secret: str, session_id: s
+                 "content-type": "application/json",
+                 "oai-device-id": device_id,
+                 "oai-language": language,
++                "origin": "https://chatgpt.com",
++                "referer": "https://chatgpt.com/",
+             },
+             body=json.dumps(payload),
++            stage="activate_fetch",
+         )
+
+-    code = totp.now()
+     include_factor_type = True
+-    result = _activate(code, include_factor_type=include_factor_type)
+-    error_text = str(result.get("body") or "").lower()
+-    if int(result.get("status") or 0) in {400, 422} and "factor_type" in error_text and any(
+-        word in error_text for word in ("extra", "unexpected", "unknown", "not permitted", "not allowed")
+-    ):
+-        include_factor_type = False
+-        logger.info("[2FA] 浏览器内接口拒绝 factor_type，使用最小字段重试")
+-        result = _activate(code, include_factor_type=include_factor_type)
++    code = _totp_code_with_margin(totp)
++    for attempt in range(1, _TWOFA_ACTIVATE_ATTEMPTS + 1):
++        try:
++            result = _activate(code, include_factor_type=include_factor_type)
++        except Browser2FARequestError as exc:
++            if exc.stage == "activate_fetch" and exc.status == 0 and _browser_mfa_enabled(driver):
++                logger.info("[2FA] 激活请求超时，但当前 session 已确认 MFA 开启")
++                return
++            if attempt < _TWOFA_ACTIVATE_ATTEMPTS and exc.stage == "activate_fetch" and exc.status == 0:
++                logger.warning("[2FA] 激活请求超时，第 %s/%s 次重试", attempt + 1, _TWOFA_ACTIVATE_ATTEMPTS)
++                code = _totp_code_with_margin(totp, force_next=True)
++                continue
++            raise
++
++        status = int(result.get("status") or 0)
+         error_text = str(result.get("body") or "").lower()
++        if status in {400, 422} and _factor_type_is_rejected(error_text):
++            include_factor_type = False
++            logger.info("[2FA] 浏览器内接口拒绝 factor_type，使用最小字段重试")
++            result = _activate(code, include_factor_type=include_factor_type)
++            status = int(result.get("status") or 0)
++            error_text = str(result.get("body") or "").lower()
++
++        if 200 <= status < 300:
++            data = _browser_response_data(result, "activate")
++            if data.get("success"):
++                return
++            if _browser_mfa_enabled(driver):
++                logger.info("[2FA] 激活响应 success=false，但 session 已确认 MFA 开启")
++                return
++            raise Browser2FARequestError("activate", status, f"响应 success=false: {data}")
++
++        if attempt < _TWOFA_ACTIVATE_ATTEMPTS and _is_invalid_totp_response(status, error_text):
++            logger.info("[2FA] 浏览器内激活验证码已失效，等待下一时间窗口重试")
++            code = _totp_code_with_margin(totp, force_next=True)
++            continue
++        if attempt < _TWOFA_ACTIVATE_ATTEMPTS and status in {429, 500, 502, 503, 504}:
++            logger.warning("[2FA] 浏览器内激活接口暂时异常 HTTP %s，短暂等待后重试", status)
++            time.sleep(min(2.0 * attempt, 5.0))
++            code = _totp_code_with_margin(totp)
++            continue
++        _browser_response_data(result, "activate")
+
+-    if int(result.get("status") or 0) == 400 and ("invalid_request" in error_text or "invalid request" in error_text):
+-        next_code = totp.now()
+-        if next_code != code:
+-            logger.info("[2FA] 激活验证码已跨时间窗口，使用新验证码重试")
+-            result = _activate(next_code, include_factor_type=include_factor_type)
+
+-    data = _browser_response_data(result, "activate")
+-    if not data.get("success"):
+-        raise Browser2FARequestError("activate", int(result.get("status") or 0), f"响应 success=false: {data}")
++def _browser_mfa_enabled(driver) -> bool:
++    """激活请求超时后确认服务端是否已经完成 MFA，避免重复提交 enrollment。"""
++    try:
++        data = _browser_session_info(driver)
++        user = data.get("user") or {}
++        return bool(data.get("mfa") or user.get("mfa"))
++    except Exception:
++        return False
+
+
+ def _browser_trigger_reauth(driver, email: str) -> str:
+@@ -717,6 +849,7 @@ def _browser_trigger_reauth(driver, email: str) -> str:
+             method="POST",
+             headers={"accept": "application/json", "content-type": "application/x-www-form-urlencoded"},
+             body=body,
++            stage="reauth_signin_fetch",
+         ),
+         "reauth_signin",
+     )
+@@ -768,6 +901,7 @@ def _browser_reauthenticate(driver, email: str, previous_otp: str | None = None)
+             method="POST",
+             headers={"accept": "application/json", "content-type": "application/json"},
+             body=json.dumps({"code": otp_code}),
++            stage="reauth_otp_fetch",
+         ),
+         "reauth_otp",
+     )
+diff --git a/tests/test_browser_2fa_bridge.py b/tests/test_browser_2fa_bridge.py
+index 8f44dfe..5029979 100644
+--- a/tests/test_browser_2fa_bridge.py
++++ b/tests/test_browser_2fa_bridge.py
+@@ -1,10 +1,15 @@
+ import json
+ import unittest
+-from unittest.mock import Mock, patch
++from unittest.mock import ANY, Mock, patch
+
+ from core.account_export import (
+     Browser2FARequestError,
+     _activate_totp,
++    _enroll_totp,
++    _browser_activate_totp,
++    _browser_enroll_totp,
++    _browser_fetch,
++    _totp_code_with_margin,
+     browser_session_from_driver,
+     setup_2fa,
+     setup_2fa_from_browser,
+@@ -129,6 +134,112 @@ class Browser2FABridgeTests(unittest.TestCase):
+             "session_id": "ENROLL_SESSION",
+         }
+
++    def test_browser_fetch_aborts_hung_requests_inside_browser(self):
++        driver = Mock()
++        driver.execute_async_script.return_value = {
++            "ok": False,
++            "status": 0,
++            "timedOut": True,
++            "error": "AbortError: twofa_fetch_timeout",
++        }
++
++        with self.assertRaises(Browser2FARequestError) as caught:
++            _browser_fetch(driver, "/backend-api/test", stage="activate_fetch", timeout_ms=4321)
++
++        self.assertEqual(caught.exception.stage, "activate_fetch")
++        self.assertEqual(caught.exception.status, 0)
++        script, *args = driver.execute_async_script.call_args.args
++        self.assertIn("AbortController", script)
++        self.assertEqual(args[-1], 4321)
++        driver.set_script_timeout.assert_called_once_with(25.0)
++
++    def test_browser_fetch_normalizes_driver_script_timeout(self):
++        driver = Mock()
++        driver.execute_async_script.side_effect = TimeoutError("script timeout")
++
++        with self.assertRaises(Browser2FARequestError) as caught:
++            _browser_fetch(driver, "/backend-api/test", stage="activate_fetch")
++
++        self.assertEqual(caught.exception.stage, "activate_fetch")
++        self.assertEqual(caught.exception.status, 0)
++        self.assertIn("异步脚本超时", caught.exception.detail)
++        driver.set_script_timeout.assert_called_once_with(25.0)
++
++    @patch("core.account_export._totp_code_with_margin", side_effect=["111111", "222222"])
++    @patch("core.account_export._browser_fetch")
++    def test_browser_activate_retries_invalid_code_in_next_window(self, browser_fetch, fresh_code):
++        browser_fetch.side_effect = [
++            {"ok": True, "status": 403, "body": '{"code":"invalid_code","message":"Invalid code"}'},
++            {"ok": True, "status": 200, "data": {"success": True}, "body": '{"success":true}'},
++        ]
++        driver = Mock()
++        driver.get_cookies.return_value = [{"name": "oai-did", "value": "device"}]
++        driver.execute_script.return_value = "en-US"
++
++        _browser_activate_totp(driver, "ACCESS", "SECRET", "ENROLL_SESSION")
++
++        self.assertEqual(browser_fetch.call_count, 2)
++        first = json.loads(browser_fetch.call_args_list[0].kwargs["body"])
++        second = json.loads(browser_fetch.call_args_list[1].kwargs["body"])
++        self.assertEqual(first["code"], "111111")
++        self.assertEqual(second["code"], "222222")
++        fresh_code.assert_called_with(ANY, force_next=True)
++
++    @patch("core.account_export._browser_mfa_enabled", return_value=True)
++    @patch("core.account_export._browser_fetch")
++    def test_browser_activate_accepts_timeout_when_session_confirms_mfa(self, browser_fetch, mfa_enabled):
++        browser_fetch.side_effect = Browser2FARequestError("activate_fetch", 0, "timeout")
++        driver = Mock()
++        driver.get_cookies.return_value = [{"name": "oai-did", "value": "device"}]
++        driver.execute_script.return_value = "en-US"
++
++        with patch("core.account_export._totp_code_with_margin", return_value="123456"):
++            _browser_activate_totp(driver, "ACCESS", "SECRET", "ENROLL_SESSION")
++
++        mfa_enabled.assert_called_once_with(driver)
++
++    @patch("core.account_export.time.sleep")
++    @patch("core.account_export._browser_fetch")
++    def test_browser_enroll_retries_transient_server_errors(self, browser_fetch, sleep):
++        browser_fetch.side_effect = [
++            {"ok": True, "status": 500, "body": '{"detail":"Internal Server Error"}'},
++            {"ok": True, "status": 200, "data": {"secret": "SECRET", "session_id": "SESSION"}, "body": "{}"},
++        ]
++        driver = Mock()
++        driver.get_cookies.return_value = []
++        driver.execute_script.return_value = "en-US"
++
++        self.assertEqual(_browser_enroll_totp(driver, "ACCESS"), ("SECRET", "SESSION"))
++        self.assertEqual(browser_fetch.call_count, 2)
++        sleep.assert_called_once_with(2.0)
++
++    def test_protocol_enroll_retries_transient_server_errors(self):
++        session = Mock()
++        session.device_id = "device"
++        session.navigator_language.return_value = "en-US"
++        session.get_chatgpt_headers.return_value = {"content-type": "application/json"}
++        first = Mock(status_code=500, text='{"detail":"Internal Server Error"}')
++        second = Mock(status_code=200, text='{}')
++        second.json.return_value = {"secret": "SECRET", "session_id": "SESSION"}
++        session.post.side_effect = [first, second]
++
++        with patch("core.account_export.time.sleep"):
++            self.assertEqual(_enroll_totp(session, "ACCESS"), ("SECRET", "SESSION"))
++
++        self.assertEqual(session.post.call_count, 2)
++
++    def test_totp_code_waits_out_near_expiry_window(self):
++        totp = Mock(interval=30)
++        totp.now.return_value = "654321"
++        with patch("core.account_export.time.time", return_value=29.5), patch(
++            "core.account_export.time.sleep"
++        ) as sleep:
++            code = _totp_code_with_margin(totp)
++
++        self.assertEqual(code, "654321")
++        sleep.assert_called_once()
++        self.assertGreaterEqual(sleep.call_args.args[0], 0.8)
++
+
+ if __name__ == "__main__":
+     unittest.main()

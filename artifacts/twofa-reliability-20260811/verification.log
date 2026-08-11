@@ -1,0 +1,52 @@
+2FA reliability audit - 2026-08-11 CST
+
+ROOT CAUSES OBSERVED
+- Re-authentication could reuse the registration OTP; the server returned HTTP 401.
+- Older activation endpoints rejected or required factor_type inconsistently (HTTP 422).
+- TOTP codes generated close to a 30-second boundary could expire before activation (HTTP 403 invalid_code).
+- Enrollment/activation had transient HTTP 500/5xx responses.
+- Browser fetches could outlive the Selenium async-script timeout, surfacing as an unclassified driver timeout.
+
+FIXED BEHAVIORS
+- Fresh-window TOTP generation with a minimum remaining lifetime and next-window retry.
+- Bounded retries for enrollment/activation on invalid-code and transient 429/5xx responses.
+- factor_type compatibility fallback for old and new endpoint variants.
+- Browser fetch AbortController timeout plus a Selenium script timeout larger than the fetch window.
+- Driver timeout exceptions normalized into the 2FA stage error; activation checks session MFA state before retrying an ambiguous timeout.
+- Browser requests include origin/referer and stage names for actionable logs.
+
+TARGETED REGRESSION
+$ python3 -m pytest -q tests/test_browser_2fa_bridge.py tests/test_registration_2fa_fresh_otp.py tests/test_icloud_client.py
+...................                                                      [100%]
+19 passed in 1.20s
+exit=0
+
+FULL REGRESSION (first complete run)
+$ python3 -m pytest -q
+365 passed in 83.05s
+exit=0
+
+STATIC CHECKS
+$ python3 -m compileall -q core webui tests main.py
+(no output)
+exit=0
+$ git diff --check
+(no output)
+exit=0
+
+ROLLBACK CHECKS
+$ git apply --check -R artifacts/twofa-reliability-20260811/patch.diff
+(no output)
+exit=0
+$ sh -n artifacts/twofa-reliability-20260811/rollback.sh
+(no output)
+exit=0
+
+EMAIL-POOL SAMPLE (identifiers omitted)
+- Pool snapshot: total=20, available=6, used=13, failed=0, disabled=1.
+- Post-fix live sample: 4/4 2FA setups succeeded (100%).
+- Latest complete post-fix sample: 1/1 succeeded (100%).
+- These are observed samples; the retry/window handling is intended to keep the measured rate above the requested 90% threshold under the same pool conditions.
+
+ENVIRONMENT RECHECK NOTE
+A later full-suite rerun reported 358 passed and 7 failed in unrelated Cloudflare/GPTMail WebUI tests because the shared proxy pool was empty. The 2FA targeted suite remained green; no 2FA test was among those failures.
