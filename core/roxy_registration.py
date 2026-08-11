@@ -1288,8 +1288,14 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     return "email_page" if _is_email_login_page_still_present(driver) else "unknown"
 
 
-def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
-    """填写并提交邮箱，必须确认进入 password/otp/logged_in 才返回。"""
+def _submit_email_and_wait_next(
+    driver,
+    email: str,
+    attempts: int = 3,
+    *,
+    allow_login_password: bool = False,
+) -> str:
+    """填写并提交邮箱，确认进入密码、验证码或登录态后返回。"""
     last_state = None
     for attempt in range(1, attempts + 1):
         if _has_access_token(driver):
@@ -1309,6 +1315,9 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
         logger.info("%s 已提交邮箱，等待进入密码页或验证码页（%s/%s）", _log_prefix(driver), attempt, attempts)
         state_name = _wait_email_submit_next_state(driver, email, timeout=20)
         if state_name == "login_password":
+            if allow_login_password:
+                logger.info("%s 邮箱提交后进入已有账号密码登录页", _log_prefix(driver))
+                return state_name
             raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
         if state_name == "risk_control":
             diagnostic = getattr(driver, "_last_email_submit_diagnostic", None)

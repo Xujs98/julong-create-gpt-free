@@ -165,6 +165,9 @@ from config.twofa import ENABLE_2FA
 # ---------- WebUI ----------
 from config.webui import WEBUI_JOB_LOG_AUTO_REFRESH, WEBUI_JOB_LOG_REFRESH_INTERVAL
 
+# ---------- 账号查活 ----------
+from config.live_check import LIVE_CHECK_DRIVER, LIVE_CHECK_HEADLESS
+
 
 # ---------- 热加载支持 ----------
 # WebUI 改配置后调 reload_all() 即可让所有运行时代码看到新值，无需重启进程。
@@ -181,6 +184,7 @@ _RELOADABLE_SUBMODULES = (
     "config.email",
     "config.twofa",
     "config.webui",
+    "config.live_check",
     "config.roxybrowser",
     "config.cloakbrowser",
     "config.page_agent",
@@ -220,9 +224,9 @@ def reload_all() -> list[str]:
 def _refresh_top_level_constants() -> None:
     """把刚 reload 的子模块的常量重新拷一份到 config 包顶层。"""
     import config as _self
-    from config import browser, openai_protocol, proxy as _proxy, register, email, twofa, webui, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger
+    from config import browser, openai_protocol, proxy as _proxy, register, email, twofa, webui, live_check, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger
     # 简单粗暴：枚举一遍重要常量，覆盖到 _self
-    for src in (browser, openai_protocol, _proxy, register, email, twofa, webui, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger):
+    for src in (browser, openai_protocol, _proxy, register, email, twofa, webui, live_check, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger):
         for k in dir(src):
             if k.isupper() or k in ("pick_proxy", "pick_browser_profile", "build_browser_environment", "validate_browser_profile"):
                 setattr(_self, k, getattr(src, k))
@@ -275,4 +279,6 @@ __all__ = [
     "ENABLE_2FA",
     # webui
     "WEBUI_JOB_LOG_AUTO_REFRESH", "WEBUI_JOB_LOG_REFRESH_INTERVAL",
+    # live check
+    "LIVE_CHECK_DRIVER", "LIVE_CHECK_HEADLESS",
 ]

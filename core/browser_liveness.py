@@ -1,0 +1,313 @@
+# -*- coding: utf-8 -*-
+"""使用本地指纹浏览器恢复账号登录态并刷新 Session/AT。"""
+from __future__ import annotations
+
+import logging
+import time
+from datetime import datetime
+from typing import Any, Callable
+
+import pyotp
+
+from core.email_provider import wait_for_otp
+from core.openai_auth import detect_account_unusable_text
+from core.session_state import build_saved_session, capture_browser_cookies, extract_saved_session
+
+logger = logging.getLogger(__name__)
+
+
+def _browser_session_once(driver) -> tuple[int, dict]:
+    """在 ChatGPT 页面内读取 Session，返回 HTTP 状态与 JSON。"""
+    result = driver.execute_async_script(r"""
+    const done = arguments[0];
+    fetch('/api/auth/session', {credentials:'include', cache:'no-store'})
+      .then(async r => {
+        const text = await r.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch (_) {}
+        done({status:r.status, data, body:text.slice(0,500)});
+      })
+      .catch(e => done({status:0, error:String(e)}));
+    """) or {}
+    data = result.get("data") if isinstance(result, dict) else {}
+    return int(result.get("status") or 0), data if isinstance(data, dict) else {}
+
+
+def _browser_token_status(driver, access_token: str) -> int:
+    """在真实浏览器网络栈中校验 AT，避免协议请求因 CF 403 误判账号。"""
+    result = driver.execute_async_script(r"""
+    const token = String(arguments[0] || '');
+    const done = arguments[arguments.length - 1];
+    fetch('/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-', {
+      method:'GET', credentials:'include',
+      headers:{'accept':'application/json','authorization':'Bearer ' + token}
+    }).then(async r => done({status:r.status, body:(await r.text()).slice(0,500)}))
+      .catch(e => done({status:0, error:String(e)}));
+    """, access_token) or {}
+    return int(result.get("status") or 0)
+
+
+def _saved_cookies(account: dict) -> list[dict]:
+    """读取账号保存的浏览器 Cookie。"""
+    saved = extract_saved_session(account) or {}
+    return [dict(item) for item in (saved.get("cookies") or []) if isinstance(item, dict) and item.get("name")]
+
+
+def _restore_cookies(driver, account: dict) -> int:
+    """向已打开的指纹浏览器写入保存 Cookie。"""
+    cookies = _saved_cookies(account)
+    if not cookies:
+        return 0
+    driver.delete_all_cookies()
+    added = 0
+    for cookie in cookies:
+        try:
+            driver.add_cookie(cookie)
+            added += 1
+        except Exception as exc:
+            logger.debug("[查活][浏览器] Cookie 写入跳过 name=%s err=%s", cookie.get("name"), str(exc)[:160])
+    return added
+
+
+def _session_result(driver, session_info: dict, *, driver_name: str, proxy_used: str | None) -> dict:
+    """把浏览器刷新结果整理成数据库查活结构。"""
+    access_token = str(session_info.get("accessToken") or "").strip()
+    if not access_token:
+        raise RuntimeError("指纹浏览器 Session 未返回 accessToken")
+    return {
+        "ok": True,
+        "status": "live",
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+        "access_token": access_token,
+        "session": build_saved_session(session_info, capture_browser_cookies(driver)),
+        "device_id": next((str(c.get("value")) for c in capture_browser_cookies(driver) if c.get("name") == "oai-did"), None),
+        "proxy_used": proxy_used,
+        "check_method": f"{driver_name}_browser",
+    }
+
+
+def _fill_login_password(driver, password: str) -> None:
+    """填写已有账号密码并提交当前登录表单。"""
+    marker = f"live-password-{int(time.time() * 1000)}"
+    targets = driver.execute_script(r"""
+    const marker = String(arguments[0] || '');
+    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+      && !el.disabled && !el.readOnly;
+    const input = [...document.querySelectorAll('input[type="password"],input[autocomplete="current-password"]')].find(visible);
+    if (!input) return {ok:false, reason:'missing_password_input', url:location.href};
+    const form = input.closest('form');
+    const button = [...(form || document).querySelectorAll('button[type="submit"],input[type="submit"],button')]
+      .find(el => visible(el) && el.getAttribute('aria-disabled') !== 'true');
+    if (!button) return {ok:false, reason:'missing_password_submit', url:location.href};
+    input.setAttribute('data-live-password-input', marker);
+    button.setAttribute('data-live-password-submit', marker);
+    return {ok:true,inputSelector:`[data-live-password-input="${marker}"]`,buttonSelector:`[data-live-password-submit="${marker}"]`};
+    """, marker) or {}
+    if not targets.get("ok"):
+        raise RuntimeError(f"登录密码页处理失败: {targets}")
+
+    from selenium.webdriver.common.by import By
+    inputs = driver.find_elements(By.CSS_SELECTOR, str(targets.get("inputSelector") or ""))
+    buttons = driver.find_elements(By.CSS_SELECTOR, str(targets.get("buttonSelector") or ""))
+    if len(inputs) != 1 or len(buttons) != 1:
+        raise RuntimeError(f"登录密码元素定位异常: inputs={len(inputs)} buttons={len(buttons)}")
+    target = inputs[0]
+    fill = getattr(target, "fill", None)
+    if callable(fill):
+        fill(password)
+    else:
+        target.clear()
+        target.send_keys(password)
+    buttons[0].click()
+
+
+def _wait_after_password(driver, timeout: int = 35) -> str:
+    """等待密码提交后的登录态、TOTP 或邮箱验证码页面。"""
+    from core.roxy_registration import _has_access_token, _is_email_verification_page
+
+    end = time.time() + max(5, int(timeout or 35))
+    last_url = ""
+    while time.time() < end:
+        if _has_access_token(driver):
+            return "logged_in"
+        try:
+            last_url = str(driver.current_url or "")
+        except Exception:
+            last_url = ""
+        lower = last_url.lower()
+        if "mfa" in lower or "challenge" in lower:
+            return "totp"
+        if _is_email_verification_page(driver):
+            return "email_otp"
+        time.sleep(0.5)
+    raise RuntimeError(f"提交密码后未进入登录态/MFA/邮箱验证码页，最后地址: {last_url[:300]}")
+
+
+def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") -> dict:
+    """填写 TOTP/邮箱 OTP，提交后读取 ChatGPT Session。"""
+    from core.roxy_registration import _click_continue, _fetch_chatgpt_session, _type_otp, _wait_after_email_otp_submit
+
+    _type_otp(driver, code, timeout=20)
+    try:
+        _click_continue(driver)
+    except Exception as exc:
+        logger.info("[查活][浏览器] 未找到显式验证码提交按钮，继续等待页面跳转：%s", str(exc)[:160])
+    if code_kind == "email_otp":
+        outcome = _wait_after_email_otp_submit(driver, timeout=12)
+        if outcome != "accepted":
+            raise RuntimeError(f"邮箱验证码未通过：{outcome}")
+    return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+
+
+def _browser_login(driver, account: dict, email: str, *, headless: bool) -> dict:
+    """在当前指纹浏览器内执行 Session 恢复或账号重新登录。"""
+    from core.roxy_registration import (
+        _click_passwordless_signup_if_present,
+        _fetch_chatgpt_session,
+        _safe_get,
+        _submit_email_and_wait_next,
+        _wait_for_cloudflare_challenge,
+    )
+
+    _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com",))
+    restored = _restore_cookies(driver, account)
+    if restored:
+        logger.info("[查活][浏览器] 已写入保存 Session Cookie：%s 个", restored)
+        _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com",))
+        status, session_info = _browser_session_once(driver)
+        token = str(session_info.get("accessToken") or "").strip()
+        if status == 200 and token:
+            token_status = _browser_token_status(driver, token)
+            if 200 <= token_status < 300:
+                logger.info("[查活][浏览器] 保存 Session 已恢复，AT 浏览器内在线校验通过")
+                return session_info
+            logger.info("[查活][浏览器] 保存 Session 的 AT 校验状态=%s，继续重新登录", token_status)
+
+    driver.delete_all_cookies()
+    _safe_get(driver, "https://chatgpt.com/auth/login", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
+    _wait_for_cloudflare_challenge(driver, timeout=300, headless=headless)
+    from core.roxy_registration import _maybe_accept
+    _maybe_accept(driver)
+    otp_after_ts = time.time()
+    state = _submit_email_and_wait_next(driver, email, attempts=3, allow_login_password=True)
+    password = str(account.get("registration_password") or "").strip()
+    totp_secret = str(account.get("totp_secret") or "").replace(" ", "").strip()
+
+    if state == "logged_in":
+        return _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
+    if state == "login_password":
+        if password:
+            otp_after_ts = time.time()
+            logger.info("[查活][浏览器] 使用保存账号密码登录")
+            _fill_login_password(driver, password)
+            state = _wait_after_password(driver)
+        else:
+            otp_after_ts = time.time()
+            switched = _click_passwordless_signup_if_present(driver)
+            if not switched.get("ok"):
+                raise RuntimeError("账号没有保存密码，且登录页没有一次性验证码入口")
+            logger.info("[查活][浏览器] 未保存密码，已切换邮箱验证码登录")
+            state = "email_otp"
+
+    if state == "totp":
+        if not totp_secret:
+            raise RuntimeError("账号要求 TOTP，但数据库没有保存 2FA secret")
+        logger.info("[查活][浏览器] 提交 TOTP 动态验证码")
+        return _submit_code_and_fetch_session(driver, pyotp.TOTP(totp_secret).now(), code_kind="totp")
+    if state == "otp" or state == "email_otp":
+        logger.info("[查活][浏览器] 等待邮箱登录验证码")
+        code = wait_for_otp(email, after_ts=otp_after_ts)
+        return _submit_code_and_fetch_session(driver, code, code_kind="email_otp")
+    if state == "password":
+        raise RuntimeError("已注册账号进入创建密码页，登录状态与账号资料不一致")
+    raise RuntimeError(f"指纹浏览器登录进入未知状态: {state}")
+
+
+def _open_cloak(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[[], None]]:
+    """启动查活专用 CloakBrowser。"""
+    from core.cloakbrowser_driver import build_cloak_driver
+
+    driver, _opened = build_cloak_driver(proxy=proxy, headless=headless)
+    driver._registration_log_prefix = "[查活][Cloak]"
+    return driver, getattr(driver, "upstream_proxy_url", None) or proxy, driver.quit
+
+
+def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[[], None]]:
+    """启动查活专用 RoxyBrowser，并使用本次独立无头参数。"""
+    del proxy  # Roxy 环境代理由 Roxy 配置管理，保持与其环境创建逻辑一致。
+    from config import roxybrowser as roxy_cfg
+    from core.roxy_registration import _build_driver
+    from core.roxybrowser_client import RoxyBrowserClient
+
+    client = RoxyBrowserClient()
+    opened = client.open_profile(headless=headless)
+    driver = _build_driver(opened)
+    driver._registration_log_prefix = "[查活][Roxy]"
+    try:
+        driver.set_page_load_timeout(int(getattr(roxy_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90))
+    except Exception:
+        pass
+
+    def _close() -> None:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        client.close_profile(opened.profile_id)
+        if (
+            bool(getattr(roxy_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
+            and bool(getattr(roxy_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
+            and bool(opened.created_by_run)
+        ):
+            client.delete_profile(opened.profile_id)
+
+    return driver, None, _close
+
+
+def check_account_liveness_browser(
+    email: str,
+    account: dict,
+    *,
+    proxy: str | None,
+    driver_name: str,
+    headless: bool,
+) -> dict:
+    """按配置启动指纹浏览器查活，返回与协议查活一致的数据结构。"""
+    selected = str(driver_name or "").strip().lower()
+    opener = _open_cloak if selected == "cloak" else _open_roxy if selected == "roxy" else None
+    if opener is None:
+        raise ValueError(f"不支持的浏览器查活方式: {selected}")
+
+    driver = None
+    closer: Callable[[], None] | None = None
+    try:
+        logger.info("[查活] 使用 %s 指纹浏览器，headless=%s", selected, bool(headless))
+        driver, proxy_used, closer = opener(proxy, bool(headless))
+        session_info = _browser_login(driver, account, email, headless=bool(headless))
+        result = _session_result(driver, session_info, driver_name=selected, proxy_used=proxy_used)
+        logger.info("[查活][浏览器] 完成：driver=%s 已刷新 Session/AT", selected)
+        return result
+    except Exception as exc:
+        page_text = ""
+        try:
+            from core.roxy_registration import _page_snapshot
+            snapshot = _page_snapshot(driver) if driver is not None else {}
+            page_text = f"{snapshot.get('url') or ''} {snapshot.get('text') or ''}"
+        except Exception:
+            pass
+        dead_code = detect_account_unusable_text(f"{exc} {page_text}")
+        if dead_code:
+            logger.warning("[查活][浏览器] 已废号：%s", dead_code)
+            return {"ok": False, "status": "deactivated", "checked_at": datetime.now().isoformat(timespec="seconds"), "error": dead_code}
+        logger.warning("[查活][浏览器] 失败：%s: %s", type(exc).__name__, str(exc)[:400])
+        return {
+            "ok": False,
+            "status": "failed",
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+            "check_method": f"{selected}_browser",
+        }
+    finally:
+        if closer is not None:
+            closer()

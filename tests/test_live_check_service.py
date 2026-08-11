@@ -66,6 +66,24 @@ def test_network_failure_does_not_mark_account_deactivated():
     assert "403" in result["error"]
 
 
+def test_network_failure_uses_selected_browser_fallback():
+    """选择指纹浏览器时，协议 AT 校验的 CF 403 应继续浏览器确认。"""
+    account = {"access_token": "TOKEN"}
+    checked = {"ok": False, "http_status": 403, "error": "HTTP 403"}
+    with patch("core.live_check_service.check_account_plan", return_value=checked), patch(
+        "core.live_check_service._append_log"
+    ) as append_log:
+        result = _check_existing_access_token(
+            account,
+            proxy="PROXY",
+            email="user@example.com",
+            browser_fallback=True,
+        )
+
+    assert result is None
+    assert any("指纹浏览器确认" in call.args[1] for call in append_log.call_args_list)
+
+
 def test_missing_access_token_requests_login_refresh():
     with patch("core.live_check_service._append_log"):
         result = _check_existing_access_token({}, proxy="PROXY", email="user@example.com")
@@ -102,6 +120,37 @@ def test_saved_password_uses_password_login_without_email_otp(tmp_path):
     assert result == expected
     password_login.assert_called_once()
     email_otp_login.assert_not_called()
+
+
+def test_browser_driver_delegates_without_protocol_login(tmp_path):
+    """浏览器查活直接委派给选定驱动，并传递独立无头参数。"""
+    expected = {"ok": True, "status": "live", "access_token": "NEW", "check_method": "cloak_browser"}
+    account = {"email": "user@example.com", "registration_password": "PASSWORD"}
+    with patch("core.account_liveness.log_path", return_value=tmp_path / "live.log"), patch(
+        "core.browser_liveness.check_account_liveness_browser", return_value=expected
+    ) as browser_check, patch(
+        "core.account_liveness._restore_saved_session"
+    ) as protocol_session, patch(
+        "core.account_liveness._refresh_with_password_protocol"
+    ) as protocol_password:
+        result = check_account_liveness(
+            "user@example.com",
+            proxy="PROXY",
+            account=account,
+            driver="cloak",
+            headless=True,
+        )
+
+    assert result == expected
+    browser_check.assert_called_once_with(
+        "user@example.com",
+        account,
+        proxy="PROXY",
+        driver_name="cloak",
+        headless=True,
+    )
+    protocol_session.assert_not_called()
+    protocol_password.assert_not_called()
 
 
 def test_legacy_account_explicitly_sends_email_otp_before_waiting(tmp_path):

@@ -61,6 +61,17 @@ EDITABLE_FIELDS = [
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },
+    # ---- 账号查活 ----
+    {
+        "key": "LIVE_CHECK_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
+        "label": "查活方式", "help": "仅用于账号查活；协议=纯协议请求，Cloak/Roxy=在对应指纹浏览器中恢复 Session 或重新登录，不改变注册方式",
+        "choices": ["cloak", "roxy", "protocol"],
+        "choice_labels": {"cloak": "CloakBrowser", "roxy": "RoxyBrowser", "protocol": "纯协议"},
+    },
+    {
+        "key": "LIVE_CHECK_HEADLESS", "file": "live_check.py", "type": "bool", "group": "账号查活",
+        "label": "查活浏览器无头", "help": "仅影响查活启动的 Cloak/Roxy 浏览器；不会修改注册流程或两个浏览器各自的无头设置",
+    },
 
     # ---- CloakBrowser ----
     {

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""账号查活后台队列：AT、Session、密码/TOTP 与邮箱 OTP 全部走协议请求。"""
+"""账号查活后台队列：现有 AT 快速校验后，按独立配置选择协议或指纹浏览器。"""
 from __future__ import annotations
 
 import logging
@@ -39,7 +39,13 @@ def _append_log(email: str, line: str, *, clear: bool = False) -> None:
         f.write(f"{stamp} [INFO] {line}\n")
 
 
-def _check_existing_access_token(account: dict, *, proxy: str | None, email: str) -> dict | None:
+def _check_existing_access_token(
+    account: dict,
+    *,
+    proxy: str | None,
+    email: str,
+    browser_fallback: bool = False,
+) -> dict | None:
     """Return a liveness result, or None when an expired token requires re-login."""
     access_token = str(account.get("access_token") or "").strip()
     if not access_token:
@@ -75,6 +81,12 @@ def _check_existing_access_token(account: dict, *, proxy: str | None, email: str
         return None
 
     error = str(checked.get("error") or "现有 AT 在线校验失败")
+    if browser_fallback and (
+        checked.get("http_status") in {403, 429}
+        or any(word in error.lower() for word in ("403", "429", "timeout", "connection", "proxy"))
+    ):
+        _append_log(email, "[查活] 现有 AT 的协议在线校验受网络/CF 拦截，转由选定指纹浏览器确认")
+        return None
     return {
         "ok": False,
         "status": "failed",
@@ -93,18 +105,36 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             return {"ok": False, "status": "failed", "error": "账号已删除或查活状态已被重置"}
         route = resolve_plan_check_route(explicit_proxy=proxy)
         selected_proxy = route.get("proxy")
+        from config import live_check as live_cfg
+        selected_driver = str(getattr(live_cfg, "LIVE_CHECK_DRIVER", "cloak") or "cloak").strip().lower()
+        if selected_driver not in {"protocol", "cloak", "roxy"}:
+            raise RuntimeError(f"LIVE_CHECK_DRIVER 配置无效：{selected_driver}")
+        selected_headless = bool(getattr(live_cfg, "LIVE_CHECK_HEADLESS", False))
         _append_log(
             email,
             "[查活] 开始后台执行 "
             f"trigger={trigger} network_route={route.get('network_route')} "
             f"proxy_mode={route.get('proxy_mode')} proxy_used={route.get('proxy_used') or '-'} "
-            f"fallback_reason={route.get('proxy_fallback_reason') or '-'}"
+            f"fallback_reason={route.get('proxy_fallback_reason') or '-'} "
+            f"driver={selected_driver} headless={selected_headless if selected_driver != 'protocol' else '-'}"
         )
         account = db.get_account(account_id) or {}
-        result = _check_existing_access_token(account, proxy=selected_proxy, email=email)
+        result = _check_existing_access_token(
+            account,
+            proxy=selected_proxy,
+            email=email,
+            browser_fallback=selected_driver != "protocol",
+        )
         used_relogin = result is None
         if used_relogin:
-            result = check_account_liveness(email, proxy=selected_proxy, clear_log=False, account=account)
+            result = check_account_liveness(
+                email,
+                proxy=selected_proxy,
+                clear_log=False,
+                account=account,
+                driver=selected_driver,
+                headless=selected_headless,
+            )
         # 早期 providers/csrf 403 通常是该出口被 CF 拦截，不代表账号死亡。
         # auto/proxy 模式下如果用了代理，额外直连兜底一次，便于和套餐查询的 auto 语义保持接近。
         err_text = str(result.get("error") or "")
@@ -118,7 +148,14 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             and str(route.get("network_route") or "") == "proxy"
         ):
             _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
-            result = check_account_liveness(email, proxy="", clear_log=False, account=account)
+            result = check_account_liveness(
+                email,
+                proxy="",
+                clear_log=False,
+                account=account,
+                driver=selected_driver,
+                headless=selected_headless,
+            )
         db.update_account_liveness(account_id, result)
         if result.get("ok") and result.get("check_method") != "access_token":
             # 查活重新建立登录态后，旧套餐失败状态对应的是上一枚 AT。
@@ -145,6 +182,8 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
                 _append_log(email, "[查活] 完成：账号正常，已用保存 Session 静默刷新最新 AT")
             elif result.get("check_method") in {"password", "password_totp"}:
                 _append_log(email, "[查活] 完成：账号正常，已用协议账号密码/2FA 登录并刷新最新 AT")
+            elif str(result.get("check_method") or "").endswith("_browser"):
+                _append_log(email, f"[查活] 完成：账号正常，已用 {selected_driver} 指纹浏览器刷新最新 Session/AT")
             else:
                 _append_log(email, "[查活] 完成：账号正常，已用旧账号邮箱验证码兜底并刷新最新 AT")
         elif result.get("status") == "deactivated":

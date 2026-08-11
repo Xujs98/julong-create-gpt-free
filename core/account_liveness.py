@@ -384,6 +384,8 @@ def check_account_liveness(
     *,
     clear_log: bool = True,
     account: dict | None = None,
+    driver: str = "protocol",
+    headless: bool = False,
 ) -> dict:
     """
     重新登录账号并刷新最新 accessToken。
@@ -429,7 +431,19 @@ def check_account_liveness(
 
         logger.info("[查活] 日志文件：%s", path)
         logger.info("[查活] 开始刷新登录态：%s", email)
-        logger.info("[查活] 流程：保存 Session Cookie → 账号密码/TOTP → 旧账号邮箱 OTP 兜底 → Session/AT")
+        selected_driver = str(driver or "protocol").strip().lower()
+        logger.info("[查活] 本次查活方式：%s%s", selected_driver, f" headless={bool(headless)}" if selected_driver != "protocol" else "")
+        if selected_driver != "protocol":
+            from core.browser_liveness import check_account_liveness_browser
+            return check_account_liveness_browser(
+                email,
+                account,
+                proxy=proxy,
+                driver_name=selected_driver,
+                headless=bool(headless),
+            )
+
+        logger.info("[查活] 协议流程：保存 Session Cookie → 账号密码/TOTP → 旧账号邮箱 OTP 兜底 → Session/AT")
 
         restored = _restore_saved_session(account, email, proxy, checked_at)
         if restored:
