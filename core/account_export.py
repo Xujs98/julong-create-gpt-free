@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _TWOFA_BROWSER_FETCH_TIMEOUT_MS = 20_000
 _TWOFA_BROWSER_SCRIPT_TIMEOUT_SECONDS = 25.0
 _TWOFA_ACTIVATE_ATTEMPTS = 3
+_TWOFA_REAUTH_OTP_ATTEMPTS = 3
 _TWOFA_MIN_CODE_LIFETIME_SECONDS = 12.0
 
 # 输出目录（与项目根 .claude/ 工作区分离，单独放在 accounts/）
@@ -356,7 +357,14 @@ def _validate_reauth_otp(session: BrowserSession, code: str) -> str:
 
     logger.info(f"[2FA] 提交重认证 OTP: {code}")
     resp = session.post(url, headers=headers, data=body)
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        error_text = _response_error_text(resp)
+        if _is_invalid_email_otp_response(resp.status_code, error_text):
+            from core.openai_auth import EmailOtpInvalidError
+            raise EmailOtpInvalidError(
+                f"2FA 重认证邮箱验证码无效或已过期: status={resp.status_code}, body={str(resp.text or '')[:240]}"
+            )
+        resp.raise_for_status()
     data = resp.json()
     continue_url = data.get("continue_url")
     if not continue_url:
@@ -513,25 +521,73 @@ def setup_2fa(
     _follow_reauth(session, auth_url)
     human_delay("navigate")
 
-    if otp_code is None:
-        if _email_cfg.USE_EMAIL_SERVICE:
-            from core.email_provider import wait_for_otp
-            logger.info("[2FA] 自动等待邮箱重认证 OTP...")
-            excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
-            if excluded:
-                logger.info("[2FA] 排除注册阶段已使用 OTP，等待邮箱出现新验证码")
-            otp_code = wait_for_otp(
-                email,
-                after_ts=reauth_otp_after_ts,
-                exclude_codes=excluded,
-            )
-        else:
-            logger.info("")
-            logger.info("[2FA] 请检查邮箱，输入新收到的 6 位验证码")
-            otp_code = input(">>> 2FA 验证码: ").strip()
+    from core.openai_auth import EmailOtpInvalidError, send_email_otp
 
-    human_delay("otp_input")
-    continue_url = _validate_reauth_otp(session, otp_code)
+    excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
+    if excluded:
+        logger.info("[2FA] 排除注册阶段已使用 OTP，等待邮箱出现新验证码")
+    current_otp = str(otp_code or "").strip() or None
+    continue_url = None
+    for otp_attempt in range(1, _TWOFA_REAUTH_OTP_ATTEMPTS + 1):
+        if current_otp is None:
+            try:
+                if _email_cfg.USE_EMAIL_SERVICE:
+                    from core.email_provider import wait_for_otp
+                    logger.info(
+                        "[2FA] 自动等待邮箱重认证 OTP（第 %s/%s 次）...",
+                        otp_attempt,
+                        _TWOFA_REAUTH_OTP_ATTEMPTS,
+                    )
+                    current_otp = wait_for_otp(
+                        email,
+                        after_ts=reauth_otp_after_ts,
+                        exclude_codes=excluded,
+                    )
+                else:
+                    logger.info("")
+                    logger.info(
+                        "[2FA] 请检查邮箱，输入新收到的 6 位验证码（第 %s/%s 次）",
+                        otp_attempt,
+                        _TWOFA_REAUTH_OTP_ATTEMPTS,
+                    )
+                    current_otp = input(">>> 2FA 验证码: ").strip()
+            except Exception as exc:
+                if otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "[2FA] 未收到重认证验证码，重新发送后继续等待（下一轮 %s/%s）：%s: %s",
+                    otp_attempt + 1,
+                    _TWOFA_REAUTH_OTP_ATTEMPTS,
+                    type(exc).__name__,
+                    str(exc)[:180],
+                )
+                reauth_otp_after_ts = time.time()
+                send_email_otp(session)
+                human_delay("api")
+                current_otp = None
+                continue
+
+        human_delay("otp_input")
+        try:
+            continue_url = _validate_reauth_otp(session, current_otp)
+            break
+        except EmailOtpInvalidError as exc:
+            excluded.add(str(current_otp))
+            if otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
+                raise
+            logger.warning(
+                "[2FA] 重认证验证码错误/过期，重新发送并获取新验证码（下一轮 %s/%s）：%s",
+                otp_attempt + 1,
+                _TWOFA_REAUTH_OTP_ATTEMPTS,
+                str(exc)[:180],
+            )
+            reauth_otp_after_ts = time.time()
+            send_email_otp(session)
+            human_delay("api")
+            current_otp = None
+
+    if not continue_url:
+        raise RuntimeError("2FA 重认证邮箱验证码验证未完成")
     human_delay("api")
     new_token = _exchange_new_token(session, continue_url)
     human_delay("api")
@@ -575,6 +631,25 @@ def _is_invalid_totp_response(status: int, error_text: str) -> bool:
     text = str(error_text or "").lower()
     return int(status or 0) in {400, 403, 422} and any(
         marker in text for marker in ("invalid_code", "invalid code", "invalid_request", "invalid request")
+    )
+
+
+def _is_invalid_email_otp_response(status: int, error_text: str) -> bool:
+    text = str(error_text or "").lower()
+    return int(status or 0) == 401 or (
+        int(status or 0) in {400, 403, 422}
+        and any(
+            marker in text
+            for marker in (
+                "invalid_code",
+                "invalid code",
+                "invalid_otp",
+                "invalid otp",
+                "expired_code",
+                "expired code",
+                "code_invalid",
+            )
+        )
     )
 
 
@@ -859,6 +934,24 @@ def _browser_trigger_reauth(driver, email: str) -> str:
     return auth_url
 
 
+def _browser_resend_reauth_otp(driver) -> None:
+    """在当前 Auth 页面重新发送 2FA 重认证邮箱验证码。"""
+    result = _browser_fetch(
+        driver,
+        "/api/accounts/email-otp/send",
+        headers={
+            "accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
+        },
+        stage="reauth_otp_resend_fetch",
+    )
+    status = int(result.get("status") or 0)
+    if not 200 <= status < 400:
+        raise Browser2FARequestError("reauth_otp_resend", status, result.get("body") or "")
+    logger.info("[2FA] 浏览器内重新发送重认证邮箱验证码完成，HTTP %s", status)
+
+
 def _wait_for_browser_host(driver, host: str, timeout: int = 30) -> str:
     """等待浏览器落到指定域名，返回最终 URL。"""
     end = time.time() + max(1, int(timeout or 30))
@@ -885,26 +978,72 @@ def _browser_reauthenticate(driver, email: str, previous_otp: str | None = None)
     _wait_for_browser_host(driver, "auth.openai.com", timeout=30)
     human_delay("navigate")
 
-    if _email_cfg.USE_EMAIL_SERVICE:
-        from core.email_provider import wait_for_otp
-        excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
-        logger.info("[2FA] 浏览器内重认证等待新的邮箱验证码")
-        otp_code = wait_for_otp(email, after_ts=otp_after_ts, exclude_codes=excluded)
-    else:
-        logger.info("[2FA] 请检查邮箱，输入新的 6 位重认证验证码")
-        otp_code = input(">>> 2FA 验证码: ").strip()
+    excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
+    otp_code = None
+    data = None
+    for otp_attempt in range(1, _TWOFA_REAUTH_OTP_ATTEMPTS + 1):
+        if otp_code is None:
+            try:
+                if _email_cfg.USE_EMAIL_SERVICE:
+                    from core.email_provider import wait_for_otp
+                    logger.info(
+                        "[2FA] 浏览器内重认证等待新的邮箱验证码（第 %s/%s 次）",
+                        otp_attempt,
+                        _TWOFA_REAUTH_OTP_ATTEMPTS,
+                    )
+                    otp_code = wait_for_otp(email, after_ts=otp_after_ts, exclude_codes=excluded)
+                else:
+                    logger.info(
+                        "[2FA] 请检查邮箱，输入新的 6 位重认证验证码（第 %s/%s 次）",
+                        otp_attempt,
+                        _TWOFA_REAUTH_OTP_ATTEMPTS,
+                    )
+                    otp_code = input(">>> 2FA 验证码: ").strip()
+            except Exception as exc:
+                if otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "[2FA] 浏览器内未收到重认证验证码，重新发送后继续等待（下一轮 %s/%s）：%s: %s",
+                    otp_attempt + 1,
+                    _TWOFA_REAUTH_OTP_ATTEMPTS,
+                    type(exc).__name__,
+                    str(exc)[:180],
+                )
+                otp_after_ts = time.time()
+                _browser_resend_reauth_otp(driver)
+                human_delay("api")
+                otp_code = None
+                continue
 
-    data = _browser_response_data(
-        _browser_fetch(
-            driver,
-            "/api/accounts/email-otp/validate",
-            method="POST",
-            headers={"accept": "application/json", "content-type": "application/json"},
-            body=json.dumps({"code": otp_code}),
-            stage="reauth_otp_fetch",
-        ),
-        "reauth_otp",
-    )
+        try:
+            data = _browser_response_data(
+                _browser_fetch(
+                    driver,
+                    "/api/accounts/email-otp/validate",
+                    method="POST",
+                    headers={"accept": "application/json", "content-type": "application/json"},
+                    body=json.dumps({"code": otp_code}),
+                    stage="reauth_otp_fetch",
+                ),
+                "reauth_otp",
+            )
+            break
+        except Browser2FARequestError as exc:
+            if not _is_invalid_email_otp_response(exc.status, exc.detail) or otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
+                raise
+            excluded.add(str(otp_code))
+            logger.warning(
+                "[2FA] 浏览器内重认证验证码错误/过期，重新发送并获取新验证码（下一轮 %s/%s）",
+                otp_attempt + 1,
+                _TWOFA_REAUTH_OTP_ATTEMPTS,
+            )
+            otp_after_ts = time.time()
+            _browser_resend_reauth_otp(driver)
+            human_delay("api")
+            otp_code = None
+
+    if not isinstance(data, dict):
+        raise Browser2FARequestError("reauth_otp", 0, "重认证邮箱验证码验证未完成")
     continue_url = str(data.get("continue_url") or "").strip()
     if not continue_url:
         raise Browser2FARequestError("reauth_otp", 200, f"响应缺少 continue_url: {data}")

@@ -1,0 +1,358 @@
+diff --git a/core/account_export.py b/core/account_export.py
+index 3bc0945..a4074fe 100644
+--- a/core/account_export.py
++++ b/core/account_export.py
+@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
+ _TWOFA_BROWSER_FETCH_TIMEOUT_MS = 20_000
+ _TWOFA_BROWSER_SCRIPT_TIMEOUT_SECONDS = 25.0
+ _TWOFA_ACTIVATE_ATTEMPTS = 3
++_TWOFA_REAUTH_OTP_ATTEMPTS = 3
+ _TWOFA_MIN_CODE_LIFETIME_SECONDS = 12.0
+
+ # 输出目录（与项目根 .claude/ 工作区分离，单独放在 accounts/）
+@@ -356,7 +357,14 @@ def _validate_reauth_otp(session: BrowserSession, code: str) -> str:
+
+     logger.info(f"[2FA] 提交重认证 OTP: {code}")
+     resp = session.post(url, headers=headers, data=body)
+-    resp.raise_for_status()
++    if resp.status_code != 200:
++        error_text = _response_error_text(resp)
++        if _is_invalid_email_otp_response(resp.status_code, error_text):
++            from core.openai_auth import EmailOtpInvalidError
++            raise EmailOtpInvalidError(
++                f"2FA 重认证邮箱验证码无效或已过期: status={resp.status_code}, body={str(resp.text or '')[:240]}"
++            )
++        resp.raise_for_status()
+     data = resp.json()
+     continue_url = data.get("continue_url")
+     if not continue_url:
+@@ -513,25 +521,73 @@ def setup_2fa(
+     _follow_reauth(session, auth_url)
+     human_delay("navigate")
+
+-    if otp_code is None:
+-        if _email_cfg.USE_EMAIL_SERVICE:
+-            from core.email_provider import wait_for_otp
+-            logger.info("[2FA] 自动等待邮箱重认证 OTP...")
+-            excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
+-            if excluded:
+-                logger.info("[2FA] 排除注册阶段已使用 OTP，等待邮箱出现新验证码")
+-            otp_code = wait_for_otp(
+-                email,
+-                after_ts=reauth_otp_after_ts,
+-                exclude_codes=excluded,
++    from core.openai_auth import EmailOtpInvalidError, send_email_otp
++
++    excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
++    if excluded:
++        logger.info("[2FA] 排除注册阶段已使用 OTP，等待邮箱出现新验证码")
++    current_otp = str(otp_code or "").strip() or None
++    continue_url = None
++    for otp_attempt in range(1, _TWOFA_REAUTH_OTP_ATTEMPTS + 1):
++        if current_otp is None:
++            try:
++                if _email_cfg.USE_EMAIL_SERVICE:
++                    from core.email_provider import wait_for_otp
++                    logger.info(
++                        "[2FA] 自动等待邮箱重认证 OTP（第 %s/%s 次）...",
++                        otp_attempt,
++                        _TWOFA_REAUTH_OTP_ATTEMPTS,
++                    )
++                    current_otp = wait_for_otp(
++                        email,
++                        after_ts=reauth_otp_after_ts,
++                        exclude_codes=excluded,
++                    )
++                else:
++                    logger.info("")
++                    logger.info(
++                        "[2FA] 请检查邮箱，输入新收到的 6 位验证码（第 %s/%s 次）",
++                        otp_attempt,
++                        _TWOFA_REAUTH_OTP_ATTEMPTS,
++                    )
++                    current_otp = input(">>> 2FA 验证码: ").strip()
++            except Exception as exc:
++                if otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
++                    raise
++                logger.warning(
++                    "[2FA] 未收到重认证验证码，重新发送后继续等待（下一轮 %s/%s）：%s: %s",
++                    otp_attempt + 1,
++                    _TWOFA_REAUTH_OTP_ATTEMPTS,
++                    type(exc).__name__,
++                    str(exc)[:180],
++                )
++                reauth_otp_after_ts = time.time()
++                send_email_otp(session)
++                human_delay("api")
++                current_otp = None
++                continue
++
++        human_delay("otp_input")
++        try:
++            continue_url = _validate_reauth_otp(session, current_otp)
++            break
++        except EmailOtpInvalidError as exc:
++            excluded.add(str(current_otp))
++            if otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
++                raise
++            logger.warning(
++                "[2FA] 重认证验证码错误/过期，重新发送并获取新验证码（下一轮 %s/%s）：%s",
++                otp_attempt + 1,
++                _TWOFA_REAUTH_OTP_ATTEMPTS,
++                str(exc)[:180],
+             )
+-        else:
+-            logger.info("")
+-            logger.info("[2FA] 请检查邮箱，输入新收到的 6 位验证码")
+-            otp_code = input(">>> 2FA 验证码: ").strip()
++            reauth_otp_after_ts = time.time()
++            send_email_otp(session)
++            human_delay("api")
++            current_otp = None
+
+-    human_delay("otp_input")
+-    continue_url = _validate_reauth_otp(session, otp_code)
++    if not continue_url:
++        raise RuntimeError("2FA 重认证邮箱验证码验证未完成")
+     human_delay("api")
+     new_token = _exchange_new_token(session, continue_url)
+     human_delay("api")
+@@ -578,6 +634,25 @@ def _is_invalid_totp_response(status: int, error_text: str) -> bool:
+     )
+
+
++def _is_invalid_email_otp_response(status: int, error_text: str) -> bool:
++    text = str(error_text or "").lower()
++    return int(status or 0) == 401 or (
++        int(status or 0) in {400, 403, 422}
++        and any(
++            marker in text
++            for marker in (
++                "invalid_code",
++                "invalid code",
++                "invalid_otp",
++                "invalid otp",
++                "expired_code",
++                "expired code",
++                "code_invalid",
++            )
++        )
++    )
++
++
+ def _totp_code_with_margin(totp, *, force_next: bool = False) -> str:
+     """生成至少保留一段提交时间的 TOTP，失败重试时进入下一窗口。"""
+     try:
+@@ -859,6 +934,24 @@ def _browser_trigger_reauth(driver, email: str) -> str:
+     return auth_url
+
+
++def _browser_resend_reauth_otp(driver) -> None:
++    """在当前 Auth 页面重新发送 2FA 重认证邮箱验证码。"""
++    result = _browser_fetch(
++        driver,
++        "/api/accounts/email-otp/send",
++        headers={
++            "accept": "application/json,text/html;q=0.9,*/*;q=0.8",
++            "cache-control": "no-cache",
++            "pragma": "no-cache",
++        },
++        stage="reauth_otp_resend_fetch",
++    )
++    status = int(result.get("status") or 0)
++    if not 200 <= status < 400:
++        raise Browser2FARequestError("reauth_otp_resend", status, result.get("body") or "")
++    logger.info("[2FA] 浏览器内重新发送重认证邮箱验证码完成，HTTP %s", status)
++
++
+ def _wait_for_browser_host(driver, host: str, timeout: int = 30) -> str:
+     """等待浏览器落到指定域名，返回最终 URL。"""
+     end = time.time() + max(1, int(timeout or 30))
+@@ -885,26 +978,72 @@ def _browser_reauthenticate(driver, email: str, previous_otp: str | None = None)
+     _wait_for_browser_host(driver, "auth.openai.com", timeout=30)
+     human_delay("navigate")
+
+-    if _email_cfg.USE_EMAIL_SERVICE:
+-        from core.email_provider import wait_for_otp
+-        excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
+-        logger.info("[2FA] 浏览器内重认证等待新的邮箱验证码")
+-        otp_code = wait_for_otp(email, after_ts=otp_after_ts, exclude_codes=excluded)
+-    else:
+-        logger.info("[2FA] 请检查邮箱，输入新的 6 位重认证验证码")
+-        otp_code = input(">>> 2FA 验证码: ").strip()
++    excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
++    otp_code = None
++    data = None
++    for otp_attempt in range(1, _TWOFA_REAUTH_OTP_ATTEMPTS + 1):
++        if otp_code is None:
++            try:
++                if _email_cfg.USE_EMAIL_SERVICE:
++                    from core.email_provider import wait_for_otp
++                    logger.info(
++                        "[2FA] 浏览器内重认证等待新的邮箱验证码（第 %s/%s 次）",
++                        otp_attempt,
++                        _TWOFA_REAUTH_OTP_ATTEMPTS,
++                    )
++                    otp_code = wait_for_otp(email, after_ts=otp_after_ts, exclude_codes=excluded)
++                else:
++                    logger.info(
++                        "[2FA] 请检查邮箱，输入新的 6 位重认证验证码（第 %s/%s 次）",
++                        otp_attempt,
++                        _TWOFA_REAUTH_OTP_ATTEMPTS,
++                    )
++                    otp_code = input(">>> 2FA 验证码: ").strip()
++            except Exception as exc:
++                if otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
++                    raise
++                logger.warning(
++                    "[2FA] 浏览器内未收到重认证验证码，重新发送后继续等待（下一轮 %s/%s）：%s: %s",
++                    otp_attempt + 1,
++                    _TWOFA_REAUTH_OTP_ATTEMPTS,
++                    type(exc).__name__,
++                    str(exc)[:180],
++                )
++                otp_after_ts = time.time()
++                _browser_resend_reauth_otp(driver)
++                human_delay("api")
++                otp_code = None
++                continue
+
+-    data = _browser_response_data(
+-        _browser_fetch(
+-            driver,
+-            "/api/accounts/email-otp/validate",
+-            method="POST",
+-            headers={"accept": "application/json", "content-type": "application/json"},
+-            body=json.dumps({"code": otp_code}),
+-            stage="reauth_otp_fetch",
+-        ),
+-        "reauth_otp",
+-    )
++        try:
++            data = _browser_response_data(
++                _browser_fetch(
++                    driver,
++                    "/api/accounts/email-otp/validate",
++                    method="POST",
++                    headers={"accept": "application/json", "content-type": "application/json"},
++                    body=json.dumps({"code": otp_code}),
++                    stage="reauth_otp_fetch",
++                ),
++                "reauth_otp",
++            )
++            break
++        except Browser2FARequestError as exc:
++            if not _is_invalid_email_otp_response(exc.status, exc.detail) or otp_attempt >= _TWOFA_REAUTH_OTP_ATTEMPTS:
++                raise
++            excluded.add(str(otp_code))
++            logger.warning(
++                "[2FA] 浏览器内重认证验证码错误/过期，重新发送并获取新验证码（下一轮 %s/%s）",
++                otp_attempt + 1,
++                _TWOFA_REAUTH_OTP_ATTEMPTS,
++            )
++            otp_after_ts = time.time()
++            _browser_resend_reauth_otp(driver)
++            human_delay("api")
++            otp_code = None
++
++    if not isinstance(data, dict):
++        raise Browser2FARequestError("reauth_otp", 0, "重认证邮箱验证码验证未完成")
+     continue_url = str(data.get("continue_url") or "").strip()
+     if not continue_url:
+         raise Browser2FARequestError("reauth_otp", 200, f"响应缺少 continue_url: {data}")
+diff --git a/tests/test_browser_2fa_bridge.py b/tests/test_browser_2fa_bridge.py
+index 5029979..db23a33 100644
+--- a/tests/test_browser_2fa_bridge.py
++++ b/tests/test_browser_2fa_bridge.py
+@@ -9,11 +9,14 @@ from core.account_export import (
+     _browser_activate_totp,
+     _browser_enroll_totp,
+     _browser_fetch,
++    _browser_reauthenticate,
+     _totp_code_with_margin,
++    _validate_reauth_otp,
+     browser_session_from_driver,
+     setup_2fa,
+     setup_2fa_from_browser,
+ )
++from core.openai_auth import EmailOtpInvalidError
+
+
+ class Browser2FABridgeTests(unittest.TestCase):
+@@ -113,6 +116,76 @@ class Browser2FABridgeTests(unittest.TestCase):
+         self.assertEqual(kwargs["exclude_codes"], {"683938"})
+         self.assertIsInstance(kwargs["after_ts"], float)
+
++    def test_setup_2fa_resends_and_excludes_invalid_reauth_otp(self):
++        session = Mock()
++        seen_exclusions = []
++        codes = iter(["111111", "222222"])
++
++        def wait_for_new_otp(*_args, **kwargs):
++            seen_exclusions.append(set(kwargs["exclude_codes"]))
++            return next(codes)
++
++        with patch("config.email.USE_EMAIL_SERVICE", True), patch(
++            "core.account_export._trigger_reauth", return_value="https://auth.example/reauth"
++        ), patch("core.account_export._follow_reauth"), patch(
++            "core.account_export.human_delay"
++        ), patch("core.email_provider.wait_for_otp", side_effect=wait_for_new_otp) as wait_for_otp, patch(
++            "core.account_export._validate_reauth_otp",
++            side_effect=[EmailOtpInvalidError("expired"), "https://chatgpt.example/callback"],
++        ), patch("core.openai_auth.send_email_otp") as resend, patch(
++            "core.account_export._exchange_new_token", return_value="NEW_TOKEN"
++        ), patch("core.account_export._enroll_totp", return_value=("TOTPSECRET", "SESSION_ID")), patch(
++            "core.account_export._activate_totp", return_value=True
++        ):
++            result = setup_2fa(session, "user@example.test", previous_otp="683938")
++
++        self.assertEqual(result, "TOTPSECRET")
++        resend.assert_called_once_with(session)
++        self.assertEqual(wait_for_otp.call_count, 2)
++        self.assertEqual(seen_exclusions, [{"683938"}, {"683938", "111111"}])
++
++    def test_validate_reauth_otp_classifies_http_401_as_invalid_code(self):
++        session = Mock()
++        session.get_auth_headers.return_value = {"content-type": "application/json"}
++        session.post.return_value = Mock(status_code=401, text='{"code":"invalid_code"}')
++
++        with self.assertRaises(EmailOtpInvalidError):
++            _validate_reauth_otp(session, "111111")
++
++    @patch("core.account_export._browser_session_info", return_value={"accessToken": "FRESH_TOKEN"})
++    @patch("core.account_export._wait_for_browser_host")
++    @patch("core.account_export._browser_trigger_reauth", return_value="https://auth.example/reauth")
++    @patch("core.account_export._browser_fetch")
++    def test_browser_reauth_resends_after_invalid_otp(self, browser_fetch, trigger, wait_host, session_info):
++        browser_fetch.side_effect = [
++            {"ok": True, "status": 401, "body": '{"code":"invalid_code"}'},
++            {"ok": True, "status": 200, "body": "resent"},
++            {
++                "ok": True,
++                "status": 200,
++                "data": {"continue_url": "https://chatgpt.example/callback"},
++                "body": '{"continue_url":"https://chatgpt.example/callback"}',
++            },
++        ]
++        driver = Mock()
++        seen_exclusions = []
++        codes = iter(["111111", "222222"])
++
++        def wait_for_new_otp(*_args, **kwargs):
++            seen_exclusions.append(set(kwargs["exclude_codes"]))
++            return next(codes)
++
++        with patch("config.email.USE_EMAIL_SERVICE", True), patch(
++            "core.email_provider.wait_for_otp", side_effect=wait_for_new_otp
++        ) as wait_for_otp, patch("core.account_export.human_delay"):
++            result = _browser_reauthenticate(driver, "user@example.test", previous_otp="683938")
++
++        self.assertEqual(result, "FRESH_TOKEN")
++        self.assertEqual(browser_fetch.call_count, 3)
++        self.assertEqual(browser_fetch.call_args_list[1].kwargs["stage"], "reauth_otp_resend_fetch")
++        self.assertEqual(wait_for_otp.call_count, 2)
++        self.assertEqual(seen_exclusions, [{"683938"}, {"683938", "111111"}])
++
+     def test_activate_totp_sends_required_factor_type(self):
+         session = Mock()
+         session.device_id = "device"

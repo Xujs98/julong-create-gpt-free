@@ -1,0 +1,46 @@
+2FA email OTP resend verification - 2026-08-11 CST
+
+BASELINE
+- Registration OTP already retried/resend up to 3 times in protocol, Roxy, and Cloak paths.
+- The 2FA re-authentication path sent one email OTP, waited once, and validated once.
+- A delayed, missing, expired, or reused 2FA re-authentication OTP ended the 2FA setup.
+
+MODIFIED BEHAVIOR
+- Protocol and fingerprint-browser 2FA re-authentication now use up to 3 OTP attempts.
+- Mailbox wait failure triggers the email-otp/send endpoint before the next wait.
+- HTTP 401 or explicit invalid/expired OTP responses trigger resend and retry.
+- The registration OTP and each rejected OTP are excluded from later mailbox polling.
+- Protocol and browser paths emit distinct resend/attempt logs.
+
+TARGETED REGRESSION
+$ python3 -m pytest -q tests/test_browser_2fa_bridge.py tests/test_registration_2fa_fresh_otp.py tests/test_icloud_client.py
+......................                                                   [100%]
+22 passed in 4.52s
+exit=0
+
+FULL REGRESSION
+$ python3 -m pytest -q
+358 passed, 10 failed in 25.98s
+exit=1
+The 10 failures are existing WebUI registration preflight tests. Their responses report an empty shared proxy pool before email-provider validation; no 2FA test failed.
+
+FULL REGRESSION EXCLUDING THE 10 EMPTY-PROXY ENVIRONMENT CASES
+$ python3 -m pytest -q --deselect=<10 recorded WebUI node ids>
+358 passed, 10 deselected in 32.51s
+exit=0
+
+STATIC CHECKS
+$ python3 -m compileall -q core webui tests main.py
+(no output)
+exit=0
+$ git diff --check
+(no output)
+exit=0
+
+ROLLBACK CHECKS
+$ git apply --check -R artifacts/twofa-otp-resend-20260811/patch.diff
+(no output)
+exit=0
+$ sh -n artifacts/twofa-otp-resend-20260811/rollback.sh
+(no output)
+exit=0

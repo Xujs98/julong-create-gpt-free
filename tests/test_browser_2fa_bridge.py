@@ -9,11 +9,14 @@ from core.account_export import (
     _browser_activate_totp,
     _browser_enroll_totp,
     _browser_fetch,
+    _browser_reauthenticate,
     _totp_code_with_margin,
+    _validate_reauth_otp,
     browser_session_from_driver,
     setup_2fa,
     setup_2fa_from_browser,
 )
+from core.openai_auth import EmailOtpInvalidError
 
 
 class Browser2FABridgeTests(unittest.TestCase):
@@ -112,6 +115,76 @@ class Browser2FABridgeTests(unittest.TestCase):
         kwargs = wait_for_otp.call_args.kwargs
         self.assertEqual(kwargs["exclude_codes"], {"683938"})
         self.assertIsInstance(kwargs["after_ts"], float)
+
+    def test_setup_2fa_resends_and_excludes_invalid_reauth_otp(self):
+        session = Mock()
+        seen_exclusions = []
+        codes = iter(["111111", "222222"])
+
+        def wait_for_new_otp(*_args, **kwargs):
+            seen_exclusions.append(set(kwargs["exclude_codes"]))
+            return next(codes)
+
+        with patch("config.email.USE_EMAIL_SERVICE", True), patch(
+            "core.account_export._trigger_reauth", return_value="https://auth.example/reauth"
+        ), patch("core.account_export._follow_reauth"), patch(
+            "core.account_export.human_delay"
+        ), patch("core.email_provider.wait_for_otp", side_effect=wait_for_new_otp) as wait_for_otp, patch(
+            "core.account_export._validate_reauth_otp",
+            side_effect=[EmailOtpInvalidError("expired"), "https://chatgpt.example/callback"],
+        ), patch("core.openai_auth.send_email_otp") as resend, patch(
+            "core.account_export._exchange_new_token", return_value="NEW_TOKEN"
+        ), patch("core.account_export._enroll_totp", return_value=("TOTPSECRET", "SESSION_ID")), patch(
+            "core.account_export._activate_totp", return_value=True
+        ):
+            result = setup_2fa(session, "user@example.test", previous_otp="683938")
+
+        self.assertEqual(result, "TOTPSECRET")
+        resend.assert_called_once_with(session)
+        self.assertEqual(wait_for_otp.call_count, 2)
+        self.assertEqual(seen_exclusions, [{"683938"}, {"683938", "111111"}])
+
+    def test_validate_reauth_otp_classifies_http_401_as_invalid_code(self):
+        session = Mock()
+        session.get_auth_headers.return_value = {"content-type": "application/json"}
+        session.post.return_value = Mock(status_code=401, text='{"code":"invalid_code"}')
+
+        with self.assertRaises(EmailOtpInvalidError):
+            _validate_reauth_otp(session, "111111")
+
+    @patch("core.account_export._browser_session_info", return_value={"accessToken": "FRESH_TOKEN"})
+    @patch("core.account_export._wait_for_browser_host")
+    @patch("core.account_export._browser_trigger_reauth", return_value="https://auth.example/reauth")
+    @patch("core.account_export._browser_fetch")
+    def test_browser_reauth_resends_after_invalid_otp(self, browser_fetch, trigger, wait_host, session_info):
+        browser_fetch.side_effect = [
+            {"ok": True, "status": 401, "body": '{"code":"invalid_code"}'},
+            {"ok": True, "status": 200, "body": "resent"},
+            {
+                "ok": True,
+                "status": 200,
+                "data": {"continue_url": "https://chatgpt.example/callback"},
+                "body": '{"continue_url":"https://chatgpt.example/callback"}',
+            },
+        ]
+        driver = Mock()
+        seen_exclusions = []
+        codes = iter(["111111", "222222"])
+
+        def wait_for_new_otp(*_args, **kwargs):
+            seen_exclusions.append(set(kwargs["exclude_codes"]))
+            return next(codes)
+
+        with patch("config.email.USE_EMAIL_SERVICE", True), patch(
+            "core.email_provider.wait_for_otp", side_effect=wait_for_new_otp
+        ) as wait_for_otp, patch("core.account_export.human_delay"):
+            result = _browser_reauthenticate(driver, "user@example.test", previous_otp="683938")
+
+        self.assertEqual(result, "FRESH_TOKEN")
+        self.assertEqual(browser_fetch.call_count, 3)
+        self.assertEqual(browser_fetch.call_args_list[1].kwargs["stage"], "reauth_otp_resend_fetch")
+        self.assertEqual(wait_for_otp.call_count, 2)
+        self.assertEqual(seen_exclusions, [{"683938"}, {"683938", "111111"}])
 
     def test_activate_totp_sends_required_factor_type(self):
         session = Mock()
