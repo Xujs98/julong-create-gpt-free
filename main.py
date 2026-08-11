@@ -432,11 +432,16 @@ def run_registration(
         validate_result = None
         max_otp_attempts = 3
         current_otp = otp_code
+        used_otp_codes: set[str] = set()
         for otp_attempt in range(1, max_otp_attempts + 1):
             if current_otp is None:
                 if _email_cfg.USE_EMAIL_SERVICE:
                     logger.info(f"[OTP] 等待验证码：{email}（第 {otp_attempt}/{max_otp_attempts} 次）")
-                    current_otp = wait_for_otp(email, after_ts=otp_after_ts)
+                    current_otp = wait_for_otp(
+                        email,
+                        after_ts=otp_after_ts,
+                        exclude_codes=used_otp_codes,
+                    )
                 else:
                     logger.info("")
                     logger.info(f"[OTP] 请检查邮箱，输入收到的 6 位验证码（第 {otp_attempt}/{max_otp_attempts} 次）:")
@@ -459,6 +464,7 @@ def run_registration(
             except EmailOtpInvalidError as exc:
                 if otp_attempt >= max_otp_attempts:
                     raise
+                used_otp_codes.add(str(current_otp or "").strip())
                 logger.warning(f"[OTP] 验证码错误/过期：{str(exc)[:180]}，准备重新发送并重新获取验证码")
                 otp_after_ts = time.time()
                 send_email_otp(session)

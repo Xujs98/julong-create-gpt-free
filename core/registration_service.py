@@ -11,6 +11,7 @@
 """
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +35,9 @@ _STOP_EVENTS: dict[int, threading.Event] = {}
 _ACTIVE_JOBS: set[int] = set()
 _STOP_LOCK = threading.Lock()
 _THREAD_CTX = threading.local()
+_JOB_LOG_LEVEL_LOCK = threading.RLock()
+_JOB_LOG_LEVEL_DEPTH = 0
+_JOB_LOG_PREVIOUS_LEVEL: int | None = None
 
 
 class StopRequested(RuntimeError):
@@ -170,6 +174,45 @@ def _should_disable_failed_registration_email(error: object) -> bool:
     )
 
 
+def _is_transient_registration_failure(error: object) -> bool:
+    """识别可通过换页面/出口重建恢复的注册瞬态错误。"""
+    text = str(error or "").lower()
+    if not text:
+        return False
+    # 这些属于邮箱/业务状态，不自动重复提交，避免把已注册邮箱再次消费。
+    permanent = (
+        "邮箱可能已注册",
+        "登录密码页",
+        "验证码连续错误",
+        "invalid_code",
+        "风控/限流",
+        "账号已废号",
+    )
+    if any(marker in text for marker in permanent):
+        return False
+    return any(marker in text for marker in (
+        "cloudflare 人机验证",
+        "targetclosederror",
+        "target page, context or browser has been closed",
+        "page.goto:",
+        "net::err_",
+        "chrome-error://",
+        "浏览器进入网络错误页",
+        "初始导航失败",
+        "页面加载超时",
+        "找不到邮箱输入框/邮箱入口",
+    ))
+
+
+def _registration_transient_retry_limit() -> int:
+    try:
+        from config import register as _register_cfg
+        value = int(getattr(_register_cfg, "REGISTRATION_TRANSIENT_RETRIES", 2) or 0)
+    except (ImportError, TypeError, ValueError):
+        value = 2
+    return max(0, min(value, 3))
+
+
 def _disable_job_email(email: str | None, reason: str) -> bool:
     """把本次任务邮箱停用，避免后续再次领取。"""
     if not email:
@@ -254,8 +297,10 @@ class _JobLogContext:
     def __init__(self, log_path: str):
         self.log_path = log_path
         self.handler: logging.FileHandler | None = None
+        self._raised_root_level = False
 
     def __enter__(self):
+        global _JOB_LOG_LEVEL_DEPTH, _JOB_LOG_PREVIOUS_LEVEL
         Path(self.log_path).parent.mkdir(parents=True, exist_ok=True)
         self.handler = logging.FileHandler(self.log_path, encoding="utf-8")
         self.handler.setLevel(logging.INFO)
@@ -267,12 +312,29 @@ class _JobLogContext:
         thread_name = threading.current_thread().name
         self.handler.addFilter(lambda r: r.threadName == thread_name)
         logging.getLogger().addHandler(self.handler)
+        # 直接调用 registration_service 时，宿主进程可能尚未执行
+        # logging.basicConfig(level=INFO)，导致所有任务日志被 root logger
+        # 的 WARNING 门槛过滤，最终出现“任务成功但日志 0 字节”。在任务
+        # 日志上下文存活期间临时放行 INFO，并在最后一个上下文退出时恢复。
+        with _JOB_LOG_LEVEL_LOCK:
+            root = logging.getLogger()
+            if _JOB_LOG_LEVEL_DEPTH == 0 and root.level > logging.INFO:
+                _JOB_LOG_PREVIOUS_LEVEL = root.level
+                root.setLevel(logging.INFO)
+                self._raised_root_level = True
+            _JOB_LOG_LEVEL_DEPTH += 1
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        global _JOB_LOG_LEVEL_DEPTH, _JOB_LOG_PREVIOUS_LEVEL
         if self.handler is not None:
             self.handler.close()
             logging.getLogger().removeHandler(self.handler)
+        with _JOB_LOG_LEVEL_LOCK:
+            _JOB_LOG_LEVEL_DEPTH = max(0, _JOB_LOG_LEVEL_DEPTH - 1)
+            if _JOB_LOG_LEVEL_DEPTH == 0 and _JOB_LOG_PREVIOUS_LEVEL is not None:
+                logging.getLogger().setLevel(_JOB_LOG_PREVIOUS_LEVEL)
+                _JOB_LOG_PREVIOUS_LEVEL = None
 
 
 def _run_one_job(job_id: int, log_file: str) -> None:
@@ -306,7 +368,51 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             email, name, birthday = _prepare_registration_args(str(current.get("email_source") or "") or None)
             db.update_job(job_id, email=email)
             check_stop_requested()
-            result = run_registration(email=email, name=name, birthday=birthday)
+            result = None
+            retry_limit = _registration_transient_retry_limit()
+            for registration_attempt in range(0, retry_limit + 1):
+                check_stop_requested()
+                try:
+                    result = run_registration(email=email, name=name, birthday=birthday)
+                except StopRequested:
+                    raise
+                except Exception as exc:
+                    transient_error = f"{type(exc).__name__}: {exc}"
+                    if registration_attempt >= retry_limit or not _is_transient_registration_failure(transient_error):
+                        raise
+                    _release_unconsumed_job_email(email, transient_error)
+                    log_logger.warning(
+                        "[Job %s] 注册瞬态异常，准备重建浏览器/出口后重试：attempt=%s/%s error=%s",
+                        job_id,
+                        registration_attempt + 1,
+                        retry_limit,
+                        transient_error[:240],
+                    )
+                    time.sleep(min(6.0, 1.5 * (registration_attempt + 1)))
+                    continue
+
+                if isinstance(result, dict) and result.get("success"):
+                    break
+                error_text = (result or {}).get("error") if isinstance(result, dict) else "unknown"
+                has_account = bool((result or {}).get("account_id")) if isinstance(result, dict) else False
+                if (
+                    registration_attempt >= retry_limit
+                    or has_account
+                    or not _is_transient_registration_failure(error_text)
+                ):
+                    break
+                _release_unconsumed_job_email(email, str(error_text))
+                log_logger.warning(
+                    "[Job %s] 注册瞬态失败，准备重建浏览器/出口后重试：attempt=%s/%s error=%s",
+                    job_id,
+                    registration_attempt + 1,
+                    retry_limit,
+                    str(error_text)[:240],
+                )
+                time.sleep(min(6.0, 1.5 * (registration_attempt + 1)))
+
+            if result is None:
+                raise RuntimeError("注册流程未返回结果")
             if is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
                 db.update_job(

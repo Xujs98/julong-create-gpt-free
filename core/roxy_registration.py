@@ -688,9 +688,23 @@ def _click_email_entry_option(driver) -> bool:
       .filter(visible)
       .map(el => ({el, attrs: attrText(el), hasLogo: !!el.querySelector('img,svg,use')}))
       .filter(x => good.test(x.attrs) && !bad.test(x.attrs) && !x.hasLogo);
-    if (candidates.length !== 1) return null;
-    candidates[0].el.scrollIntoView({block:'center'});
-    return candidates[0].el;
+    if (candidates.length === 1) {
+      candidates[0].el.scrollIntoView({block:'center'});
+      return candidates[0].el;
+    }
+
+    // 欢迎页在部分地区先只渲染“登录或注册/继续”入口，邮箱表单要在
+    // 点击后才挂载。该入口没有 email/OTP 属性，不能被上面的技术属性
+    // 过滤器命中；只接受稳定的 slm/login/signup 结构，并继续排除第三方 IDP。
+    const welcome = [...document.querySelectorAll('a,button,[role="button"]')]
+      .filter(visible)
+      .map(el => ({el, attrs: attrText(el), href: String(el.getAttribute('href') || '').toLowerCase()}))
+      .filter(x => !bad.test(x.attrs) && /(?:[?&]slm=1\b|\/login\b|\/signup\b|log.?in|sign.?up)/i.test(`${x.href} ${x.attrs}`));
+    if (welcome.length === 1) {
+      welcome[0].el.scrollIntoView({block:'center'});
+      return welcome[0].el;
+    }
+    return null;
     """)
     if target:
         _human_click(driver, target, label="email_entry")
@@ -1462,6 +1476,49 @@ def _is_email_verification_page(driver) -> bool:
     state = _email_otp_page_state(driver)
     attrs = ' '.join(' '.join(str(i.get(k) or '') for k in ('type','name','id','autocomplete','inputmode')) for i in (state.get('inputs') or [])).lower()
     return 'one-time-code' in attrs or 'otp' in attrs or 'code' in attrs
+
+
+def _wait_for_email_otp_page(driver, timeout: int = 15) -> str:
+    """提交/等待验证码期间重新确认当前页面阶段。
+
+    Auth 页面在收到邮件后仍可能经历一次 Cloudflare 挑战、登录密码页或
+    about-you 跳转。旧流程直接调用 ``_type_otp``，会把这些状态误报成
+    ``找不到 OTP 输入框``，也会继续消费已经进入登录态的邮箱。返回值只
+    使用稳定的阶段名，供 Roxy 与 Cloak 共享。
+    """
+    end = time.time() + max(1, int(timeout or 15))
+    last_url = ""
+    while time.time() < end:
+        _check_manual_stop()
+        try:
+            last_url = str(getattr(driver, "current_url", "") or "")
+        except Exception:
+            last_url = ""
+
+        if _has_access_token(driver):
+            return "logged_in"
+        if _is_login_password_page(driver) or "/log-in/password" in last_url.lower():
+            return "login_password"
+        if _is_email_verification_page(driver):
+            return "otp"
+        try:
+            snapshot = _page_snapshot(driver)
+            if _is_profile_like(snapshot):
+                return "profile"
+        except Exception:
+            snapshot = None
+
+        # 进入验证盾时先等待它完成，再重新读取页面；这样不会把验证页
+        # 的空 DOM 误归类为 OTP selector 缺失。
+        try:
+            if _cloudflare_challenge_state(driver).get("challenge"):
+                _wait_for_runtime_challenge_if_present(driver)
+                continue
+        except Exception:
+            raise
+        time.sleep(0.35)
+
+    return "unknown"
 
 
 def _clear_otp_inputs(driver) -> None:
@@ -2661,6 +2718,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         _require_password_if_enabled(openai_password, email)
 
         current_otp = otp_code
+        used_otp_codes: set[str] = set()
         needs_email_otp = _needs_email_otp_after_password(
             driver,
             next_state,
@@ -2673,7 +2731,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             if current_otp is None:
                 logger.info("[Roxy注册][OTP] 等待验证码：%s（第 %s/%s 次）", email, otp_attempt, max_otp_attempts)
                 try:
-                    current_otp = wait_for_otp(email, after_ts=otp_after_ts)
+                    current_otp = wait_for_otp(
+                        email,
+                        after_ts=otp_after_ts,
+                        exclude_codes=used_otp_codes,
+                    )
                 except Exception as exc:
                     if otp_attempt >= max_otp_attempts:
                         raise
@@ -2689,6 +2751,23 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                     human_delay("api")
                     current_otp = None
                     continue
+            page_stage = _wait_for_email_otp_page(driver, timeout=15)
+            if page_stage == "logged_in":
+                logger.info("[Roxy注册][OTP] 输入验证码前已检测到登录态，跳过提交")
+                break
+            if page_stage == "profile":
+                logger.info("[Roxy注册][OTP] 输入验证码前已进入资料页，跳过提交")
+                break
+            if page_stage == "login_password":
+                raise RuntimeError(
+                    "邮箱验证码等待期间进入登录密码页，邮箱可能已注册："
+                    f"url={getattr(driver, 'current_url', '')}"
+                )
+            if page_stage != "otp":
+                raise RuntimeError(
+                    "邮箱验证码页面未就绪，停止提交并保留页面诊断："
+                    f"stage={page_stage} url={getattr(driver, 'current_url', '')}"
+                )
             logger.info("[Roxy注册][OTP] 收到验证码：%s", current_otp)
             _clear_otp_inputs(driver)
             _type_otp(driver, current_otp)
@@ -2706,6 +2785,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                 break
             if otp_attempt >= max_otp_attempts:
                 raise RuntimeError("邮箱验证码连续错误/过期，已达到最大重试次数")
+            used_otp_codes.add(str(current_otp or "").strip())
             logger.warning("[Roxy注册][OTP] 验证码错误/过期，准备重新发送并重新获取验证码（%s/%s）", otp_attempt + 1, max_otp_attempts)
             otp_after_ts = time.time()
             resend_result = _click_resend_email_otp(driver, timeout=25)

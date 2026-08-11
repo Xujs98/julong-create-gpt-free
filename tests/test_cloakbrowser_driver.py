@@ -118,6 +118,50 @@ class CloakLaunchOptionsTests(unittest.TestCase):
 
 
 class CloakPageRecoveryTests(unittest.TestCase):
+    def test_async_script_timeout_is_configurable(self):
+        """2FA browser fetches must use the caller's timeout instead of a fixed 120s watchdog."""
+        page = Mock()
+        page.is_closed.return_value = False
+        page.evaluate.return_value = {"ok": True}
+        driver = CloakSeleniumDriver(browser=Mock(), context=Mock(), page=page)
+
+        driver.set_script_timeout(25)
+        result = driver.execute_async_script("arguments[arguments.length - 1]({ok:true});")
+
+        self.assertEqual(result, {"ok": True})
+        payload = page.evaluate.call_args.args[1]
+        self.assertEqual(payload["scriptTimeoutMs"], 25_000)
+
+    def test_async_script_timeout_accepts_invalid_value_with_default(self):
+        page = Mock()
+        page.is_closed.return_value = False
+        page.evaluate.return_value = {"ok": True}
+        driver = CloakSeleniumDriver(browser=Mock(), context=Mock(), page=page)
+
+        driver.set_script_timeout("bad")
+        driver.execute_async_script("arguments[arguments.length - 1]({ok:true});")
+
+        payload = page.evaluate.call_args.args[1]
+        self.assertEqual(payload["scriptTimeoutMs"], 120_000)
+
+    def test_async_script_timeout_is_forwarded_for_element_arguments(self):
+        page = Mock()
+        page.is_closed.return_value = False
+        handle = Mock()
+        handle.evaluate.return_value = {"ok": True}
+        element = CloakElement(page, handle=handle)
+        driver = CloakSeleniumDriver(browser=Mock(), context=Mock(), page=page)
+
+        driver.set_script_timeout(7.5)
+        result = driver.execute_async_script(
+            "arguments[arguments.length - 1]({ok:true});",
+            element,
+        )
+
+        self.assertEqual(result, {"ok": True})
+        payload = handle.evaluate.call_args.args[1]
+        self.assertEqual(payload["scriptTimeoutMs"], 7_500)
+
     def test_agent_clicks_visible_cloudflare_checkbox_inside_frame(self):
         """验证 iframe 已加载时优先进入 frame 点击可见复选控件。"""
         checkbox = Mock()
@@ -151,6 +195,21 @@ class CloakPageRecoveryTests(unittest.TestCase):
         self.assertEqual(driver.current_url, "https://auth.openai.com/login")
         self.assertIs(driver.page, new_page)
         new_page.bring_to_front.assert_called()
+
+    def test_waits_for_new_page_to_appear_after_target_closes(self):
+        """页面关闭与新句柄出现之间的竞态应被适配层吸收。"""
+        old_page = Mock()
+        old_page.is_closed.return_value = True
+        new_page = Mock()
+        new_page.is_closed.side_effect = [True, False]
+        new_page.url = "https://auth.openai.com/email-verification"
+        context = Mock()
+        context.pages = [new_page]
+        driver = CloakSeleniumDriver(browser=Mock(), context=context, page=old_page)
+
+        with patch("core.cloakbrowser_driver.time.sleep"):
+            self.assertEqual(driver.current_url, "https://auth.openai.com/email-verification")
+        self.assertIs(driver.page, new_page)
 
 
 if __name__ == "__main__":

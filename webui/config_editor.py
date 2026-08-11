@@ -61,6 +61,10 @@ EDITABLE_FIELDS = [
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },
+    {
+        "key": "REGISTRATION_TRANSIENT_RETRIES", "file": "register.py", "type": "int", "group": "注册方式",
+        "label": "瞬态错误重试", "help": "仅对网络超时、Cloudflare 挑战、浏览器关闭等可恢复错误进行整流程重试；业务/验证码错误不自动重跑",
+    },
     # ---- 账号查活 ----
     {
         "key": "LIVE_CHECK_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
@@ -119,8 +123,16 @@ EDITABLE_FIELDS = [
         "label": "Cloak超时", "help": "页面和元素等待超时时间，秒",
     },
     {
+        "key": "CLOAK_NAVIGATION_RETRIES", "file": "cloakbrowser.py", "type": "int", "group": "CloakBrowser",
+        "label": "Cloak导航重试", "help": "初始登录页遇到临时网络/页面超时时的最大导航尝试次数",
+    },
+    {
         "key": "CLOAK_CHALLENGE_TIMEOUT", "file": "cloakbrowser.py", "type": "int", "group": "CloakBrowser",
         "label": "验证盾等待(秒)", "help": "出现 Cloudflare 人机验证时保持可见窗口，完成验证后自动续跑",
+    },
+    {
+        "key": "CLOAK_HEADLESS_FALLBACK_ON_CHALLENGE", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
+        "label": "挑战自动转可见", "help": "无头模式遇到交互式验证时，下一轮自动改为可见窗口并重建上下文",
     },
     {
         "key": "CLOAK_KEEP_BROWSER_OPEN", "file": "cloakbrowser.py", "type": "bool", "group": "CloakBrowser",
@@ -137,7 +149,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "CLOAK_AGENT_MODE", "file": "cloakbrowser.py", "type": "str", "group": "CloakBrowser",
-        "label": "Agent 运行模式", "help": "hybrid=固定流程优先，仅异常页面介入；takeover=每个注册阶段主动识别并操作",
+        "label": "Agent 运行模式", "help": "混合模式=固定流程优先，仅异常页面介入；完全接管=每个注册阶段主动识别并操作",
         "choices": ["takeover", "hybrid"],
         "choice_labels": {"takeover": "完全接管", "hybrid": "混合模式"},
     },

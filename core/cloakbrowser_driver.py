@@ -184,6 +184,11 @@ class CloakSeleniumDriver:
         self.page = page
         self.proxy_bridge = proxy_bridge
         self._page_load_timeout_ms = int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90) * 1000
+        # Selenium exposes an independent async-script timeout.  The previous
+        # adapter hard-coded a 120s Promise watchdog, so a stalled fetch held a
+        # registration worker for two minutes before the caller could classify
+        # and retry it.
+        self._script_timeout_ms = 120_000
         self.switch_to = _SwitchTo(self)
 
     @property
@@ -223,14 +228,22 @@ class CloakSeleniumDriver:
         """Cloudflare 验证后若旧 Page 被导航关闭，自动切到当前活动页面。"""
         if not self._page_is_closed(self.page):
             return
-        pages = [page for page in self._pages() if not self._page_is_closed(page)]
-        if not pages:
-            return
-        self.page = pages[-1]
-        try:
-            self.page.bring_to_front()
-        except Exception:
-            pass
+        # Challenge/redirect 关闭旧页与把新页挂入 context.pages 之间存在一个
+        # 很短的竞态窗口。轮询几秒再判定 target closed，避免把可恢复的
+        # 导航竞态直接上抛给注册任务。
+        deadline = time.monotonic() + 3.0
+        while True:
+            pages = [page for page in self._pages() if not self._page_is_closed(page)]
+            if pages:
+                self.page = pages[-1]
+                try:
+                    self.page.bring_to_front()
+                except Exception:
+                    pass
+                return
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(0.1)
 
     def _switch_window(self, handle: str) -> None:
         pages = self._pages()
@@ -248,6 +261,14 @@ class CloakSeleniumDriver:
             self.page.set_default_timeout(self._page_load_timeout_ms)
         except Exception:
             pass
+
+    def set_script_timeout(self, seconds: int | float) -> None:
+        """Set the Selenium-compatible async script timeout for this adapter."""
+        try:
+            value = float(seconds)
+        except (TypeError, ValueError):
+            value = 120.0
+        self._script_timeout_ms = max(1_000, int(value * 1000))
 
     def get(self, url: str) -> None:
         self._ensure_live_page()
@@ -426,10 +447,11 @@ class CloakSeleniumDriver:
     def _evaluate(self, script: str, args: tuple[Any, ...], async_mode: bool) -> Any:
         first_el, serial_args = self._serialize_args(args)
         if async_mode:
-            wrapper = """async ({script, args}) => {
+            wrapper = """async (payload) => {
+              const {script, args} = payload;
               return await new Promise((resolve) => {
                 const fn = new Function(...args.map((_, i) => 'a' + i), '__cloak_done', script);
-                const timer = setTimeout(() => resolve({__cloak_timeout:true}), 120000);
+                const timer = setTimeout(() => resolve({__cloak_timeout:true}), payload.scriptTimeoutMs);
                 const __cloak_done = (v) => { clearTimeout(timer); resolve(v); };
                 try { fn(...args, __cloak_done); } catch (e) { clearTimeout(timer); resolve({ok:false, error:String(e)}); }
               });
@@ -438,15 +460,15 @@ class CloakSeleniumDriver:
               const args = [el, ...payload.args];
               return await new Promise((resolve) => {
                 const fn = new Function(...args.map((_, i) => 'a' + i), '__cloak_done', payload.script);
-                const timer = setTimeout(() => resolve({__cloak_timeout:true}), 120000);
+                const timer = setTimeout(() => resolve({__cloak_timeout:true}), payload.scriptTimeoutMs);
                 const __cloak_done = (v) => { clearTimeout(timer); resolve(v); };
                 try { fn(...args, __cloak_done); } catch (e) { clearTimeout(timer); resolve({ok:false, error:String(e)}); }
               });
             }"""
             if first_el is not None:
-                result = first_el._eval(element_wrapper, {"script": script, "args": serial_args})
+                result = first_el._eval(element_wrapper, {"script": script, "args": serial_args, "scriptTimeoutMs": self._script_timeout_ms})
             else:
-                result = self.page.evaluate(wrapper, {"script": script, "args": serial_args})
+                result = self.page.evaluate(wrapper, {"script": script, "args": serial_args, "scriptTimeoutMs": self._script_timeout_ms})
             if isinstance(result, dict) and result.get("__cloak_timeout"):
                 raise TimeoutError("execute_async_script timeout")
             return result

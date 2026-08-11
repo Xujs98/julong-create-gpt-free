@@ -38,8 +38,14 @@ CLOAK_EXTRA_ARGS: list = []
 # 与原 Roxy Selenium 流程共用的超时时间。
 CLOAK_SELENIUM_TIMEOUT: int = 90
 
+# 初始登录页导航的有限重试次数；仅对超时/临时连接错误生效。
+CLOAK_NAVIGATION_RETRIES: int = 3
+
 # 检测到 Cloudflare 交互式人机验证时，保持可见浏览器等待人工完成的时间。
 CLOAK_CHALLENGE_TIMEOUT: int = 300
+
+# 无头页面遇到交互式验证时，下一次尝试自动改为可见窗口。
+CLOAK_HEADLESS_FALLBACK_ON_CHALLENGE: bool = True
 
 # 调试时保留浏览器不自动关闭。
 CLOAK_KEEP_BROWSER_OPEN: bool = False
@@ -53,4 +59,4 @@ CLOAK_ENABLE_AGENT: bool = False
 CLOAK_AGENT_MODE: str = "takeover"
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH': 'bool', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_CHALLENGE_TIMEOUT': 'int', 'CLOAK_KEEP_BROWSER_OPEN': 'bool', 'CLOAK_KEEP_BROWSER_OPEN_ON_ERROR': 'bool', 'CLOAK_ENABLE_AGENT': 'bool', 'CLOAK_AGENT_MODE': 'str'})
+apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_RANDOMIZE_FINGERPRINT_EACH_LAUNCH': 'bool', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_NAVIGATION_RETRIES': 'int', 'CLOAK_CHALLENGE_TIMEOUT': 'int', 'CLOAK_HEADLESS_FALLBACK_ON_CHALLENGE': 'bool', 'CLOAK_KEEP_BROWSER_OPEN': 'bool', 'CLOAK_KEEP_BROWSER_OPEN_ON_ERROR': 'bool', 'CLOAK_ENABLE_AGENT': 'bool', 'CLOAK_AGENT_MODE': 'str'})

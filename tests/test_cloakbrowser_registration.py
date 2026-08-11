@@ -333,6 +333,71 @@ def test_otp_falls_back_to_plain_six_visible_inputs():
         box.send_keys.assert_called_once_with(char)
 
 
+def test_wait_for_email_otp_page_classifies_login_password_before_typing():
+    from core.roxy_registration import _wait_for_email_otp_page
+
+    driver = Mock(current_url="https://auth.openai.com/log-in/password")
+    with patch("core.roxy_registration._check_manual_stop"), patch(
+        "core.roxy_registration._has_access_token", return_value=False
+    ), patch("core.roxy_registration._is_login_password_page", return_value=True):
+        assert _wait_for_email_otp_page(driver, timeout=1) == "login_password"
+
+
+def test_wait_for_email_otp_page_waits_through_cloudflare_then_accepts_otp():
+    from core.roxy_registration import _wait_for_email_otp_page
+
+    driver = Mock(current_url="https://auth.openai.com/email-verification")
+    with patch("core.roxy_registration._check_manual_stop"), patch(
+        "core.roxy_registration._has_access_token", return_value=False
+    ), patch("core.roxy_registration._is_login_password_page", return_value=False), patch(
+        "core.roxy_registration._is_email_verification_page", side_effect=[False, True]
+    ), patch(
+        "core.roxy_registration._cloudflare_challenge_state", side_effect=[{"challenge": True}, {"challenge": False}]
+    ), patch("core.roxy_registration._wait_for_runtime_challenge_if_present", return_value=True), patch(
+        "core.roxy_registration.time.sleep"
+    ):
+        assert _wait_for_email_otp_page(driver, timeout=1) == "otp"
+
+
+def test_cloak_navigation_retries_transient_timeout_then_succeeds():
+    from core.cloakbrowser_registration import _safe_cloak_get
+
+    driver = Mock()
+    driver.get.side_effect = [RuntimeError("Page.goto: Timeout 90000ms exceeded"), None]
+    with patch("core.cloakbrowser_registration._check_manual_stop"), patch(
+        "core.cloakbrowser_registration._page_ready_after_navigation", return_value=False
+    ), patch("core.cloakbrowser_registration.time.sleep"):
+        _safe_cloak_get(driver, "https://chatgpt.com/auth/login", attempts=2)
+
+    assert driver.get.call_count == 2
+
+
+def test_cloak_navigation_accepts_timeout_when_target_dom_is_ready():
+    from core.cloakbrowser_registration import _safe_cloak_get
+
+    driver = Mock()
+    driver.get.side_effect = RuntimeError("Page.goto: Timeout")
+    with patch("core.cloakbrowser_registration._check_manual_stop"), patch(
+        "core.cloakbrowser_registration._page_ready_after_navigation", return_value=True
+    ):
+        _safe_cloak_get(driver, "https://chatgpt.com/auth/login", attempts=2)
+
+    driver.get.assert_called_once()
+
+
+def test_email_entry_falls_back_to_welcome_login_anchor():
+    from core.roxy_registration import _click_email_entry_option
+
+    driver = Mock()
+    target = Mock()
+    driver.execute_script.return_value = target
+    with patch("core.roxy_registration._is_oauth_consent_like", return_value=False), patch(
+        "core.roxy_registration._human_click"
+    ) as click:
+        assert _click_email_entry_option(driver) is True
+    click.assert_called_once_with(driver, target, label="email_entry")
+
+
 def test_cloak_flow_isolated_from_asyncio_loop_and_inherits_job_context():
     """Playwright Sync API must run in the same isolated thread as page calls."""
     marker = {}

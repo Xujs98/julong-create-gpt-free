@@ -23,12 +23,92 @@ from core.roxy_registration import (  # noqa: F401
     _clear_otp_inputs, _type_otp, _click_continue, _wait_after_email_otp_submit,
     _click_resend_email_otp, _complete_profile_page, _fetch_chatgpt_session, _check_manual_stop,
     _wait_for_cloudflare_challenge,
+    _wait_for_email_otp_page,
     _require_password_if_enabled, _create_password_enabled,
     _registration_password, _has_access_token, _is_email_verification_page,
     _is_login_password_page, _is_signup_password_page, _page_snapshot, _is_profile_like,
 )
 
 logger = logging.getLogger(__name__)
+
+_CLOAK_LOGIN_URL = "https://chatgpt.com/auth/login"
+
+
+def _is_transient_cloak_error(error: object) -> bool:
+    """识别可通过重建页面/浏览器恢复的瞬态错误。"""
+    text = str(error or "").lower()
+    if not text:
+        return False
+    permanent = (
+        "用户手动停止",
+        "邮箱可能已注册",
+        "登录密码页",
+        "风控/限流",
+        "invalid_code",
+        "验证码连续错误",
+    )
+    if any(marker.lower() in text for marker in permanent):
+        return False
+    return any(marker in text for marker in (
+        "cloudflare 人机验证",
+        "page.goto:",
+        "net::err_",
+        "targetclosederror",
+        "target page, context or browser has been closed",
+        "chrome-error://",
+        "页面加载超时",
+        "browser has been closed",
+    ))
+
+
+def _page_ready_after_navigation(driver, target_url: str) -> bool:
+    """超时后判断目标页面是否已经可用，避免把 domcontentloaded 慢误判成失败。"""
+    try:
+        state = driver.execute_script(
+            "return {url: String(location.href || ''), readyState: String(document.readyState || ''), body: !!document.body};"
+        ) or {}
+    except Exception:
+        return False
+    current = str(state.get("url") or "").lower()
+    target_host = str(target_url or "").split("/", 3)[2].lower() if "/" in str(target_url or "") else ""
+    return bool(
+        state.get("body")
+        and target_host
+        and target_host in current
+        and not current.startswith("chrome-error://")
+    )
+
+
+def _safe_cloak_get(driver, url: str, *, attempts: int | None = None) -> None:
+    """Cloak 初始导航的有限重试与超时后 DOM 复用。"""
+    try:
+        max_attempts = int(attempts if attempts is not None else getattr(_cfg, "CLOAK_NAVIGATION_RETRIES", 3) or 3)
+    except (TypeError, ValueError):
+        max_attempts = 3
+    max_attempts = max(1, min(max_attempts, 5))
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        _check_manual_stop()
+        try:
+            driver.get(url)
+            return
+        except Exception as exc:  # Playwright/Cloak 异常类型不固定
+            last_exc = exc
+            if _page_ready_after_navigation(driver, url):
+                logger.warning(
+                    "[Cloak注册] 初始导航等待超时但 DOM 已可用，继续流程：attempt=%s/%s url=%s error=%s",
+                    attempt, max_attempts, url, str(exc)[:180],
+                )
+                return
+            transient = _is_transient_cloak_error(exc)
+            if not transient or attempt >= max_attempts:
+                raise
+            logger.warning(
+                "[Cloak注册] 初始导航失败，%ss 后重试：attempt=%s/%s error=%s",
+                min(4, attempt), attempt, max_attempts, str(exc)[:220],
+            )
+            time.sleep(min(4.0, 1.2 * attempt))
+    raise last_exc or RuntimeError(f"Cloak 初始导航失败: {url}")
 
 
 def _agent_checkpoint(agent, driver, stage: str, context: dict, *, force: bool = False):
@@ -320,7 +400,15 @@ def _ensure_password_after_otp(driver, email: str, next_state: str, password: st
     return password
 
 
-def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
+def _run_cloak_registration_impl(
+    email: str,
+    name: str,
+    birthday: str,
+    proxy: str = None,
+    otp_code: str = None,
+    batch_dir: Path | None = None,
+    headless_override: bool | None = None,
+) -> dict:
     """CloakBrowser 自动化注册入口。"""
     driver = None
     opened = None
@@ -329,7 +417,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
     openai_password: str | None = None
     agent = None
     try:
-        driver, opened = build_cloak_driver(proxy=proxy)
+        driver, opened = build_cloak_driver(proxy=proxy, headless=headless_override)
         logger.info("[Cloak注册] 开始：%s，profile=%s", email, opened.profile_id)
         if bool(getattr(_cfg, "CLOAK_ENABLE_AGENT", False)):
             mode = str(getattr(_cfg, "CLOAK_AGENT_MODE", "hybrid") or "hybrid").strip().lower()
@@ -344,8 +432,8 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
 
         takeover_active = bool(agent and agent.mode == "takeover")
         otp_after_ts = time.time()
-        logger.info("[Cloak注册] 打开登录页：https://chatgpt.com/auth/login")
-        driver.get("https://chatgpt.com/auth/login")
+        logger.info("[Cloak注册] 打开登录页：%s", _CLOAK_LOGIN_URL)
+        _safe_cloak_get(driver, _CLOAK_LOGIN_URL)
         human_delay("navigate")
         _wait_for_cloudflare_challenge(
             driver,
@@ -357,6 +445,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
         _check_manual_stop()
 
         current_otp = otp_code
+        used_otp_codes: set[str] = set()
         next_state = None
         profile_submitted = False
 
@@ -384,7 +473,11 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             # 时提前进入“等待验证码”状态。
             if next_state == "otp" and current_otp is None:
                 logger.info("[Cloak注册][Agent] 已检测到真实 OTP 输入框，开始等待验证码：%s", email)
-                current_otp = wait_for_otp(email, after_ts=otp_after_ts)
+                current_otp = wait_for_otp(
+                    email,
+                    after_ts=otp_after_ts,
+                    exclude_codes=used_otp_codes,
+                )
             if current_otp:
                 logger.info("[Cloak注册][Agent] 收到验证码，继续由 Agent 单步填写和提交")
 
@@ -456,7 +549,11 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                 if current_otp is None:
                     logger.info("[Cloak注册][OTP] 等待验证码：%s（第 %s/%s 次）", email, otp_attempt, max_otp_attempts)
                     try:
-                        current_otp = wait_for_otp(email, after_ts=otp_after_ts)
+                        current_otp = wait_for_otp(
+                            email,
+                            after_ts=otp_after_ts,
+                            exclude_codes=used_otp_codes,
+                        )
                     except Exception as exc:
                         if otp_attempt >= max_otp_attempts:
                             raise
@@ -472,6 +569,23 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                         human_delay("api")
                         current_otp = None
                         continue
+                page_stage = _wait_for_email_otp_page(driver, timeout=15)
+                if page_stage == "logged_in":
+                    logger.info("[Cloak注册][OTP] 输入验证码前已检测到登录态，跳过提交")
+                    break
+                if page_stage == "profile":
+                    logger.info("[Cloak注册][OTP] 输入验证码前已进入资料页，跳过提交")
+                    break
+                if page_stage == "login_password":
+                    raise RuntimeError(
+                        "邮箱验证码等待期间进入登录密码页，邮箱可能已注册："
+                        f"url={getattr(driver, 'current_url', '')}"
+                    )
+                if page_stage != "otp":
+                    raise RuntimeError(
+                        "邮箱验证码页面未就绪，停止提交并保留页面诊断："
+                        f"stage={page_stage} url={getattr(driver, 'current_url', '')}"
+                    )
                 logger.info("[Cloak注册][OTP] 收到验证码：%s", current_otp)
                 _clear_otp_inputs(driver)
                 _type_otp(driver, current_otp)
@@ -486,6 +600,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                     break
                 if otp_attempt >= max_otp_attempts:
                     raise RuntimeError("邮箱验证码连续错误/过期，已达到最大重试次数")
+                used_otp_codes.add(str(current_otp or "").strip())
                 otp_after_ts = time.time()
                 resend_result = _click_resend_email_otp(driver, timeout=25)
                 if resend_result.get("reason") == "already_accepted":
@@ -587,6 +702,10 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
             pass
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
         keep_browser_on_error = bool(getattr(_cfg, "CLOAK_KEEP_BROWSER_OPEN_ON_ERROR", True))
+        # 瞬态浏览器/网络错误会由外层有限重跑；保留旧窗口会叠加残留
+        # 上下文并放大 TargetClosedError，因此这类错误优先清理现场。
+        if _is_transient_cloak_error(exc):
+            keep_browser_on_error = False
         if keep_browser_on_error:
             logger.warning("[Cloak注册] 已保留浏览器窗口供检查；关闭窗口后再开始下一条任务")
         try:
@@ -604,14 +723,40 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
 
 
 def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
-    """执行 Cloak 注册，并隔离 Playwright Sync API 的事件循环。"""
+    """执行 Cloak 注册，并对挑战/网络/浏览器生命周期故障做有限重跑。"""
     logger.info("[Cloak注册] 使用隔离线程启动浏览器，避免 Sync API 与 asyncio loop 冲突")
-    return _run_in_isolated_thread(
-        _run_cloak_registration_impl,
-        email=email,
-        name=name,
-        birthday=birthday,
-        proxy=proxy,
-        otp_code=otp_code,
-        batch_dir=batch_dir,
-    )
+    try:
+        retry_limit = int(getattr(_cfg, "CLOAK_NAVIGATION_RETRIES", 3) or 3)
+    except (TypeError, ValueError):
+        retry_limit = 3
+    retry_limit = max(1, min(retry_limit, 3))
+    configured_headless = bool(getattr(_cfg, "CLOAK_HEADLESS", False))
+    fallback_on_challenge = bool(getattr(_cfg, "CLOAK_HEADLESS_FALLBACK_ON_CHALLENGE", True))
+    last_result: dict | None = None
+    for attempt in range(1, retry_limit + 1):
+        # 首次遵循配置；无头遇到交互式挑战后，下一轮强制可见并重新建
+        # 浏览器上下文，同时让 proxy=None 重新从池中抽取出口。
+        headless_override = None
+        if attempt > 1 and fallback_on_challenge and configured_headless and last_result:
+            if "cloudflare 人机验证" in str(last_result.get("error") or ""):
+                headless_override = False
+        result = _run_in_isolated_thread(
+            _run_cloak_registration_impl,
+            email=email,
+            name=name,
+            birthday=birthday,
+            proxy=proxy,
+            otp_code=otp_code,
+            batch_dir=batch_dir,
+            headless_override=headless_override,
+        )
+        last_result = result if isinstance(result, dict) else {"success": False, "error": str(result)}
+        if last_result.get("success") or not _is_transient_cloak_error(last_result.get("error")) or attempt >= retry_limit:
+            return last_result
+        logger.warning(
+            "[Cloak注册] 瞬态失败，准备重建浏览器并重试：attempt=%s/%s error=%s headless_override=%s",
+            attempt, retry_limit, str(last_result.get("error") or "")[:220], headless_override,
+        )
+        _check_manual_stop()
+        time.sleep(min(5.0, 1.5 * attempt))
+    return last_result or {"success": False, "email": email, "error": "Cloak 注册未返回结果"}

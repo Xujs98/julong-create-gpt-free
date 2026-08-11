@@ -1,0 +1,44 @@
+Registration failure audit/fix verification record
+Baseline commit: 09c60c816a5e6b8a15682d0272c8740feb10d8a1
+Generated: 2026-08-11
+
+[1] Syntax/compile
+Command: PYTHONPATH=. python3 -m compileall -q core main.py config tests webui
+Exit: 0
+Output: (empty)
+
+[2] Diff whitespace
+Command: git diff --check
+Exit: 0
+Output: (empty)
+
+[3] Targeted regression suite
+Command: PYTHONPATH=. pytest -q tests/test_cloakbrowser_registration.py tests/test_cloakbrowser_driver.py tests/test_registration_login_state.py tests/test_registration_service_retry.py tests/test_icloud_client.py tests/test_browser_2fa_bridge.py
+Exit: 0
+Output: 63 passed in 7.28s
+
+[4] Full regression suite
+Command: PYTHONPATH=. pytest -q
+Exit: 0
+Output: 380 passed in 58.11s
+
+[5] Audit artifact checksums
+MD 902b4a5fd8e3f38e08bd86b2db245ef41119e95f12b1387f7b0a57e69bee5e2c  artifacts/registration_failure_audit_2026-08-11.md
+JSON 7aad5e8f493ac974fa773678207ac0076b56287bd7d2d9c03a4f937214b8a721  artifacts/registration_failure_audit_2026-08-11.json
+
+[6] Patch/rollback syntax
+Command: git apply --check --reverse artifacts/registration_fix.patch
+Exit: 0
+Command: sh -n artifacts/rollback_registration_fix.sh
+Exit: 0
+
+[8] Rollback execution test
+Command: isolated git worktree at baseline + modified tracked file + added test file, then artifacts/rollback_registration_fix.sh
+Exit: 0
+Output: rollback_test=PASS; tracked file restored; added test removed
+
+[7] Live mailbox-pool smoke test
+Command: registration_service.submit_registration(count=1, email_source="icloud", workers=1), then poll Job 18 to terminal state
+Exit: 0
+Output: success; retry_attempt=0; registration session persisted; 2FA status=success; Codex=skipped
+Note: direct smoke invocation had no root INFO handler, so its dedicated log file was 0 bytes; DB state was used for the terminal verification. The log timestamp is labeled 2026-08-12 while the current date is 2026-08-11, indicating host clock skew.
