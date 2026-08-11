@@ -519,6 +519,7 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                     email,
                     proxy=getattr(driver, "upstream_proxy_url", None) or proxy,
                     previous_otp=current_otp,
+                    access_token=access_token,
                 )
                 twofa_result["status"] = "success"
                 logger.info("[Cloak注册][2FA] TOTP 设置完成")
@@ -527,6 +528,10 @@ def _run_cloak_registration_impl(email: str, name: str, birthday: str, proxy: st
                 twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
                 logger.error("[Cloak注册][2FA] 设置失败：%s: %s", type(exc).__name__, exc)
                 logger.debug("[Cloak注册][2FA] 失败详情", exc_info=True)
+                # 2FA 属于注册后处理；失败时保留浏览器现场，便于查看实际页面而不是误以为闪退。
+                keep_browser_on_error = bool(getattr(_cfg, "CLOAK_KEEP_BROWSER_OPEN_ON_ERROR", True))
+                if keep_browser_on_error:
+                    logger.warning("[Cloak注册][2FA] 已保留指纹浏览器窗口供检查，任务仍会保存已注册账号")
 
         codex_result = {
             "status": "skipped",

@@ -536,19 +536,277 @@ def setup_2fa(
     return secret
 
 
+class Browser2FARequestError(RuntimeError):
+    """浏览器内 2FA 请求失败，并保留阶段、状态码和响应摘要。"""
+
+    def __init__(self, stage: str, status: int, detail: str):
+        self.stage = str(stage or "request")
+        self.status = int(status or 0)
+        self.detail = str(detail or "")[:700]
+        super().__init__(f"{self.stage} HTTP {self.status}: {self.detail}".rstrip())
+
+
+def _browser_fetch(driver, url: str, *, method: str = "GET", headers: dict | None = None, body: str | None = None) -> dict:
+    """在当前指纹浏览器页面内发送请求，复用真实 TLS、Cookie 和浏览器指纹。"""
+    result = driver.execute_async_script(
+        r"""
+        const url = String(arguments[0] || '');
+        const method = String(arguments[1] || 'GET');
+        const headers = arguments[2] || {};
+        const body = arguments[3];
+        const done = arguments[arguments.length - 1];
+        (async () => {
+          try {
+            const options = {method, headers, credentials: 'include', redirect: 'follow'};
+            if (body !== null && body !== undefined) options.body = String(body);
+            const resp = await fetch(url, options);
+            const text = await resp.text();
+            let data = null;
+            try { data = JSON.parse(text); } catch (_) {}
+            done({ok: true, status: resp.status, url: resp.url, data, body: text.slice(0, 1200)});
+          } catch (e) {
+            done({ok: false, status: 0, error: String(e && (e.stack || e.message) || e).slice(0, 700)});
+          }
+        })();
+        """,
+        str(url),
+        str(method or "GET").upper(),
+        dict(headers or {}),
+        body,
+    ) or {}
+    if not result.get("ok"):
+        raise Browser2FARequestError("browser_fetch", int(result.get("status") or 0), result.get("error") or "浏览器请求未返回结果")
+    return result
+
+
+def _browser_response_data(result: dict, stage: str) -> dict:
+    """校验浏览器请求状态并返回 JSON 对象。"""
+    status = int(result.get("status") or 0)
+    if not 200 <= status < 300:
+        raise Browser2FARequestError(stage, status, result.get("body") or "")
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise Browser2FARequestError(stage, status, f"响应不是 JSON 对象: {str(result.get('body') or '')[:400]}")
+    return data
+
+
+def _browser_device_id(driver) -> str:
+    """读取当前浏览器 oai-did，供 2FA 接口头和重认证参数复用。"""
+    try:
+        cookies = driver.get_cookies(["https://chatgpt.com/", "https://auth.openai.com/"])
+    except TypeError:
+        cookies = driver.get_cookies()
+    except Exception:
+        cookies = []
+    for item in cookies or []:
+        if str(item.get("name") or "") == "oai-did" and item.get("value"):
+            return str(item["value"])
+    return ""
+
+
+def _browser_session_info(driver) -> dict:
+    """直接从当前 ChatGPT 页面读取登录 Session，避免切换到协议指纹。"""
+    result = _browser_fetch(
+        driver,
+        "/api/auth/session",
+        headers={"accept": "application/json", "cache-control": "no-cache", "pragma": "no-cache"},
+    )
+    data = _browser_response_data(result, "session")
+    if not data.get("accessToken"):
+        raise Browser2FARequestError("session", int(result.get("status") or 0), "响应缺少 accessToken")
+    return data
+
+
+def _browser_enroll_totp(driver, access_token: str) -> tuple[str, str]:
+    """使用当前浏览器网络栈注册 TOTP enrollment。"""
+    device_id = _browser_device_id(driver)
+    language = str(driver.execute_script("return navigator.language || 'en-US';") or "en-US")
+    result = _browser_fetch(
+        driver,
+        "/backend-api/accounts/mfa/enroll",
+        method="POST",
+        headers={
+            "accept": "application/json",
+            "authorization": f"Bearer {access_token}",
+            "content-type": "application/json",
+            "oai-device-id": device_id,
+            "oai-language": language,
+        },
+        body=json.dumps({"factor_type": "totp"}),
+    )
+    data = _browser_response_data(result, "enroll")
+    secret = str(data.get("secret") or "").strip()
+    session_id = str(data.get("session_id") or "").strip()
+    if not secret or not session_id:
+        raise Browser2FARequestError("enroll", int(result.get("status") or 0), f"响应字段缺失: {data}")
+    logger.info("[2FA] 浏览器内 TOTP enrollment 已创建：secret=%s...%s", secret[:4], secret[-4:])
+    return secret, session_id
+
+
+def _browser_activate_totp(driver, access_token: str, secret: str, session_id: str) -> None:
+    """在当前浏览器中激活 TOTP，并兼容接口字段与验证码窗口变化。"""
+    device_id = _browser_device_id(driver)
+    language = str(driver.execute_script("return navigator.language || 'en-US';") or "en-US")
+    totp = pyotp.TOTP(str(secret).replace(" ", "").strip())
+
+    def _activate(code: str, *, include_factor_type: bool) -> dict:
+        payload = {"code": str(code), "session_id": str(session_id)}
+        if include_factor_type:
+            payload["factor_type"] = "totp"
+        return _browser_fetch(
+            driver,
+            "/backend-api/accounts/mfa/user/activate_enrollment",
+            method="POST",
+            headers={
+                "accept": "application/json",
+                "authorization": f"Bearer {access_token}",
+                "content-type": "application/json",
+                "oai-device-id": device_id,
+                "oai-language": language,
+            },
+            body=json.dumps(payload),
+        )
+
+    code = totp.now()
+    include_factor_type = True
+    result = _activate(code, include_factor_type=include_factor_type)
+    error_text = str(result.get("body") or "").lower()
+    if int(result.get("status") or 0) in {400, 422} and "factor_type" in error_text and any(
+        word in error_text for word in ("extra", "unexpected", "unknown", "not permitted", "not allowed")
+    ):
+        include_factor_type = False
+        logger.info("[2FA] 浏览器内接口拒绝 factor_type，使用最小字段重试")
+        result = _activate(code, include_factor_type=include_factor_type)
+        error_text = str(result.get("body") or "").lower()
+
+    if int(result.get("status") or 0) == 400 and ("invalid_request" in error_text or "invalid request" in error_text):
+        next_code = totp.now()
+        if next_code != code:
+            logger.info("[2FA] 激活验证码已跨时间窗口，使用新验证码重试")
+            result = _activate(next_code, include_factor_type=include_factor_type)
+
+    data = _browser_response_data(result, "activate")
+    if not data.get("success"):
+        raise Browser2FARequestError("activate", int(result.get("status") or 0), f"响应 success=false: {data}")
+
+
+def _browser_trigger_reauth(driver, email: str) -> str:
+    """在 ChatGPT 页面内创建 2FA 重认证授权地址。"""
+    csrf = _browser_response_data(
+        _browser_fetch(driver, "/api/auth/csrf", headers={"accept": "application/json"}),
+        "reauth_csrf",
+    ).get("csrfToken")
+    if not csrf:
+        raise Browser2FARequestError("reauth_csrf", 200, "响应缺少 csrfToken")
+    query = urlencode({
+        "connection": "password",
+        "login_hint": email,
+        "reauth": "password",
+        "max_age": "0",
+        "ext-oai-did": _browser_device_id(driver),
+    })
+    body = urlencode({
+        "callbackUrl": "https://chatgpt.com/?action=enable&factor=totp",
+        "csrfToken": csrf,
+        "json": "true",
+    })
+    data = _browser_response_data(
+        _browser_fetch(
+            driver,
+            f"/api/auth/signin/openai?{query}",
+            method="POST",
+            headers={"accept": "application/json", "content-type": "application/x-www-form-urlencoded"},
+            body=body,
+        ),
+        "reauth_signin",
+    )
+    auth_url = str(data.get("url") or "").strip()
+    if not auth_url:
+        raise Browser2FARequestError("reauth_signin", 200, f"响应缺少 url: {data}")
+    return auth_url
+
+
+def _wait_for_browser_host(driver, host: str, timeout: int = 30) -> str:
+    """等待浏览器落到指定域名，返回最终 URL。"""
+    end = time.time() + max(1, int(timeout or 30))
+    current = ""
+    while time.time() < end:
+        try:
+            current = str(driver.current_url or "")
+            if (urlparse(current).hostname or "").lower().endswith(host.lower()):
+                return current
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError(f"浏览器未在 {timeout}s 内进入 {host}，最后地址: {current[:300]}")
+
+
+def _browser_reauthenticate(driver, email: str, previous_otp: str | None = None) -> str:
+    """完全在指纹浏览器内完成邮箱 OTP 重认证并返回新 access token。"""
+    from config import email as _email_cfg
+
+    otp_after_ts = time.time()
+    auth_url = _browser_trigger_reauth(driver, email)
+    logger.info("[2FA] 浏览器内发起重认证并跳转 Auth 页面")
+    driver.get(auth_url)
+    _wait_for_browser_host(driver, "auth.openai.com", timeout=30)
+    human_delay("navigate")
+
+    if _email_cfg.USE_EMAIL_SERVICE:
+        from core.email_provider import wait_for_otp
+        excluded = {str(previous_otp).strip()} if str(previous_otp or "").strip() else set()
+        logger.info("[2FA] 浏览器内重认证等待新的邮箱验证码")
+        otp_code = wait_for_otp(email, after_ts=otp_after_ts, exclude_codes=excluded)
+    else:
+        logger.info("[2FA] 请检查邮箱，输入新的 6 位重认证验证码")
+        otp_code = input(">>> 2FA 验证码: ").strip()
+
+    data = _browser_response_data(
+        _browser_fetch(
+            driver,
+            "/api/accounts/email-otp/validate",
+            method="POST",
+            headers={"accept": "application/json", "content-type": "application/json"},
+            body=json.dumps({"code": otp_code}),
+        ),
+        "reauth_otp",
+    )
+    continue_url = str(data.get("continue_url") or "").strip()
+    if not continue_url:
+        raise Browser2FARequestError("reauth_otp", 200, f"响应缺少 continue_url: {data}")
+
+    logger.info("[2FA] 重认证验证码通过，浏览器跟随 OAuth 回调")
+    driver.get(continue_url)
+    try:
+        _wait_for_browser_host(driver, "chatgpt.com", timeout=30)
+    except RuntimeError:
+        driver.get("https://chatgpt.com/")
+        _wait_for_browser_host(driver, "chatgpt.com", timeout=30)
+    return str(_browser_session_info(driver)["accessToken"])
+
+
 def setup_2fa_from_browser(
     driver,
     email: str,
     proxy: str | None = None,
     previous_otp: str | None = None,
+    access_token: str | None = None,
 ) -> str:
-    """复用当前浏览器登录 Cookie 和代理出口执行既有 2FA 流程。"""
-    session = browser_session_from_driver(driver, proxy=proxy, fingerprint_key=email)
+    """复用当前指纹浏览器的网络栈设置 2FA，避免 Cookie 桥接后的 CF 403。"""
+    del proxy  # 浏览器已经使用注册阶段的原代理出口，无需另建协议代理会话。
+    token = str(access_token or "").strip() or str(_browser_session_info(driver)["accessToken"])
+    logger.info("[2FA] 复用当前指纹浏览器网络栈开始设置 TOTP")
     try:
-        fetch_session(session)
-        return setup_2fa(session, email, previous_otp=previous_otp)
-    finally:
-        session.session.close()
+        secret, session_id = _browser_enroll_totp(driver, token)
+    except Browser2FARequestError as exc:
+        if exc.stage != "enroll" or exc.status not in {401, 403}:
+            raise
+        logger.info("[2FA] enrollment 要求新鲜认证，转入浏览器内邮箱 OTP 重认证：HTTP %s", exc.status)
+        token = _browser_reauthenticate(driver, email, previous_otp=previous_otp)
+        secret, session_id = _browser_enroll_totp(driver, token)
+    _browser_activate_totp(driver, token, secret, session_id)
+    logger.info("[2FA] 浏览器内 TOTP 设置完成：secret=%s...%s", secret[:4], secret[-4:])
+    return secret
 
 
 def save_account_data(

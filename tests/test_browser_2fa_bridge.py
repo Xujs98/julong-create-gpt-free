@@ -2,7 +2,13 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from core.account_export import _activate_totp, browser_session_from_driver, setup_2fa, setup_2fa_from_browser
+from core.account_export import (
+    Browser2FARequestError,
+    _activate_totp,
+    browser_session_from_driver,
+    setup_2fa,
+    setup_2fa_from_browser,
+)
 
 
 class Browser2FABridgeTests(unittest.TestCase):
@@ -46,21 +52,43 @@ class Browser2FABridgeTests(unittest.TestCase):
         self.assertEqual(session.browser_profile["timezone_iana"], "Asia/Tokyo")
         self.assertEqual(session.session.cookies.set.call_count, 2)
 
-    @patch("core.account_export.setup_2fa", return_value="TOTPSECRET")
-    @patch("core.account_export.fetch_session")
-    @patch("core.account_export.browser_session_from_driver")
-    def test_setup_from_browser_closes_protocol_session(self, bridge, fetch, setup):
-        session = bridge.return_value
+    @patch("core.account_export._browser_activate_totp")
+    @patch("core.account_export._browser_enroll_totp", return_value=("TOTPSECRET", "SESSION_ID"))
+    def test_setup_from_browser_reuses_existing_access_token(self, enroll, activate):
+        driver = Mock()
         result = setup_2fa_from_browser(
-            Mock(),
+            driver,
             "user@example.test",
             proxy="proxy",
             previous_otp="683938",
+            access_token="ACCESS_TOKEN",
         )
         self.assertEqual(result, "TOTPSECRET")
-        fetch.assert_called_once_with(session)
-        setup.assert_called_once_with(session, "user@example.test", previous_otp="683938")
-        session.session.close.assert_called_once_with()
+        enroll.assert_called_once_with(driver, "ACCESS_TOKEN")
+        activate.assert_called_once_with(driver, "ACCESS_TOKEN", "TOTPSECRET", "SESSION_ID")
+
+    @patch("core.account_export._browser_activate_totp")
+    @patch("core.account_export._browser_reauthenticate", return_value="FRESH_TOKEN")
+    @patch("core.account_export._browser_enroll_totp")
+    def test_setup_from_browser_reauthenticates_when_enroll_requires_fresh_login(self, enroll, reauth, activate):
+        driver = Mock()
+        enroll.side_effect = [
+            Browser2FARequestError("enroll", 403, "fresh authentication required"),
+            ("TOTPSECRET", "SESSION_ID"),
+        ]
+
+        result = setup_2fa_from_browser(
+            driver,
+            "user@example.test",
+            previous_otp="683938",
+            access_token="OLD_TOKEN",
+        )
+
+        self.assertEqual(result, "TOTPSECRET")
+        self.assertEqual(enroll.call_args_list[0].args, (driver, "OLD_TOKEN"))
+        self.assertEqual(enroll.call_args_list[1].args, (driver, "FRESH_TOKEN"))
+        reauth.assert_called_once_with(driver, "user@example.test", previous_otp="683938")
+        activate.assert_called_once_with(driver, "FRESH_TOKEN", "TOTPSECRET", "SESSION_ID")
 
     def test_setup_2fa_excludes_registration_otp_when_waiting_for_reauth_code(self):
         session = Mock()

@@ -2737,6 +2737,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                     email,
                     proxy=proxy,
                     previous_otp=current_otp,
+                    access_token=access_token,
                 )
                 twofa_result["status"] = "success"
                 logger.info("[Roxy注册][2FA] TOTP 设置完成")
