@@ -3249,6 +3249,9 @@ let ACCOUNT_STATUS_FILTER = '';
 let ACCOUNT_GROUP_FILTER = [];
 let ACCOUNT_GROUPS = [];
 let ACCOUNT_GROUP_MODAL_MODE = 'view';
+// 中文注释：账号分组筛选属于浏览器视图偏好，按当前浏览器保存，刷新后恢复。
+const ACCOUNT_GROUP_FILTER_STORAGE_KEY = 'gpt_console_account_group_filter_v2';
+let ACCOUNT_GROUP_FILTER_RESTORED = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -4188,6 +4191,26 @@ function accountGroupLabel() {
 function accountGroupQueryValue() {
   return JSON.stringify(ACCOUNT_GROUP_FILTER);
 }
+// 中文注释：保存当前选中的分组名称；空数组代表查看全部分组。
+function saveAccountGroupFilter() {
+  try {
+    localStorage.setItem(ACCOUNT_GROUP_FILTER_STORAGE_KEY, JSON.stringify(ACCOUNT_GROUP_FILTER));
+  } catch (_) {}
+}
+// 中文注释：只在首次成功取得分组列表后恢复，避免用户操作时被后台轮询覆盖。
+function restoreAccountGroupFilter(groups) {
+  if (ACCOUNT_GROUP_FILTER_RESTORED) return;
+  let saved = [];
+  try {
+    const raw = JSON.parse(localStorage.getItem(ACCOUNT_GROUP_FILTER_STORAGE_KEY) || '[]');
+    if (Array.isArray(raw)) saved = raw.map(item => String(item || '').trim()).filter(Boolean);
+  } catch (_) {}
+  const available = new Set((groups || []).filter(group => !group.is_all).map(group => String(group.name || '').trim()).filter(Boolean));
+  const restored = saved.filter(name => available.has(name));
+  ACCOUNT_GROUP_FILTER = restored;
+  ACCOUNT_GROUP_FILTER_RESTORED = true;
+  if (restored.length !== saved.length) saveAccountGroupFilter();
+}
 function renderAccountGroupsModal() {
   const body = $('#accountGroupsBodyV2');
   if (!body) return;
@@ -4213,6 +4236,7 @@ async function loadAccountGroups(openModal = false, mode = 'view') {
   try {
     const res = await api('/api/account-groups');
     ACCOUNT_GROUPS = res.groups || [];
+    restoreAccountGroupFilter(ACCOUNT_GROUPS);
     const viewBtn = $('#btnViewAccountGroupsV2');
     if (viewBtn) viewBtn.textContent = accountGroupLabel();
     if (openModal) {
@@ -4244,6 +4268,7 @@ async function selectAccountGroup(group) {
       ? ACCOUNT_GROUP_FILTER.filter(item => item !== name)
       : [...ACCOUNT_GROUP_FILTER, name];
   }
+  saveAccountGroupFilter();
   ACCOUNT_SELECTED.clear();
   PAGERS.accounts.page = 1;
   renderAccountGroupsModal();
@@ -4268,6 +4293,7 @@ async function renameAccountGroupFromUi(groupId) {
   try {
     await api(`/api/account-groups/${encodeURIComponent(groupId)}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name})});
     ACCOUNT_GROUP_FILTER = ACCOUNT_GROUP_FILTER.map(item => item === group.name ? String(name || '').trim() : item);
+    saveAccountGroupFilter();
     await loadAccountGroups(true, 'view');
     await loadAccounts();
     showToast('分组名称已修改');
@@ -4280,6 +4306,7 @@ async function deleteAccountGroupFromUi(groupId) {
   try {
     await api(`/api/account-groups/${encodeURIComponent(groupId)}`, {method: 'DELETE'});
     ACCOUNT_GROUP_FILTER = ACCOUNT_GROUP_FILTER.filter(item => item !== group.name);
+    saveAccountGroupFilter();
     await loadAccountGroups(true, 'view');
     await loadAccounts();
     showToast('分组已删除');

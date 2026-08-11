@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 from unittest.mock import patch
+from pathlib import Path
 
 from webui.app import create_app
+
+
+ROOT = Path(__file__).parents[1]
 
 
 def _client():
@@ -46,3 +50,14 @@ def test_account_group_move_api_validates_target_and_returns_updates():
     assert response.status_code == 200
     assert response.get_json()["updated_count"] == 1
     move.assert_called_once_with([1], 2)
+
+
+def test_account_group_filter_is_persisted_and_restored_in_modern_ui():
+    """账号页应保存分组选择，并在刷新后恢复有效分组。"""
+    source = (ROOT / "webui/templates/index.html").read_text(encoding="utf-8")
+    assert "gpt_console_account_group_filter_v2" in source
+    assert "function saveAccountGroupFilter()" in source
+    assert "function restoreAccountGroupFilter(groups)" in source
+    assert "localStorage.setItem(ACCOUNT_GROUP_FILTER_STORAGE_KEY" in source
+    assert "restoreAccountGroupFilter(ACCOUNT_GROUPS)" in source
+    assert "saveAccountGroupFilter();" in source
