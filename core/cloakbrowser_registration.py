@@ -111,10 +111,26 @@ def _safe_cloak_get(driver, url: str, *, attempts: int | None = None) -> None:
     raise last_exc or RuntimeError(f"Cloak 初始导航失败: {url}")
 
 
-def _agent_checkpoint(agent, driver, stage: str, context: dict, *, force: bool = False):
+def _agent_checkpoint(
+    agent,
+    driver,
+    stage: str,
+    context: dict,
+    *,
+    force: bool = False,
+    snapshot: dict | None = None,
+    max_actions: int | None = None,
+):
     if agent is None:
         return None
-    result = agent.assist(driver, stage, context, force=force)
+    result = agent.assist(
+        driver,
+        stage,
+        context,
+        force=force,
+        snapshot=snapshot,
+        max_actions=max_actions,
+    )
     logger.info(
         "[Cloak注册][Agent] stage=%s mode=%s ok=%s executed=%s reason=%s",
         stage, agent.mode, result.ok, result.executed, result.reason,
@@ -565,7 +581,10 @@ def _run_cloak_registration_impl(
                             str(exc)[:180],
                         )
                         otp_after_ts = time.time()
-                        _click_resend_email_otp(driver, timeout=25)
+                        resend_result = _click_resend_email_otp(driver, timeout=25)
+                        if resend_result.get("reason") == "already_accepted":
+                            logger.info("[Cloak注册][OTP] 等待新验证码期间页面已进入下一阶段，停止继续收码")
+                            break
                         human_delay("api")
                         current_otp = None
                         continue
@@ -593,9 +612,49 @@ def _run_cloak_registration_impl(
                 try:
                     _click_continue(driver)
                 except Exception as exc:
-                    logger.info("[Cloak注册][OTP] 未找到显式提交按钮，继续等待页面状态：%s", str(exc)[:120])
+                    if agent:
+                        snapshot = agent.snapshot(driver)
+                        state, snapshot = _agent_page_state(driver, snapshot)
+                        if state in {"profile", "logged_in"}:
+                            logger.info("[Cloak注册][Agent] 固定提交器异常，但 HTML 已进入阶段=%s", state)
+                        else:
+                            result = _agent_checkpoint(
+                                agent,
+                                driver,
+                                "otp",
+                                {"email": email, "otp": current_otp},
+                                force=True,
+                                snapshot=snapshot,
+                                max_actions=1,
+                            )
+                            logger.info(
+                                "[Cloak注册][OTP] 固定提交器异常，已调用页面 Agent 补位：executed=%s error=%s",
+                                getattr(result, "executed", 0),
+                                str(exc)[:120],
+                            )
+                    else:
+                        logger.info("[Cloak注册][OTP] 未找到显式提交按钮，继续等待页面状态：%s", str(exc)[:120])
 
                 outcome = _wait_after_email_otp_submit(driver, timeout=10)
+                if outcome == "stalled" and agent:
+                    snapshot = agent.snapshot(driver)
+                    state, snapshot = _agent_page_state(driver, snapshot)
+                    if state in {"profile", "logged_in"}:
+                        logger.info("[Cloak注册][Agent] OTP 后 HTML 已进入阶段=%s，按提交成功继续", state)
+                        outcome = "accepted"
+                    elif state == "otp" and not (snapshot.get("errors") or []):
+                        result = _agent_checkpoint(
+                            agent,
+                            driver,
+                            "otp",
+                            {"email": email, "otp": current_otp},
+                            force=True,
+                            snapshot=snapshot,
+                            max_actions=1,
+                        )
+                        if result and result.executed:
+                            logger.info("[Cloak注册][Agent] OTP 页未报错但未推进，Agent 已执行补充动作")
+                            outcome = _wait_after_email_otp_submit(driver, timeout=10)
                 if outcome == "accepted":
                     break
                 if otp_attempt >= max_otp_attempts:

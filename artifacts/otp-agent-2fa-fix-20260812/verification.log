@@ -1,0 +1,25 @@
+OTP/Agent/2FA fix verification — 2026-08-12
+
+Baseline:
+- git parent: 3bc8cd653be05ed0838084426a8c47c83d400e2c
+- baseline hashes: baseline-sha256.txt
+
+Commands and literal results:
+$ python3 -m pytest -q tests/test_cloakbrowser_registration.py tests/test_browser_2fa_bridge.py tests/test_registration_2fa_fresh_otp.py
+.........................................                                [100%]
+41 passed in 8.28s
+exit=0
+
+$ python3 -m compileall -q core tests
+exit=0
+
+$ git diff --check
+exit=0
+
+Full suite note:
+- 376 passed, 9 failed in the pre-existing WebUI Cloudflare/GPTMail tests because the local proxy pool was empty; these failures occur before the changed OTP/Agent/2FA paths and are recorded in the task log.
+
+$ isolated worktree: git apply patch.diff.gz -> rollback.sh -> git diff --exit-code
+rollback applied
+isolated apply-and-rollback verification passed
+exit=0

@@ -28,7 +28,10 @@ _TWOFA_BROWSER_FETCH_TIMEOUT_MS = 20_000
 _TWOFA_BROWSER_SCRIPT_TIMEOUT_SECONDS = 25.0
 _TWOFA_ACTIVATE_ATTEMPTS = 3
 _TWOFA_REAUTH_OTP_ATTEMPTS = 3
-_TWOFA_MIN_CODE_LIFETIME_SECONDS = 12.0
+# Browser fetch can spend several seconds in proxy/anti-bot queues.  Keep a
+# larger safety margin so the first activation request is not submitted near a
+# TOTP boundary and then invalidates the enrollment session.
+_TWOFA_MIN_CODE_LIFETIME_SECONDS = 20.0
 
 # 输出目录（与项目根 .claude/ 工作区分离，单独放在 accounts/）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -627,6 +630,13 @@ def _factor_type_is_rejected(error_text: str) -> bool:
     )
 
 
+def _factor_type_is_required(error_text: str) -> bool:
+    text = str(error_text or "").lower()
+    return "factor_type" in text and any(
+        word in text for word in ("required", "missing", "field required")
+    )
+
+
 def _is_invalid_totp_response(status: int, error_text: str) -> bool:
     text = str(error_text or "").lower()
     return int(status or 0) in {400, 403, 422} and any(
@@ -843,6 +853,7 @@ def _browser_activate_totp(driver, access_token: str, secret: str, session_id: s
         )
 
     include_factor_type = True
+    minimal_payload_tried = False
     code = _totp_code_with_margin(totp)
     for attempt in range(1, _TWOFA_ACTIVATE_ATTEMPTS + 1):
         try:
@@ -866,6 +877,28 @@ def _browser_activate_totp(driver, access_token: str, secret: str, session_id: s
             status = int(result.get("status") or 0)
             error_text = str(result.get("body") or "").lower()
 
+        # 部署版本有时只返回通用 invalid_request，而不指出是多余字段。
+        # 对同一稳定验证码做一次无 factor_type 兼容请求；若服务端明确要求
+        # 字段，则恢复完整 payload，后续按验证码/新 enrollment 逻辑处理。
+        if (
+            status == 400
+            and "invalid_request" in error_text
+            and include_factor_type
+            and not minimal_payload_tried
+        ):
+            minimal_payload_tried = True
+            logger.info("[2FA] 浏览器内激活返回通用 invalid_request，尝试兼容最小字段")
+            fallback = _activate(code, include_factor_type=False)
+            fallback_status = int(fallback.get("status") or 0)
+            fallback_error = str(fallback.get("body") or "").lower()
+            if 200 <= fallback_status < 300:
+                data = _browser_response_data(fallback, "activate")
+                if data.get("success") or _browser_mfa_enabled(driver):
+                    return
+            if not _factor_type_is_required(fallback_error):
+                include_factor_type = False
+                result, status, error_text = fallback, fallback_status, fallback_error
+
         if 200 <= status < 300:
             data = _browser_response_data(result, "activate")
             if data.get("success"):
@@ -884,6 +917,9 @@ def _browser_activate_totp(driver, access_token: str, secret: str, session_id: s
             time.sleep(min(2.0 * attempt, 5.0))
             code = _totp_code_with_margin(totp)
             continue
+        if _browser_mfa_enabled(driver):
+            logger.info("[2FA] 激活返回 HTTP %s，但 session 已确认 MFA 开启", status)
+            return
         _browser_response_data(result, "activate")
 
 
@@ -1069,15 +1105,39 @@ def setup_2fa_from_browser(
     del proxy  # 浏览器已经使用注册阶段的原代理出口，无需另建协议代理会话。
     token = str(access_token or "").strip() or str(_browser_session_info(driver)["accessToken"])
     logger.info("[2FA] 复用当前指纹浏览器网络栈开始设置 TOTP")
-    try:
-        secret, session_id = _browser_enroll_totp(driver, token)
-    except Browser2FARequestError as exc:
-        if exc.stage != "enroll" or exc.status not in {401, 403}:
-            raise
-        logger.info("[2FA] enrollment 要求新鲜认证，转入浏览器内邮箱 OTP 重认证：HTTP %s", exc.status)
-        token = _browser_reauthenticate(driver, email, previous_otp=previous_otp)
-        secret, session_id = _browser_enroll_totp(driver, token)
-    _browser_activate_totp(driver, token, secret, session_id)
+    reauth_done = False
+    last_activation_error: Browser2FARequestError | None = None
+    # 某些后端在第一次激活验证码过期/格式不匹配后会使 enrollment session
+    # 失效；只换 TOTP 时间窗口仍会对同一个 session 连续失败。重新 enroll
+    # 一次并从新 secret/session 开始，避免把可恢复错误记成最终 2FA 失败。
+    for enrollment_attempt in range(1, 3):
+        try:
+            secret, session_id = _browser_enroll_totp(driver, token)
+        except Browser2FARequestError as exc:
+            if exc.stage != "enroll" or exc.status not in {401, 403} or reauth_done:
+                raise
+            logger.info("[2FA] enrollment 要求新鲜认证，转入浏览器内邮箱 OTP 重认证：HTTP %s", exc.status)
+            token = _browser_reauthenticate(driver, email, previous_otp=previous_otp)
+            reauth_done = True
+            secret, session_id = _browser_enroll_totp(driver, token)
+        try:
+            _browser_activate_totp(driver, token, secret, session_id)
+            last_activation_error = None
+            break
+        except Browser2FARequestError as exc:
+            last_activation_error = exc
+            if exc.stage != "activate" or enrollment_attempt >= 2:
+                raise
+            if not _is_invalid_totp_response(exc.status, exc.detail):
+                raise
+            logger.warning(
+                "[2FA] 当前 enrollment 激活失败，重新创建 enrollment 后重试（%s/2）：HTTP %s",
+                enrollment_attempt + 1,
+                exc.status,
+            )
+            human_delay("api")
+    if last_activation_error is not None:
+        raise last_activation_error
     logger.info("[2FA] 浏览器内 TOTP 设置完成：secret=%s...%s", secret[:4], secret[-4:])
     return secret
 

@@ -258,6 +258,49 @@ class Browser2FABridgeTests(unittest.TestCase):
         self.assertEqual(second["code"], "222222")
         fresh_code.assert_called_with(ANY, force_next=True)
 
+    @patch("core.account_export._totp_code_with_margin", return_value="123456")
+    @patch("core.account_export._browser_fetch")
+    def test_browser_activate_retries_generic_invalid_request_without_factor_type(self, browser_fetch, fresh_code):
+        """部分后端对带 factor_type 的激活只返回通用 invalid_request。"""
+        browser_fetch.side_effect = [
+            {"ok": True, "status": 400, "body": '{"code":"invalid_request"}'},
+            {"ok": True, "status": 200, "data": {"success": True}, "body": '{"success":true}'},
+        ]
+        driver = Mock()
+        driver.get_cookies.return_value = [{"name": "oai-did", "value": "device"}]
+        driver.execute_script.return_value = "en-US"
+
+        _browser_activate_totp(driver, "ACCESS", "SECRET", "ENROLL_SESSION")
+
+        self.assertEqual(browser_fetch.call_count, 2)
+        first = json.loads(browser_fetch.call_args_list[0].kwargs["body"])
+        second = json.loads(browser_fetch.call_args_list[1].kwargs["body"])
+        self.assertEqual(first["factor_type"], "totp")
+        self.assertNotIn("factor_type", second)
+        fresh_code.assert_called_once()
+
+    @patch("core.account_export.human_delay")
+    @patch("core.account_export._browser_activate_totp")
+    @patch("core.account_export._browser_enroll_totp", side_effect=[("SECRET_A", "SESSION_A"), ("SECRET_B", "SESSION_B")])
+    def test_setup_2fa_reenrolls_after_invalid_activation(self, enroll, activate, delay):
+        activate.side_effect = [
+            Browser2FARequestError("activate", 400, '{"code":"invalid_request"}'),
+            None,
+        ]
+        driver = Mock()
+
+        result = setup_2fa_from_browser(
+            driver,
+            "user@example.test",
+            previous_otp="111111",
+            access_token="ACCESS",
+        )
+
+        self.assertEqual(result, "SECRET_B")
+        self.assertEqual(enroll.call_count, 2)
+        self.assertEqual(activate.call_args_list[0].args[3], "SESSION_A")
+        self.assertEqual(activate.call_args_list[1].args[3], "SESSION_B")
+
     @patch("core.account_export._browser_mfa_enabled", return_value=True)
     @patch("core.account_export._browser_fetch")
     def test_browser_activate_accepts_timeout_when_session_confirms_mfa(self, browser_fetch, mfa_enabled):

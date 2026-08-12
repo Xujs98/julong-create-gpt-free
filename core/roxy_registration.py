@@ -1471,11 +1471,23 @@ def _is_email_verification_page(driver) -> bool:
         url = ''
     if '/log-in/password' in url:
         return False
-    if 'email-verification' in url:
-        return True
     state = _email_otp_page_state(driver)
     attrs = ' '.join(' '.join(str(i.get(k) or '') for k in ('type','name','id','autocomplete','inputmode')) for i in (state.get('inputs') or [])).lower()
-    return 'one-time-code' in attrs or 'otp' in attrs or 'code' in attrs
+    if any(marker in attrs for marker in ('one-time-code', 'otp', 'verification-code', 'inputmode numeric')):
+        return True
+
+    # 新版 Auth 在验证码提交成功后会原地把 /email-verification 文档
+    # 重渲染成资料页，URL 可能暂时不变。必须以当前 DOM 为准，否则用户或
+    # 程序已经点击“继续”后仍会被误判为验证码无效，并进入等待新验证码。
+    try:
+        if _is_profile_like(_page_snapshot(driver)):
+            return False
+    except Exception:
+        pass
+
+    # DOM 尚未挂载输入框的短暂过渡阶段仍可依据 URL 保持 OTP 状态；一旦
+    # 资料页控件出现，上面的 DOM 判断会优先结束 OTP 阶段。
+    return 'email-verification' in url
 
 
 def _wait_for_email_otp_page(driver, timeout: int = 15) -> str:
@@ -1579,7 +1591,7 @@ def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
 
 
 def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
-    """提交 OTP 后等待页面离开验证码页；仍在验证码页且有错误/输入框则认为验证码无效。"""
+    """提交 OTP 后等待页面推进，并区分明确无效与按钮未生效。"""
     end = time.time() + timeout
     last = {}
     while time.time() < end:
@@ -1591,16 +1603,61 @@ def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
         if invalid or (last.get('errors') or []):
             return 'invalid'
     if _is_email_verification_page(driver):
-        logger.warning("%s[OTP] 提交后仍停留验证码页，按验证码无效/过期处理 snapshot=%s", _log_prefix(driver), _email_otp_page_state(driver))
-        return 'invalid'
+        last = _email_otp_page_state(driver)
+        invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
+        if invalid or (last.get('errors') or []):
+            logger.warning("%s[OTP] 提交后页面明确提示验证码无效/过期 snapshot=%s", _log_prefix(driver), last)
+            return 'invalid'
+        logger.warning("%s[OTP] 提交后仍停留验证码页但没有错误提示，按提交动作未生效处理 snapshot=%s", _log_prefix(driver), last)
+        return 'stalled'
     return 'accepted'
 
 
 def _click_continue(driver) -> None:
+    # OTP 页的主按钮有稳定结构（value=validate / data-dd-action-name=Continue）。
+    # 先直接点击与验证码输入框同表单的主提交按钮，避免 Playwright 适配层
+    # 在 React 重渲染期间按通用 locator 等待 20 秒后仍漏点日语“続行”。
+    try:
+        result = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const enabled = el => visible(el) && !el.disabled
+          && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+        const otp = [...document.querySelectorAll('input')].find(el => {
+          if (!visible(el)) return false;
+          const attrs = [el.type, el.name, el.id, el.autocomplete, el.inputMode, el.getAttribute('aria-label')]
+            .filter(Boolean).join(' ').toLowerCase();
+          return /one-time|otp|verification|numeric|code/.test(attrs);
+        });
+        const form = otp?.closest('form') || null;
+        const candidates = [...(form || document).querySelectorAll('button,input[type="submit"],[role="button"]')]
+          .filter(enabled);
+        const bad = /resend|google|apple|microsoft|facebook|github|oauth|social/;
+        const attrs = el => [el.type, el.value, el.name, el.id, el.getAttribute('data-dd-action-name'),
+          el.getAttribute('aria-label'), el.innerText, el.textContent].filter(Boolean).join(' ').toLowerCase();
+        const submit = candidates.find(el => {
+          const text = attrs(el);
+          return !bad.test(text) && (/validate|continue|verify|submit|続行|確認|继续|下一步/.test(text)
+            || String(el.type || '').toLowerCase() === 'submit');
+        });
+        if (!submit) return {ok:false, reason:'missing_primary_submit'};
+        submit.scrollIntoView({block:'center', inline:'nearest'});
+        submit.click();
+        return {ok:true, reason:'clicked_primary_submit', text:(submit.innerText || submit.value || '').trim().slice(0,80)};
+        """) or {}
+        if result.get('ok'):
+            logger.info("%s[OTP] 已点击验证码主提交按钮：%s", _log_prefix(driver), result.get('text') or '-')
+            return
+    except Exception as exc:
+        logger.debug("%s[OTP] 结构化提交按钮点击失败，回退通用定位：%s", _log_prefix(driver), exc)
+
     _click_any(driver, [
+        "button[type='submit'][value='validate']",
+        "button[data-dd-action-name='Continue']",
         "button[type='submit']",
         "//button[contains(., 'Continue')]",
         "//button[contains(., '继续')]",
+        "//button[contains(., '続行')]",
         "//button[contains(., 'Sign up')]",
         "//button[contains(., 'Create')]",
         "//button[contains(., 'Next')]",
@@ -2747,7 +2804,10 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                         str(exc)[:180],
                     )
                     otp_after_ts = time.time()
-                    _click_resend_email_otp(driver, timeout=25)
+                    resend_result = _click_resend_email_otp(driver, timeout=25)
+                    if resend_result.get("reason") == "already_accepted":
+                        logger.info("[Roxy注册][OTP] 等待新验证码期间页面已进入下一阶段，停止继续收码")
+                        break
                     human_delay("api")
                     current_otp = None
                     continue

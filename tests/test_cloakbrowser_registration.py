@@ -359,6 +359,55 @@ def test_wait_for_email_otp_page_waits_through_cloudflare_then_accepts_otp():
         assert _wait_for_email_otp_page(driver, timeout=1) == "otp"
 
 
+def test_email_verification_url_with_profile_dom_is_not_otp_page():
+    """资料页原地重渲染时 URL 仍可能是 email-verification。"""
+    from core.roxy_registration import _is_email_verification_page
+
+    driver = Mock(current_url="https://auth.example.test/email-verification")
+    profile_snapshot = {
+        "url": driver.current_url,
+        "inputs": [{"name": "name"}, {"name": "age"}],
+        "widgets": [{"role": "spinbutton"}],
+    }
+    with patch(
+        "core.roxy_registration._email_otp_page_state",
+        return_value={"inputs": [{"name": "name"}, {"name": "age"}]},
+    ), patch("core.roxy_registration._page_snapshot", return_value=profile_snapshot), patch(
+        "core.roxy_registration._is_profile_like", return_value=True
+    ):
+        assert _is_email_verification_page(driver) is False
+
+
+def test_click_continue_uses_structural_otp_submit_before_generic_locator():
+    from core.roxy_registration import _click_continue
+
+    driver = Mock()
+    driver.execute_script.return_value = {
+        "ok": True,
+        "reason": "clicked_primary_submit",
+        "text": "続行",
+    }
+
+    _click_continue(driver)
+
+    driver.execute_script.assert_called_once()
+    driver.find_elements.assert_not_called()
+
+
+def test_wait_after_otp_reports_stalled_when_page_has_no_validation_error():
+    from core.roxy_registration import _wait_after_email_otp_submit
+
+    driver = Mock()
+    state = {
+        "inputs": [{"name": "code", "ariaInvalid": "", "value": "123456"}],
+        "errors": [],
+    }
+    with patch("core.roxy_registration._is_email_verification_page", return_value=True), patch(
+        "core.roxy_registration._email_otp_page_state", return_value=state
+    ), patch("core.roxy_registration.time.sleep"):
+        assert _wait_after_email_otp_submit(driver, timeout=0) == "stalled"
+
+
 def test_cloak_navigation_retries_transient_timeout_then_succeeds():
     from core.cloakbrowser_registration import _safe_cloak_get
 
