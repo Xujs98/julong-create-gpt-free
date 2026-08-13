@@ -324,8 +324,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel, #proxyWarmupLogModalLegacy { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden), #proxyWarmupLogModalLegacy:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -336,6 +336,29 @@
     #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
     #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
     #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #proxyWarmupLogModalLegacy:not(.hidden) {
+      width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
+      max-height: none; padding: 0; border-color: #24324a; border-radius: 10px;
+      background: #0b1220; color: #d7deea; display: flex; flex-direction: column;
+    }
+    .proxy-warmup-modal-head { min-height: 68px; padding: 14px 18px; box-sizing: border-box; display:flex; align-items:center; gap:14px; border-bottom:1px solid #25324a; background:#111a2c; }
+    .proxy-warmup-modal-head-main { min-width:0; flex:1; }
+    .proxy-warmup-modal-title { margin:0; color:#f4f7fb; font-size:16px; line-height:1.3; }
+    .proxy-warmup-modal-meta { margin-top:5px; color:#8492a8; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .proxy-warmup-modal-close { width:34px; height:34px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid #31405a; border-radius:6px; background:#172238; color:#aab5c7; cursor:pointer; font-size:22px; }
+    .proxy-warmup-modal-close:hover { color:#fff; border-color:#536582; background:#22304a; }
+    .proxy-warmup-modal-content { min-height:0; flex:1; overflow:auto; padding:12px 0 18px; background:#0b1220; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.55; }
+    .proxy-warmup-modal-row { display:grid; grid-template-columns:82px 72px minmax(0,1fr); gap:10px; align-items:start; min-height:30px; padding:5px 18px; border-left:2px solid transparent; }
+    .proxy-warmup-modal-row:hover { background:rgba(148,163,184,.055); }
+    .proxy-warmup-modal-row.bad { border-left-color:#e45b69; background:rgba(228,91,105,.035); }
+    .proxy-warmup-modal-time { color:#66758d; }
+    .proxy-warmup-modal-level { min-width:64px; height:20px; padding:0 7px; display:inline-flex; align-items:center; justify-content:center; border:1px solid #2c4967; border-radius:4px; background:#12283d; color:#6dc4f2; font-size:10px; font-weight:800; }
+    .proxy-warmup-modal-level.warn { color:#f2c56f; border-color:#695228; background:#392c17; }
+    .proxy-warmup-modal-level.error { color:#ff8f9b; border-color:#71313d; background:#3a1d29; }
+    .proxy-warmup-modal-message { min-width:0; color:#c9d2df; overflow-wrap:anywhere; word-break:break-word; display:flex; flex-wrap:wrap; gap:6px 12px; }
+    .proxy-warmup-modal-step.ok { color:#81deb0; }
+    .proxy-warmup-modal-step.bad { color:#f39aa3; }
+    @media (max-width:640px) { #proxyWarmupLogModalLegacy:not(.hidden) { width:calc(100vw - 24px); height:calc(100vh - 24px); } .proxy-warmup-modal-row { grid-template-columns:68px 60px minmax(0,1fr); gap:7px; padding:5px 10px; } }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -548,6 +571,16 @@
       <div class="body hidden" id="logPanel">
         <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
         <div class="log" id="logContent">加载中…</div>
+      </div>
+      <div class="body hidden" id="proxyWarmupLogModalLegacy" role="dialog" aria-modal="true" aria-labelledby="proxyWarmupLogTitleLegacy">
+        <div class="proxy-warmup-modal-head">
+          <div class="proxy-warmup-modal-head-main">
+            <h3 class="proxy-warmup-modal-title" id="proxyWarmupLogTitleLegacy">代理池预热日志</h3>
+            <div class="proxy-warmup-modal-meta" id="proxyWarmupLogMetaLegacy">正在读取预热检查日志...</div>
+          </div>
+          <button type="button" class="proxy-warmup-modal-close" id="btnCloseProxyWarmupLogLegacy" title="关闭日志" aria-label="关闭日志">×</button>
+        </div>
+        <div class="proxy-warmup-modal-content" id="proxyWarmupLogModalContentLegacy" role="log" aria-live="polite">加载中...</div>
       </div>
     </section>
   </div>
@@ -1073,7 +1106,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#accountExportModal').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#proxyWarmupLogModalLegacy').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#accountExportModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1086,6 +1119,10 @@ function updateModalScrollLock() {
     document.documentElement.style.overflow = '';
     window.scrollTo(0, modalScrollY || 0);
   }
+}
+function closeProxyWarmupLogModalLegacy() {
+  $('#proxyWarmupLogModalLegacy').classList.add('hidden');
+  updateModalScrollLock();
 }
 function closeLogModal() {
   activeLogJob = null;
@@ -3493,6 +3530,7 @@ function renderProxyWarmupTools() {
       <div class="action-cell">
         <button class="btn" type="button" id="btnWarmupProxyLegacy">代理池预热</button>
         <button class="btn" type="button" id="btnWarmupLogLegacy">预热日志</button>
+        <button class="btn" type="button" id="btnCancelWarmupProxyLegacy" hidden>终止预热</button>
       </div>
       <div id="proxyWarmupStatusLegacy" class="muted" style="font-size:12px;">预热尚未运行</div>
       <div id="proxyWarmupLogLegacy" class="proxy-warmup-log" hidden></div>
@@ -3510,15 +3548,40 @@ async function warmupProxyPoolLegacy() {
     const r = await api('/api/proxy/warmup', {
       method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
     });
-    const color = r.challenge_count || r.failed ? 'var(--red)' : 'var(--green)';
-    status.innerHTML = `<span style="color:${color};">${r.ok ? '✅ 预热完成' : '⚠️ 没有可用干净 IP'}</span> · 输入 ${r.total || 0} · 健康 ${r.available || 0} · 干净 ${r.clean || 0} · 失败 ${r.failed || 0} · Cloudflare挑战 ${r.challenge_count || 0}${r.auto_delete ? ` · 自动删除 ${r.removed || 0}` : ''}`;
-    const panel = $('#proxyWarmupLogLegacy');
-    if (panel) { panel.hidden = false; panel.innerHTML = renderProxyWarmupLogLegacy(r); }
-    showToast(r.ok ? '代理池预热完成' : '代理池没有可用干净 IP');
-    await loadConfig();
+    activeProxyWarmupTaskLegacy = r.task_id;
+    $('#btnCancelWarmupProxyLegacy').hidden = false;
+    $('#btnCancelWarmupProxyLegacy').disabled = false;
+    openProxyWarmupLogModalLegacy();
+    await pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy);
+    clearInterval(proxyWarmupTimerLegacy);
+    proxyWarmupTimerLegacy = setInterval(() => pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy), 1000);
+    showToast('预热任务已启动');
   } catch(e) {
     status.innerHTML = `<span style="color:var(--red);">预热失败：${esc(e.message)}</span>`;
   } finally { btn.disabled = false; }
+}
+let proxyWarmupTimerLegacy = null, activeProxyWarmupTaskLegacy = null;
+async function pollProxyWarmupTaskLegacy(taskId) {
+  try {
+    const r = await api(`/api/proxy/warmup/${encodeURIComponent(taskId)}`);
+    const task = r.task || {};
+    $('#proxyWarmupLogModalContentLegacy').innerHTML = renderProxyWarmupModalRowsLegacy(task);
+    $('#proxyWarmupLogMetaLegacy').textContent = `实时检查 ${task.completed || 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 失败 ${task.failed || 0}${task.status === 'completed' ? ' · 预热完成' : ''}`;
+    const cancelBtn = $('#btnCancelWarmupProxyLegacy');
+    if (cancelBtn) cancelBtn.hidden = !['running', 'cancelling'].includes(task.status);
+    if (task.status !== 'running' && task.status !== 'cancelling') { clearInterval(proxyWarmupTimerLegacy); proxyWarmupTimerLegacy = null; }
+  } catch (_) {}
+}
+async function cancelProxyWarmupLegacy() {
+  if (!activeProxyWarmupTaskLegacy) return;
+  const btn = $('#btnCancelWarmupProxyLegacy');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/proxy/warmup/${encodeURIComponent(activeProxyWarmupTaskLegacy)}/cancel`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    showToast('已发送终止预热信号');
+    await pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy);
+  } catch (e) { showToast('终止预热失败：' + e.message); }
+  finally { if (btn) btn.disabled = false; }
 }
 function renderProxyWarmupLogLegacy(log) {
   const rows = (log.results || []).map((item, index) => {
@@ -3526,16 +3589,51 @@ function renderProxyWarmupLogLegacy(log) {
     const status = item.healthy ? '<b style="color:var(--green);">健康/干净</b>' : `<b style="color:var(--red);">${item.challenge_detected ? 'Cloudflare挑战' : '不健康'}</b>`;
     return `<div class="proxy-log-row"><div><b>#${index + 1}</b> · <span class="mono">${esc(item.proxy || '-')}</span> · ${status}</div><div class="proxy-log-steps">${steps || esc(item.reason || '无详细步骤')}</div></div>`;
   }).join('');
-  return `<div class="proxy-log-head"><b>预热检查过程</b><span>共 ${log.total || 0} 个唯一代理 · 健康 ${log.available || 0} · 失败 ${log.failed || 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
+  return `<div class="proxy-log-head"><b>预热检查过程（已检查全部代理）</b><span>已检查 ${log.checked_total ?? log.total ?? 0} 个 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
+}
+function renderProxyWarmupModalRowsLegacy(log) {
+  return (log.results || []).filter(Boolean).map((item, index) => {
+    const bad = !item.healthy;
+    const challenge = !!item.challenge_detected;
+    const level = item.healthy ? 'INFO' : (challenge ? 'WARN' : 'ERROR');
+    const levelClass = item.healthy ? '' : (challenge ? 'warn' : 'error');
+    const steps = (item.steps || []).map(step => `<span class="proxy-warmup-modal-step ${step.ok ? 'ok' : 'bad'}">${step.ok ? '✓' : '×'} ${esc(step.name)}${step.detail ? `：${esc(step.detail)}` : ''}</span>`).join('');
+    const status = item.healthy ? '健康/干净' : (challenge ? 'Cloudflare挑战' : '不健康');
+    return `<div class="proxy-warmup-modal-row${bad ? ' bad' : ''}"><span class="proxy-warmup-modal-time">#${index + 1}</span><span class="proxy-warmup-modal-level ${levelClass}">${level}</span><span class="proxy-warmup-modal-message"><span>代理 ${esc(item.proxy || '-')} · ${status}</span><span>${steps || esc(item.reason || '无详细步骤')}</span></span></div>`;
+  }).join('') || '<div class="job-log-empty">暂无预热记录</div>';
+}
+function openProxyWarmupLogModalLegacy(log = null) {
+  const panel = $('#proxyWarmupLogModalLegacy');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  updateModalScrollLock();
+  if (log) {
+    $('#proxyWarmupLogModalContentLegacy').innerHTML = renderProxyWarmupModalRowsLegacy(log);
+    $('#proxyWarmupLogMetaLegacy').textContent = log.status === 'running'
+      ? `实时检查 ${log.completed || 0}/${log.total || 0} · 健康 ${log.healthy_total ?? log.available ?? 0} · 失败 ${log.failed || 0}`
+      : `已检查全部 ${log.checked_total ?? log.total ?? 0} 个代理 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}`;
+    if (log.status === 'running' && log.task_id) {
+      activeProxyWarmupTaskLegacy = log.task_id;
+      clearInterval(proxyWarmupTimerLegacy);
+      proxyWarmupTimerLegacy = setInterval(() => pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy), 1000);
+    }
+  } else {
+    $('#proxyWarmupLogModalContentLegacy').textContent = '正在读取预热检查日志...';
+    loadProxyWarmupLogModalLegacy();
+  }
+}
+async function loadProxyWarmupLogModalLegacy() {
+  try {
+    const r = await api('/api/proxy/warmup/log');
+    openProxyWarmupLogModalLegacy(r.log || {});
+  } catch (e) {
+    $('#proxyWarmupLogModalContentLegacy').innerHTML = `<div class="job-log-empty" style="color:#f39aa3;">${esc(e.message)}</div>`;
+  }
 }
 async function loadProxyWarmupLogLegacy() {
   const panel = $('#proxyWarmupLogLegacy');
   if (!panel) return;
-  panel.hidden = false;
-  try {
-    const r = await api('/api/proxy/warmup/log');
-    panel.innerHTML = renderProxyWarmupLogLegacy(r.log || {});
-  } catch (e) { panel.innerHTML = `<span style="color:var(--red);">${esc(e.message)}</span>`; }
+  openProxyWarmupLogModalLegacy();
 }
 
 function renderCloudMailTokenTools() {
@@ -3654,6 +3752,10 @@ function renderConfigPanel() {
   if (warmupBtn) warmupBtn.addEventListener('click', warmupProxyPoolLegacy);
   const warmupLogBtn = $('#btnWarmupLogLegacy');
   if (warmupLogBtn) warmupLogBtn.addEventListener('click', loadProxyWarmupLogLegacy);
+  const warmupCancelBtn = $('#btnCancelWarmupProxyLegacy');
+  if (warmupCancelBtn) warmupCancelBtn.addEventListener('click', cancelProxyWarmupLegacy);
+  const warmupCloseBtn = $('#btnCloseProxyWarmupLogLegacy');
+  if (warmupCloseBtn) warmupCloseBtn.addEventListener('click', closeProxyWarmupLogModalLegacy);
   syncRegionProfileControl();
 }
 

@@ -202,8 +202,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel, #registrationTaskLogPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel, #registrationTaskLogPanel, #proxyWarmupLogModal { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden), #proxyWarmupLogModal:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -219,6 +219,20 @@
       width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
       max-height: none; padding: 0; border-color: #24324a; border-radius: 10px;
       background: #0b1220; color: #d7deea; display: flex; flex-direction: column;
+    }
+    #proxyWarmupLogModal:not(.hidden) {
+      width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
+      max-height: none; padding: 0; border-color: #24324a; border-radius: 10px;
+      background: #0b1220; color: #d7deea; display: flex; flex-direction: column;
+    }
+    #proxyWarmupLogModal .job-log-content { min-height: 0; max-height: none; flex: 1; margin: 0; padding: 12px 0 18px; border-radius: 0; background: #0b1220; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: normal; scrollbar-color: #36445e #0b1220; scrollbar-width: thin; }
+    #proxyWarmupLogModal .job-log-row { grid-template-columns: 82px 72px minmax(0, 1fr); }
+    #proxyWarmupLogModal .job-log-message { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+    #proxyWarmupLogModal .proxy-step { color: #9eabc0; }
+    #proxyWarmupLogModal .proxy-step.ok { color: #81deb0; }
+    #proxyWarmupLogModal .proxy-step.bad { color: #f39aa3; }
+    @media (max-width: 640px) {
+      #proxyWarmupLogModal:not(.hidden) { width: calc(100vw - 24px); height: calc(100vh - 24px); }
     }
     .job-log-head {
       min-height: 68px; padding: 14px 18px; box-sizing: border-box;
@@ -3299,6 +3313,18 @@ try {
   </div>
   <div class="job-log-content" id="logContent" role="log" aria-live="polite"><div class="job-log-empty">加载中...</div></div>
 </div>
+<div class="body hidden" id="proxyWarmupLogModal" role="dialog" aria-modal="true" aria-labelledby="proxyWarmupLogTitle">
+  <div class="job-log-head">
+    <div class="job-log-head-main">
+      <h3 class="job-log-title" id="proxyWarmupLogTitle"><span class="job-log-live-dot" aria-hidden="true"></span>代理池预热日志</h3>
+      <div class="job-log-meta" id="proxyWarmupLogMeta">正在读取预热检查日志...</div>
+    </div>
+    <button type="button" class="job-log-close" id="btnCloseProxyWarmupLog" title="关闭日志" aria-label="关闭日志">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="job-log-content" id="proxyWarmupLogModalContent" role="log" aria-live="polite"><div class="job-log-empty">加载中...</div></div>
+</div>
 <div class="body hidden" id="registrationTaskLogPanel" role="dialog" aria-modal="true" aria-labelledby="registrationTaskLogTitle">
   <div class="registration-task-log-head">
     <h3 id="registrationTaskLogTitle">注册任务日志</h3>
@@ -3357,7 +3383,7 @@ let CURRENT_REGISTRATION_BATCH = null;
 let REGISTRATION_BATCHES = [];
 let REGISTRATION_BATCH_WARNING = '';
 const JOB_SELECTED = new Set();
-let activeLogJob = null, logTimer = null, jobsTimer = null, durationTimer = null, registrationTaskLogTimer = null;
+let activeLogJob = null, logTimer = null, jobsTimer = null, durationTimer = null, registrationTaskLogTimer = null, proxyWarmupTimer = null, activeProxyWarmupTask = null;
 
 // ---------- 分页状态 ----------
 const PAGERS = {
@@ -3993,6 +4019,7 @@ async function refreshJobs() {
 let modalScrollY = 0;
 function updateModalScrollLock() {
   const opened = !$('#logPanel').classList.contains('hidden')
+    || !$('#proxyWarmupLogModal').classList.contains('hidden')
     || !$('#registrationTaskLogPanel').classList.contains('hidden')
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#liveLogPanel').classList.contains('hidden')
@@ -4013,6 +4040,13 @@ function updateModalScrollLock() {
     document.documentElement.style.overflow = '';
     window.scrollTo(0, modalScrollY || 0);
   }
+}
+function closeProxyWarmupLogModal() {
+  clearInterval(proxyWarmupTimer);
+  proxyWarmupTimer = null;
+  activeProxyWarmupTask = null;
+  $('#proxyWarmupLogModal').classList.add('hidden');
+  updateModalScrollLock();
 }
 function closeLogModal() {
   activeLogJob = null;
@@ -7691,6 +7725,7 @@ function renderProxyTestToolsV2() {
       <div class="action-cell">
         <button class="btn" type="button" id="btnTestProxyV2">测试当前代理</button>
         <button class="btn" type="button" id="btnWarmupProxyV2">代理池预热</button>
+        <button class="btn danger" type="button" id="btnCancelWarmupProxyV2" hidden>终止预热</button>
         <button class="btn" type="button" id="btnWarmupLogV2">预热日志</button>
       </div>
       <div id="proxyTestStatusV2" class="muted" style="font-size:12px;">尚未测试</div>
@@ -7711,6 +7746,11 @@ function bindProxyTestToolsV2() {
     warmupBtn.dataset.bound = '1';
     warmupBtn.addEventListener('click', () => warmupProxyPoolV2());
   }
+  const cancelBtn = $('#btnCancelWarmupProxyV2');
+  if (cancelBtn && !cancelBtn.dataset.bound) {
+    cancelBtn.dataset.bound = '1';
+    cancelBtn.addEventListener('click', () => cancelProxyWarmupV2());
+  }
   const logBtn = $('#btnWarmupLogV2');
   if (logBtn && !logBtn.dataset.bound) {
     logBtn.dataset.bound = '1';
@@ -7724,19 +7764,74 @@ function renderProxyWarmupLogV2(log) {
     const status = item.healthy ? '<b style="color:var(--green);">健康/干净</b>' : `<b style="color:var(--red);">${item.challenge_detected ? 'Cloudflare挑战' : '不健康'}</b>`;
     return `<div class="proxy-log-row"><div><b>#${index + 1}</b> · <span class="mono">${esc(item.proxy || '-')}</span> · ${status}</div><div class="proxy-log-steps">${steps || esc(item.reason || '无详细步骤')}</div></div>`;
   }).join('');
-  return `<div class="proxy-log-head"><b>预热检查过程</b><span>共 ${log.total || 0} 个唯一代理 · 健康 ${log.available || 0} · 失败 ${log.failed || 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
+  return `<div class="proxy-log-head"><b>预热检查过程（已检查全部代理）</b><span>已检查 ${log.checked_total ?? log.total ?? 0} 个 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
+}
+function renderProxyWarmupModalRows(log) {
+  const rows = (log.results || []).filter(Boolean).map((item, index) => {
+    const level = item.healthy ? 'INFO' : (item.challenge_detected ? 'WARN' : 'ERROR');
+    const levelClass = item.healthy ? '' : (item.challenge_detected ? 'job-log-level--warn' : 'job-log-level--error');
+    const steps = (item.steps || []).map(step => `<span class="proxy-step ${step.ok ? 'ok' : 'bad'}">${step.ok ? '✓' : '×'} ${esc(step.name)}${step.detail ? `：${esc(step.detail)}` : ''}</span>`).join('');
+    const status = item.healthy ? '健康/干净' : (item.challenge_detected ? 'Cloudflare挑战' : '不健康');
+    const message = `代理 ${item.proxy || '-'} · ${status}`;
+    return `<div class="job-log-row ${item.healthy ? '' : (item.challenge_detected ? 'job-log-row--warn' : 'job-log-row--error')}"><span class="job-log-time">#${index + 1}</span><span class="job-log-level ${levelClass}">${level}</span><span class="job-log-message"><span>${esc(message)}</span><span class="proxy-steps">${steps || esc(item.reason || '无详细步骤')}</span></span></div>`;
+  }).join('');
+  return rows || '<div class="job-log-empty">暂无预热记录</div>';
+}
+function openProxyWarmupLogModal(log = null) {
+  const panel = $('#proxyWarmupLogModal');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  updateModalScrollLock();
+  const content = $('#proxyWarmupLogModalContent');
+  if (content) content.innerHTML = log ? renderProxyWarmupModalRows(log) : '<div class="job-log-empty">正在读取预热检查日志...</div>';
+  const meta = $('#proxyWarmupLogMeta');
+  if (meta && log) meta.textContent = log.status === 'running'
+    ? `实时检查 ${log.completed || 0}/${log.total || 0} · 健康 ${log.healthy_total ?? log.available ?? 0} · 失败 ${log.failed || 0}`
+    : `已检查全部 ${log.checked_total ?? log.total ?? 0} 个代理 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}`;
+  if (log && log.status === 'running' && log.task_id) {
+    activeProxyWarmupTask = log.task_id;
+    clearInterval(proxyWarmupTimer);
+    proxyWarmupTimer = setInterval(() => pollProxyWarmupTask(activeProxyWarmupTask), 1000);
+  }
+  if (!log) loadProxyWarmupLogModal();
+}
+async function loadProxyWarmupLogModal() {
+  try {
+    const r = await api('/api/proxy/warmup/log');
+    openProxyWarmupLogModal(r.log || {});
+  } catch (e) {
+    const content = $('#proxyWarmupLogModalContent');
+    if (content) content.innerHTML = `<div class="job-log-empty" style="color:#f39aa3;">${esc(e.message)}</div>`;
+  }
+}
+async function pollProxyWarmupTask(taskId) {
+  try {
+    const r = await api(`/api/proxy/warmup/${encodeURIComponent(taskId)}`);
+    const task = r.task || {};
+    const content = $('#proxyWarmupLogModalContent');
+    const meta = $('#proxyWarmupLogMeta');
+    if (content) content.innerHTML = renderProxyWarmupModalRows(task);
+    if (meta) meta.textContent = `实时检查 ${task.completed || 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 失败 ${task.failed || 0}${task.status === 'completed' ? ' · 预热完成' : ''}`;
+    const cancelBtn = $('#btnCancelWarmupProxyV2');
+    if (cancelBtn) cancelBtn.hidden = !['running', 'cancelling'].includes(task.status);
+    if (task.status !== 'running' && task.status !== 'cancelling') { clearInterval(proxyWarmupTimer); proxyWarmupTimer = null; }
+  } catch (_) {}
+}
+async function cancelProxyWarmupV2() {
+  if (!activeProxyWarmupTask) return;
+  const btn = $('#btnCancelWarmupProxyV2');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/proxy/warmup/${encodeURIComponent(activeProxyWarmupTask)}/cancel`, {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    showToast('已发送终止预热信号');
+    await pollProxyWarmupTask(activeProxyWarmupTask);
+  } catch (e) { showToast('终止预热失败：' + e.message); }
+  finally { if (btn) btn.disabled = false; }
 }
 async function loadProxyWarmupLogV2() {
   const panel = $('#proxyWarmupLogV2');
   if (!panel) return;
-  panel.hidden = false;
-  panel.innerHTML = '正在读取预热日志...';
-  try {
-    const r = await api('/api/proxy/warmup/log');
-    panel.innerHTML = renderProxyWarmupLogV2(r.log || {});
-  } catch (e) {
-    panel.innerHTML = `<span style="color:var(--red);">${esc(e.message)}</span>`;
-  }
+  openProxyWarmupLogModal();
 }
 
 async function warmupProxyPoolV2() {
@@ -7747,15 +7842,19 @@ async function warmupProxyPoolV2() {
   status.innerHTML = '<span style="color:var(--muted);">正在预热代理池，请稍候...</span>';
   try {
     const r = await api('/api/proxy/warmup', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
-    const color = r.challenge_count || r.failed ? 'var(--red)' : 'var(--green)';
-    status.innerHTML = `<span style="color:${color};">${r.ok ? '✅ 预热完成' : '⚠️ 没有可用干净 IP'}</span> · 输入 ${r.input_count ?? r.total ?? 0} 行 · 去重后 ${r.total || 0} · 健康 ${r.available || 0} · 干净 ${r.clean || 0} · 失败 ${r.failed || 0} · Cloudflare挑战 ${r.challenge_count || 0}${r.duplicate_count ? ` · 重复 ${r.duplicate_count} 行` : ''}${r.auto_delete ? ` · 自动删除 ${r.removed || 0}` : ''}`;
-    const logPanel = $('#proxyWarmupLogV2');
-    if (logPanel) { logPanel.hidden = false; logPanel.innerHTML = renderProxyWarmupLogV2(r); }
-    showToast(r.ok ? '代理池预热完成' : '代理池没有可用干净 IP');
+    activeProxyWarmupTask = r.task_id;
+    const cancelBtn = $('#btnCancelWarmupProxyV2');
+    if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.disabled = false; }
+    openProxyWarmupLogModal();
+    await pollProxyWarmupTask(activeProxyWarmupTask);
+    clearInterval(proxyWarmupTimer);
+    proxyWarmupTimer = setInterval(() => pollProxyWarmupTask(activeProxyWarmupTask), 1000);
+    showToast('预热任务已启动');
   } catch (e) {
     status.innerHTML = `<span style="color:var(--red);">预热失败：${esc(e.message)}</span>`;
   } finally { btn.disabled = false; }
 }
+$('#btnCloseProxyWarmupLog').addEventListener('click', closeProxyWarmupLogModal);
 
 async function testCurrentProxyV2() {
   const btn = $('#btnTestProxyV2');

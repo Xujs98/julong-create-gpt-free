@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import unittest
+import threading
 from unittest.mock import MagicMock, patch
 
 from core.cloakbrowser_driver import _normalize_proxy as normalize_cloak_proxy
@@ -34,8 +35,13 @@ class ProxyTestTests(unittest.TestCase):
             target_clean=1,
             max_workers=1,
         )
+        self.assertEqual(health.call_count, 3)
+        self.assertTrue(result["checked_all"])
+        self.assertEqual(result["checked_total"], 3)
         self.assertEqual(result["available"], 2)
+        self.assertEqual(result["healthy_total"], 2)
         self.assertEqual(result["clean"], 1)
+        self.assertEqual(result["selected_clean_count"], 1)
         self.assertEqual(len(result["healthy_proxy_urls"]), 2)
         self.assertEqual(len(result["unhealthy_proxy_urls"]), 1)
 
@@ -50,6 +56,14 @@ class ProxyTestTests(unittest.TestCase):
             preferred="http://preferred.test:1",
         )
         self.assertEqual(result["proxy_url"], "http://other.test:2")
+
+    @patch("core.proxy_test.test_proxy_health")
+    def test_warmup_can_be_cancelled_before_all_results_finish(self, health):
+        cancel = threading.Event()
+        cancel.set()
+        health.return_value = {"healthy": True, "proxy": "http://a.test:1"}
+        with self.assertRaises(ProxyTestError):
+            warmup_proxy_pool(["http://a.test:1", "http://b.test:2"], cancel_event=cancel, max_workers=1)
     def test_cloak_uses_remote_dns_for_explicit_socks5(self):
         self.assertEqual(
             normalize_cloak_proxy("socks5://user:pass@proxy.example:3000"),

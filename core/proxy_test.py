@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
 import re
 import threading
+from typing import Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from curl_cffi.requests import Session
@@ -285,6 +286,8 @@ def warmup_proxy_pool(
     timeout: float | None = None,
     health_url: str | None = None,
     max_workers: int = 4,
+    progress_callback: Callable[[dict], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
     """并发预热代理池，返回干净出口和挑战/连接失败明细。"""
     raw_values = [str(item or "").strip() for item in (proxy_urls or [])]
@@ -299,12 +302,20 @@ def warmup_proxy_pool(
         raise ProxyTestError("代理池为空，请先配置至少一个代理")
     workers = max(1, min(int(max_workers or 4), len(proxies), 16))
     results: list[dict | None] = [None] * len(proxies)
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="proxy-warmup") as executor:
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="proxy-warmup")
+    cancelled = False
+    try:
         futures = {
             executor.submit(test_proxy_health, proxy, timeout, health_url=health_url): (index, proxy)
             for index, proxy in enumerate(proxies)
         }
         for future in as_completed(futures):
+            if cancel_event and cancel_event.is_set():
+                cancelled = True
+                for pending in futures:
+                    if pending is not future:
+                        pending.cancel()
+                break
             index, proxy = futures[future]
             try:
                 results[index] = future.result()
@@ -317,6 +328,25 @@ def warmup_proxy_pool(
                     "challenge_detected": False,
                     "steps": [{"name": "代理检查", "ok": False, "detail": "连接或挑战检查失败"}],
                 }
+            if progress_callback and not (cancel_event and cancel_event.is_set()):
+                try:
+                    progress_callback({
+                        "index": index,
+                        "completed": sum(1 for item in results if isinstance(item, dict)),
+                        "total": len(proxies),
+                        "result": results[index],
+                    })
+                except Exception:
+                    # 日志回调属于旁路能力，不能影响代理检查本身。
+                    pass
+    finally:
+        if cancel_event and cancel_event.is_set():
+            cancelled = True
+        executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
+    if cancelled:
+        raise ProxyTestError("预热已终止")
+    # 所有唯一代理都已提交检查并等待完成；目标数量只用于从完整结果中
+    # 选择干净出口，不会提前停止检查。
     healthy_indexes_all = [i for i, result in enumerate(results) if isinstance(result, dict) and result.get("healthy")]
     healthy_indexes = list(healthy_indexes_all)
     target = int(target_clean or 0)
@@ -326,11 +356,15 @@ def warmup_proxy_pool(
     failures = [result for result in results if isinstance(result, dict) and not result.get("healthy")]
     return {
         "ok": bool(clean_proxy_urls),
+        "checked_all": True,
+        "checked_total": len(proxies),
         "input_count": input_count,
         "duplicate_count": max(0, input_count - len(proxies)),
         "total": len(proxies),
         "available": len(healthy_indexes_all),
+        "healthy_total": len(healthy_indexes_all),
         "clean": len(clean_proxy_urls),
+        "selected_clean_count": len(clean_proxy_urls),
         "failed": len(failures),
         "target_clean": target,
         "results": [result for result in results if isinstance(result, dict)],

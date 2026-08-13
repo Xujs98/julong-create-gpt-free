@@ -2869,7 +2869,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/proxy/warmup")
     def api_proxy_warmup():
-        """并发预热代理池，识别出口健康度和 Cloudflare 挑战页。"""
+        """启动后台预热任务；每个代理完成后可通过状态接口读取实时结果。"""
         try:
             from config import proxy as _proxy_cfg
             from core.proxy_test import ProxyTestError, persist_proxy_pool, warmup_proxy_pool
@@ -2880,35 +2880,79 @@ def create_app(auth_code: str | None = None) -> Flask:
             timeout = data.get("timeout", getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0))
             workers = data.get("workers", getattr(_proxy_cfg, "PROXY_WARMUP_WORKERS", 4))
             health_url = str(data.get("health_url") or getattr(_proxy_cfg, "PROXY_WARMUP_HEALTH_URL", "")).strip()
-            result = warmup_proxy_pool(
-                pool,
-                target_clean=max(0, int(target or 0)),
-                timeout=float(timeout or 12.0),
-                health_url=health_url,
-                max_workers=max(1, int(workers or 4)),
-            )
-            removed = 0
-            if bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)):
-                unhealthy = set(result.get("unhealthy_proxy_urls") or [])
-                retained = [proxy for proxy in pool if proxy not in unhealthy]
-                if unhealthy:
-                    persist_proxy_pool(retained)
-                    removed = len(unhealthy)
-            challenge_count = sum(1 for item in result.get("failures", []) if item.get("challenge_detected"))
-            result.update({
-                "removed": removed,
-                "challenge_count": challenge_count,
-                "retained": len(pool) - removed,
-                "auto_delete": bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)),
-            })
-            # 原始代理 URL 仅用于后端持久化，API 只返回脱敏结果。
-            result.pop("clean_proxy_urls", None)
-            result.pop("healthy_proxy_urls", None)
-            result.pop("unhealthy_proxy_urls", None)
-            app.config["LAST_PROXY_WARMUP_LOG"] = result
-            # 预热本身已完成时即返回统计，即使当前没有达到目标干净 IP 数量，
-            # 前端仍需展示输入/健康/挑战/失败数量，而不是只显示 HTTP 错误。
-            return jsonify(result), 200
+            task_id = uuid.uuid4().hex
+            state = {
+                "task_id": task_id, "status": "running", "started_at": time.time(),
+                "input_count": sum(1 for item in pool if str(item or "").strip()),
+                "total": len({str(item or "").strip() for item in pool if str(item or "").strip()}),
+                "completed": 0, "results": [], "error": "",
+            }
+            tasks = app.config.setdefault("PROXY_WARMUP_TASKS", {})
+            cancel_events = app.config.setdefault("PROXY_WARMUP_CANCEL_EVENTS", {})
+            # 仅保留最近任务，避免长期运行的 WebUI 累积完整预热明细。
+            for old_id, old_state in list(tasks.items()):
+                if old_id != task_id and old_state.get("status") != "running":
+                    tasks.pop(old_id, None)
+            tasks[task_id] = state
+            cancel_events[task_id] = threading.Event()
+            app.config["LAST_PROXY_WARMUP_LOG"] = state
+
+            def _run_warmup():
+                def _progress(event):
+                    result_item = dict(event.get("result") or {})
+                    result_item.pop("proxy_url", None)
+                    state["completed"] = int(event.get("completed") or 0)
+                    rows = list(state.get("results") or [])
+                    index = int(event.get("index") or 0)
+                    while len(rows) <= index:
+                        rows.append(None)
+                    rows[index] = result_item
+                    state["results"] = rows
+                    completed_rows = [item for item in rows if isinstance(item, dict)]
+                    state["healthy_total"] = sum(1 for item in completed_rows if item.get("healthy"))
+                    state["available"] = state["healthy_total"]
+                    state["failed"] = sum(1 for item in completed_rows if not item.get("healthy"))
+                    state["challenge_count"] = sum(1 for item in completed_rows if item.get("challenge_detected"))
+                    app.config["LAST_PROXY_WARMUP_LOG"] = state
+
+                try:
+                    result = warmup_proxy_pool(
+                        pool,
+                        target_clean=max(0, int(target or 0)),
+                        timeout=float(timeout or 12.0),
+                        health_url=health_url,
+                        max_workers=max(1, int(workers or 4)),
+                        progress_callback=_progress,
+                        cancel_event=cancel_events[task_id],
+                    )
+                    removed = 0
+                    auto_delete = bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False))
+                    if auto_delete:
+                        unhealthy = set(result.get("unhealthy_proxy_urls") or [])
+                        retained = [proxy for proxy in pool if proxy not in unhealthy]
+                        if unhealthy:
+                            persist_proxy_pool(retained)
+                            removed = len(unhealthy)
+                    challenge_count = sum(1 for item in result.get("failures", []) if item.get("challenge_detected"))
+                    state.update({
+                        "status": "completed", "ok": bool(result.get("ok")),
+                        "checked_all": True, "checked_total": result.get("checked_total", result.get("total", 0)),
+                        "healthy_total": result.get("healthy_total", result.get("available", 0)),
+                        "selected_clean_count": result.get("selected_clean_count", result.get("clean", 0)),
+                        "available": result.get("available", 0), "clean": result.get("clean", 0),
+                        "failed": result.get("failed", 0), "target_clean": result.get("target_clean", 0),
+                        "duplicate_count": result.get("duplicate_count", 0), "challenge_count": challenge_count,
+                        "removed": removed, "retained": len(pool) - removed, "auto_delete": auto_delete,
+                        "results": [item for item in result.get("results", []) if isinstance(item, dict)],
+                        "completed_at": time.time(),
+                    })
+                except Exception as exc:
+                    cancelled = cancel_events.get(task_id) and cancel_events[task_id].is_set()
+                    state.update({"status": "cancelled" if cancelled else "failed", "ok": False, "error": str(exc), "completed_at": time.time()})
+                app.config["LAST_PROXY_WARMUP_LOG"] = state
+
+            threading.Thread(target=_run_warmup, name=f"proxy-warmup-{task_id[:8]}", daemon=True).start()
+            return jsonify({"ok": True, "task_id": task_id, "status": "running", "total": state["total"]}), 202
         except Exception as exc:
             logger.warning("代理池预热失败：%s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -2920,6 +2964,27 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not result:
             return jsonify({"ok": False, "error": "暂无预热日志"}), 404
         return jsonify({"ok": True, "log": result})
+
+    @app.get("/api/proxy/warmup/<task_id>")
+    def api_proxy_warmup_status(task_id):
+        state = (app.config.get("PROXY_WARMUP_TASKS") or {}).get(str(task_id))
+        if not state:
+            return jsonify({"ok": False, "error": "预热任务不存在"}), 404
+        return jsonify({"ok": True, "task": state})
+
+    @app.post("/api/proxy/warmup/<task_id>/cancel")
+    def api_proxy_warmup_cancel(task_id):
+        task_id = str(task_id)
+        state = (app.config.get("PROXY_WARMUP_TASKS") or {}).get(task_id)
+        event = (app.config.get("PROXY_WARMUP_CANCEL_EVENTS") or {}).get(task_id)
+        if not state or not event:
+            return jsonify({"ok": False, "error": "预热任务不存在"}), 404
+        if state.get("status") != "running":
+            return jsonify({"ok": True, "task": state, "message": "预热任务已结束"})
+        event.set()
+        state["status"] = "cancelling"
+        state["message"] = "正在终止预热，等待当前请求结束"
+        return jsonify({"ok": True, "task": state, "message": "已发送终止预热信号"})
 
     @app.post("/api/agent/test")
     def api_agent_test():
