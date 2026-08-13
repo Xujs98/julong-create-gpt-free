@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""OAICS checkout session detector."""
+"""OAICS 结账会话检测器。"""
 from __future__ import annotations
 
 import re
@@ -26,7 +26,7 @@ def _walk_values(value: Any, *, depth: int = 0) -> Iterable[Any]:
 
 
 def extract_checkout_session_id(payload: Any) -> str:
-    """Extract an OAICS/Stripe checkout id from common fields or nested URLs."""
+    """从常见字段或嵌套 URL 中提取 OAICS/Stripe 结账会话 ID。"""
     if not isinstance(payload, dict):
         raise ValueError("checkout response must be a JSON object")
     candidates = [
@@ -46,6 +46,7 @@ def extract_checkout_session_id(payload: Any) -> str:
 
 
 def detect_oaics_checkout(payload: Any, *, billing_country: str = "") -> dict[str, Any]:
+    """根据结账会话前缀判断账号是否具备 OAICS 资格。"""
     session_id = extract_checkout_session_id(payload)
     is_oaics = session_id.startswith("oaics_")
     processor = str(payload.get("processor_entity") or "").strip()

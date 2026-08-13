@@ -235,7 +235,7 @@ def check_oaics_eligibility(
     promo_campaign_id: str | None = None,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
-    """Create a checkout session and classify its OAICS/Stripe session prefix."""
+    """创建结账会话，并根据 OAICS/Stripe 会话前缀记录资格。"""
     checked_at = now_iso()
     payload = {
         "plan_name": "chatgptplusplan",
