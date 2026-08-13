@@ -17,3 +17,13 @@ def test_account_email_is_a_copyable_text_button():
     assert 'class="acc-v2-email-copy"' in template
     assert 'data-account-copy-email="${esc(r.email)}"' in template
     assert "showToast('邮箱已复制')" in template
+
+
+def test_failed_twofa_state_retries_after_confirmation():
+    root = Path(__file__).parents[1]
+    for template in (root / "webui" / "templates" / "index.html", root / "webui" / "templates" / "index_legacy.html"):
+        source = template.read_text(encoding="utf-8")
+        assert 'data-account-setup-twofa="${esc(r.id)}"' in source
+        assert "retryAccountTwofa" in source
+        assert "await appConfirm(" in source
+        assert "/setup-2fa" in source

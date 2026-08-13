@@ -1316,6 +1316,110 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
         return True
 
 
+def claim_account_twofa_setup(acc_id: int, trigger: str = "manual") -> bool:
+    """原子占用账号 2FA 重设任务。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        current = str(row.get("twofa_status") or "").lower()
+        if current in {"queued", "running"}:
+            try:
+                stamp_key = "twofa_queued_at" if current == "queued" else "twofa_started_at"
+                stale_after = _PLAN_CHECK_QUEUE_STALE_SECONDS if current == "queued" else _PLAN_CHECK_STALE_SECONDS
+                started_at = datetime.fromisoformat(str(row.get(stamp_key) or ""))
+                if (datetime.now() - started_at).total_seconds() < stale_after:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        now = _now()
+        row["twofa_requested"] = True
+        row["twofa_status"] = "queued"
+        row["twofa_ok"] = False
+        row["twofa_trigger"] = str(trigger or "manual")
+        row["twofa_queued_at"] = now
+        row["twofa_started_at"] = None
+        row["twofa_completed_at"] = None
+        row["twofa_error"] = None
+        row["updated_at"] = now
+        _save_accounts(rows)
+        return True
+
+
+def mark_account_twofa_setup_running(acc_id: int) -> bool:
+    """把已入队的 2FA 重设任务标为运行中。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None or str(row.get("twofa_status") or "").lower() not in {"queued", "running"}:
+            return False
+        row["twofa_status"] = "running"
+        row["twofa_started_at"] = _now()
+        row["twofa_error"] = None
+        row["updated_at"] = _now()
+        _save_accounts(rows)
+        return True
+
+
+def update_account_twofa_setup(acc_id: int, result: dict | None = None) -> bool:
+    """写回 2FA 重设结果，并在成功时同步账号和邮箱池的 TOTP secret。"""
+    result = result or {}
+    with _LOCK:
+        rows = _load_accounts()
+        outlook_rows = _load_outlook()
+        icloud_rows = _load_icloud_emails()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        now = _now()
+        ok = bool(result.get("ok"))
+        row["twofa_requested"] = True
+        row["twofa_status"] = "success" if ok else "failed"
+        row["twofa_ok"] = ok
+        row["twofa_completed_at"] = now
+        row["twofa_error"] = None if ok else str(result.get("error") or "2FA 设置失败")[:500]
+        row["twofa_trigger"] = result.get("trigger") or row.get("twofa_trigger")
+        if ok:
+            secret = str(result.get("totp_secret") or "").replace(" ", "").strip()
+            if not secret:
+                row["twofa_status"] = "failed"
+                row["twofa_ok"] = False
+                row["twofa_error"] = "2FA 设置未返回 TOTP secret"
+            else:
+                row["totp_secret"] = secret
+                email = str(row.get("email") or "").strip().lower()
+                for pool_row in (*outlook_rows, *icloud_rows):
+                    if str(pool_row.get("email") or "").strip().lower() == email:
+                        pool_row["totp_secret"] = secret
+        row["copy_line"] = _account_line(row)
+        row["updated_at"] = now
+        _save_accounts(rows)
+        _save_outlook(outlook_rows)
+        _save_icloud_emails(icloud_rows)
+        return True
+
+
+def recover_interrupted_twofa_setups() -> int:
+    """启动时恢复遗留的 2FA 重设排队/运行状态。"""
+    with _LOCK:
+        rows = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in rows:
+            if str(row.get("twofa_status") or "").lower() not in {"queued", "running"}:
+                continue
+            row["twofa_status"] = "failed"
+            row["twofa_ok"] = False
+            row["twofa_error"] = "WebUI 重启导致 2FA 重设中断，请重新设置"
+            row["twofa_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(rows)
+        return recovered
+
+
 def claim_account_codex_agent(acc_id: int, trigger: str = "manual") -> bool:
     """原子占用账号 Codex Agent Token 生成任务；已有未超时任务时返回 False。"""
     with _LOCK:
@@ -1899,6 +2003,7 @@ def list_account_plan_check_statuses(
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_checked_at",
         "oaics_session_kind", "oaics_processor_entity",
+        "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -1944,7 +2049,7 @@ def list_account_plan_check_statuses(
                     continue
                 # 查活/套餐状态需要把 null 一并传给前端，用于清除上一轮失败原因和时间；
                 # 否则轻量轮询 Object.assign 会把旧 plan_check_error 永久留在表格里。
-                if key.startswith(("live_check_", "plan_check_")) or (value is not None and value != ""):
+                if key.startswith(("live_check_", "plan_check_", "twofa_")) or (value is not None and value != ""):
                     item[key] = value
             plan = str(row.get("current_plan_type") or row.get("plan_type") or "").lower()
             if not any(x in plan for x in ("plus", "pro", "team", "go")):
@@ -1976,6 +2081,12 @@ def list_account_plan_check_statuses(
                     "oaics_check_status": row.get("oaics_check_status"),
                     "oaics_check_error": row.get("oaics_check_error"),
                     "oaics_checked_at": row.get("oaics_checked_at"),
+                    "twofa_status": row.get("twofa_status"),
+                    "twofa_error": row.get("twofa_error"),
+                    "twofa_queued_at": row.get("twofa_queued_at"),
+                    "twofa_started_at": row.get("twofa_started_at"),
+                    "twofa_completed_at": row.get("twofa_completed_at"),
+                    "twofa_trigger": row.get("twofa_trigger"),
                     # 悬浮卡详情也纳入轻量轮询签名，避免同秒完成查询时沿用旧详情。
                     "subscription_plan": row.get("subscription_plan"),
                     "has_active_subscription": row.get("has_active_subscription"),

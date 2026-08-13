@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, make_response, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service
+from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, twofa_setup_service
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -231,7 +231,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "discount_amount", "discount_type", "discount_duration_num_periods",
         "discount_expires_at", "discount_cancellation_policy", "discount_promo_campaign_id",
         "token_expired", "token_expires_at",
-        "twofa_error",
+        "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
         "icloud_code_url_available",
@@ -393,6 +393,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_live_checks = db.recover_interrupted_live_checks()
     if recovered_live_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
+    recovered_twofa_setups = db.recover_interrupted_twofa_setups()
+    if recovered_twofa_setups:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的 2FA 重设状态", recovered_twofa_setups)
     recovered_codex_agents = db.recover_interrupted_codex_agents()
     if recovered_codex_agents:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
@@ -586,6 +589,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 group_filter=group_filter,
             )
         snapshot["queue"] = plan_check_service.queue_settings()
+        snapshot["twofa_queue"] = twofa_setup_service.queue_settings()
         return jsonify(snapshot)
 
 
@@ -1058,6 +1062,82 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
             "skipped_count": len(skipped),
         }), 202
+
+    @app.post("/api/accounts/check-oaics-bulk")
+    def api_accounts_check_oaics_bulk():
+        """批量入队 OAICS 检测；复用套餐查询的账号/会话上下文。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多查询 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+        timezone_offset_min = str(data.get("timezone_offset_min") or "-")
+        started, busy, failed, skipped = [], [], [], []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            token = str(acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            queued = plan_check_service.enqueue_account_plan_check(
+                account_id=acc_id,
+                email=str(acc.get("email") or ""),
+                access_token=token,
+                trigger="oaics_manual_bulk",
+                proxy=proxy,
+                timezone_offset_min=timezone_offset_min,
+            )
+            item = {"id": acc_id, "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started, "started_count": len(started),
+            "busy": busy, "busy_count": len(busy),
+            "failed": failed, "failed_count": len(failed),
+            "skipped": skipped, "skipped_count": len(skipped),
+        }), 202
+
+    @app.post("/api/accounts/<int:acc_id>/setup-2fa")
+    def api_account_setup_twofa(acc_id: int):
+        """把单账号 2FA 重设任务加入后台队列。"""
+        data = request.get_json(silent=True) or {}
+        acc = db.get_account(acc_id)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if str(acc.get("totp_secret") or "").strip():
+            return jsonify({"ok": False, "error": "该账号已设置 2FA，无需重新设置"}), 400
+        if not str(acc.get("registration_password") or "").strip():
+            return jsonify({"ok": False, "error": "该账号未保存注册密码，无法自动重新设置 2FA"}), 400
+        queued = twofa_setup_service.enqueue_account_twofa_setup(
+            account_id=acc_id,
+            email=str(acc.get("email") or ""),
+            trigger="manual_retry",
+            proxy=data.get("proxy") if "proxy" in data else None,
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
 
     @app.get("/api/extract-link/cdk")
     def api_extract_link_cdk():

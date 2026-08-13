@@ -1224,11 +1224,11 @@ def save_account_data(
             trigger="registration_auto",
         )
         if queued.get("accepted"):
-            logger.info(f"[Plan] 注册后自动查询已入队: id={row_id}, email={email}")
+            logger.info(f"[Plan] 注册后自动查询套餐及 OAICS 已入队: id={row_id}, email={email}")
         elif queued.get("busy"):
-            logger.info(f"[Plan] 账号已有套餐查询，注册流程不重复入队: id={row_id}, email={email}")
+            logger.info(f"[Plan] 账号已有套餐/OAICS 查询，注册流程不重复入队: id={row_id}, email={email}")
         else:
-            logger.warning(f"[Plan] 注册后自动查询入队失败（不影响注册结果）: {email}, {queued.get('error')}")
+            logger.warning(f"[Plan] 注册后自动查询套餐/OAICS 入队失败（不影响注册结果）: {email}, {queued.get('error')}")
     except Exception as exc:
         logger.warning(
             f"[Plan] 注册后自动查询入队异常（不影响注册结果）: "

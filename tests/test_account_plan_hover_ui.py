@@ -70,3 +70,20 @@ def test_plan_cell_displays_oaics_badge(template):
     source = template.read_text(encoding="utf-8")
     assert "[oaics]" in source
     assert "r.oaics_eligible === true" in source
+
+
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_oaics_result_is_rendered_below_eligible_free_plan(template):
+    source = template.read_text(encoding="utf-8")
+    assert "function _oaicsResultCell(r)" in source
+    assert "OAICS：有资格 [oaics]" in source
+    assert "OAICS：无资格" in source
+    assert "${_oaicsResultCell(r)}" in source
+
+
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_oaics_bulk_control_uses_dedicated_endpoint(template):
+    source = template.read_text(encoding="utf-8")
+    assert "checkSelectedOaics" in source
+    assert "/api/accounts/check-oaics-bulk" in source
+    assert "查询OAICS" in source
