@@ -6,9 +6,12 @@ from unittest.mock import MagicMock, patch
 from core.cloakbrowser_driver import _normalize_proxy as normalize_cloak_proxy
 from core.proxy_test import (
     ProxyTestError,
+    _anonymity_assessment,
     _challenge_evidence,
+    _reputation_assessment,
     choose_healthy_proxy,
     test_proxy as run_proxy_test,
+    test_proxy_health as run_proxy_health_test,
     test_proxy_pool as run_proxy_pool_test,
     warmup_proxy_pool,
 )
@@ -22,6 +25,88 @@ class ProxyTestTests(unittest.TestCase):
         detected, markers = _challenge_evidence(response)
         self.assertTrue(detected)
         self.assertIn("just a moment", markers)
+
+    def test_reputation_assessment_rejects_proxy_vpn_hosting_and_abuse_signals(self):
+        result = _reputation_assessment({
+            "is_proxy": True,
+            "is_vpn": True,
+            "is_datacenter": True,
+            "is_abuser": True,
+        })
+
+        self.assertFalse(result["clean"])
+        self.assertIn("is_proxy", result["network_risk"])
+        self.assertIn("is_vpn", result["network_risk"])
+        self.assertIn("is_datacenter", result["network_risk"])
+        self.assertIn("is_abuser", result["high_risk"])
+        self.assertGreaterEqual(result["penalty"], 59)
+
+    def test_anonymity_assessment_detects_forwarded_header_and_exit_mismatch(self):
+        result = _anonymity_assessment({
+            "origin": "198.51.100.8",
+            "headers": {"X-Forwarded-For": "192.0.2.10", "Via": "proxy"},
+        }, "203.0.113.9")
+
+        self.assertFalse(result["anonymous"])
+        self.assertTrue(result["origin_verified"])
+        self.assertFalse(result["exit_consistent"])
+        self.assertEqual(result["leak_headers"], ["via", "x-forwarded-for"])
+
+    def test_anonymity_assessment_requires_echoed_origin_ip(self):
+        result = _anonymity_assessment({"headers": {}}, "203.0.113.9")
+
+        self.assertFalse(result["origin_verified"])
+        self.assertFalse(result["exit_consistent"])
+        self.assertFalse(result["anonymous"])
+
+    @patch("core.proxy_test.Session")
+    @patch("core.proxy_test._request_json")
+    @patch("core.proxy_test.test_proxy")
+    def test_multidimensional_health_rejects_dirty_reputation_without_challenge(self, geo, request_json, session_class):
+        geo.return_value = {"ip": "203.0.113.9", "country": "US", "country_code": "US"}
+        request_json.side_effect = [
+            ({"is_proxy": True, "is_vpn": False, "is_datacenter": True, "is_tor": False, "is_abuser": False}, 0.1),
+            ({"origin": "203.0.113.9", "headers": {}}, 0.1),
+        ]
+        response = MagicMock(status_code=200, text="<html><title>Login</title></html>", headers={}, url="https://service.test/login")
+        session_class.return_value.get.return_value = response
+
+        result = run_proxy_health_test(
+            "http://proxy.test:8080",
+            health_url="https://service.test/login",
+            reputation_url="https://reputation.test/{ip}",
+            anonymity_url="https://echo.test/get",
+        )
+
+        self.assertFalse(result["healthy"])
+        self.assertFalse(result["challenge_detected"])
+        self.assertTrue(result["removable"])
+        self.assertIn("ip_reputation_risk", result["reason"])
+        self.assertLess(result["clean_score"], result["clean_threshold"])
+
+    @patch("core.proxy_test.Session")
+    @patch("core.proxy_test._request_json")
+    @patch("core.proxy_test.test_proxy")
+    def test_multidimensional_health_accepts_clean_reputation_and_anonymity(self, geo, request_json, session_class):
+        geo.return_value = {"ip": "203.0.113.9", "country": "US", "country_code": "US"}
+        request_json.side_effect = [
+            ({"is_proxy": False, "is_vpn": False, "is_datacenter": False, "is_tor": False, "is_abuser": False}, 0.1),
+            ({"origin": "203.0.113.9", "headers": {}}, 0.1),
+        ]
+        response = MagicMock(status_code=200, text="<html><title>Login</title></html>", headers={}, url="https://service.test/login")
+        session_class.return_value.get.return_value = response
+
+        result = run_proxy_health_test(
+            "http://proxy.test:8080",
+            health_url="https://service.test/login",
+            reputation_url="https://reputation.test/{ip}",
+            anonymity_url="https://echo.test/get",
+        )
+
+        self.assertTrue(result["healthy"])
+        self.assertTrue(result["verification_complete"])
+        self.assertFalse(result["removable"])
+        self.assertEqual(result["clean_score"], 100)
 
     @patch("core.proxy_test.test_proxy_health")
     def test_warmup_reports_all_healthy_and_target_clean(self, health):
@@ -64,6 +149,24 @@ class ProxyTestTests(unittest.TestCase):
         health.return_value = {"healthy": True, "proxy": "http://a.test:1"}
         with self.assertRaises(ProxyTestError):
             warmup_proxy_pool(["http://a.test:1", "http://b.test:2"], cancel_event=cancel, max_workers=1)
+
+    @patch("core.proxy_test.test_proxy_health")
+    def test_warmup_only_marks_definitive_dirty_results_for_deletion(self, health):
+        health.side_effect = [
+            {"healthy": True, "removable": False, "proxy": "http://clean.test:1"},
+            {"healthy": False, "removable": True, "proxy": "http://dirty.test:2"},
+            {"healthy": False, "removable": False, "inconclusive": True, "proxy": "http://retry.test:3"},
+        ]
+
+        result = warmup_proxy_pool(
+            ["http://clean.test:1", "http://dirty.test:2", "http://retry.test:3"],
+            max_workers=1,
+        )
+
+        self.assertEqual(result["dirty"], 1)
+        self.assertEqual(result["inconclusive"], 1)
+        self.assertEqual(result["unhealthy_proxy_urls"], ["http://dirty.test:2"])
+        self.assertEqual(result["inconclusive_proxy_urls"], ["http://retry.test:3"])
     def test_cloak_uses_remote_dns_for_explicit_socks5(self):
         self.assertEqual(
             normalize_cloak_proxy("socks5://user:pass@proxy.example:3000"),

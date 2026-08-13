@@ -16,6 +16,8 @@ def test_proxy_warmup_terminal_state_refreshes_cleaned_pool(template):
     source = template.read_text(encoding="utf-8")
 
     assert "预热完成</span> · 已检查" in source
+    assert "脏IP ${task.dirty || 0}" in source
+    assert "待复检 ${task.inconclusive || 0}" in source
     assert "自动删除 ${task.removed || 0}" in source
     assert "delete CONFIG_PENDING_UPDATES.PROXY_POOL" in source
     assert "await loadConfig()" in source

@@ -22,14 +22,18 @@ PROXY_POOL = [
 # 开启后，每次创建注册批次前检查代理池全部出口；失败项自动删除，至少一项可用即继续。
 PROXY_CHECK_BEFORE_REGISTRATION = False
 
-# 代理池预热/注册健康检查：通过代理访问注册入口并识别 Cloudflare 挑战页。
-# 预热按钮会按此数量保留干净出口；目标大于实际健康数量时保留全部健康项。
+# 代理池预热/注册健康检查：综合出口稳定性、IP 信誉、匿名性、注册入口可达性和挑战页判定。
+# 预热按钮会按此数量保留通过全部检查的干净出口；目标大于实际干净数量时保留全部通过项。
 PROXY_WARMUP_TARGET_CLEAN_IPS = 3
 PROXY_WARMUP_HEALTH_URL = "https://chatgpt.com/auth/login"
+PROXY_WARMUP_REPUTATION_URL = "https://us.ipapi.is/?q={ip}"
+PROXY_WARMUP_ANONYMITY_URL = "https://echo.free.beeceptor.com,https://httpbin.io/get"
+PROXY_WARMUP_MIN_CLEAN_SCORE = 80
+PROXY_WARMUP_MAX_LATENCY = 8.0
 PROXY_WARMUP_TIMEOUT = 12.0
 PROXY_WARMUP_WORKERS = 4
 
-# 开启后每个注册任务开始前选择一个未出现 Cloudflare 挑战的健康出口。
+# 开启后每个注册任务开始前选择一个通过多维干净度检查的健康出口。
 PROXY_HEALTH_CHECK_BEFORE_REGISTRATION = False
 # 开启后健康检查/预热判定不健康的代理会从代理池配置中自动删除。
 PROXY_DELETE_UNHEALTHY_IPS = False
@@ -76,6 +80,10 @@ apply_env_overrides(globals(), {
     'PROXY_CHECK_BEFORE_REGISTRATION': 'bool',
     'PROXY_WARMUP_TARGET_CLEAN_IPS': 'int',
     'PROXY_WARMUP_HEALTH_URL': 'str',
+    'PROXY_WARMUP_REPUTATION_URL': 'str',
+    'PROXY_WARMUP_ANONYMITY_URL': 'str',
+    'PROXY_WARMUP_MIN_CLEAN_SCORE': 'int',
+    'PROXY_WARMUP_MAX_LATENCY': 'float',
     'PROXY_WARMUP_TIMEOUT': 'float',
     'PROXY_WARMUP_WORKERS': 'int',
     'PROXY_HEALTH_CHECK_BEFORE_REGISTRATION': 'bool',

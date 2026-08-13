@@ -2880,6 +2880,10 @@ def create_app(auth_code: str | None = None) -> Flask:
             timeout = data.get("timeout", getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0))
             workers = data.get("workers", getattr(_proxy_cfg, "PROXY_WARMUP_WORKERS", 4))
             health_url = str(data.get("health_url") or getattr(_proxy_cfg, "PROXY_WARMUP_HEALTH_URL", "")).strip()
+            reputation_url = str(data.get("reputation_url") or getattr(_proxy_cfg, "PROXY_WARMUP_REPUTATION_URL", "")).strip()
+            anonymity_url = str(data.get("anonymity_url") or getattr(_proxy_cfg, "PROXY_WARMUP_ANONYMITY_URL", "")).strip()
+            min_clean_score = data.get("min_clean_score", getattr(_proxy_cfg, "PROXY_WARMUP_MIN_CLEAN_SCORE", 80))
+            max_latency = data.get("max_latency", getattr(_proxy_cfg, "PROXY_WARMUP_MAX_LATENCY", 8.0))
             task_id = uuid.uuid4().hex
             state = {
                 "task_id": task_id, "status": "running", "started_at": time.time(),
@@ -2912,6 +2916,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                     state["healthy_total"] = sum(1 for item in completed_rows if item.get("healthy"))
                     state["available"] = state["healthy_total"]
                     state["failed"] = sum(1 for item in completed_rows if not item.get("healthy"))
+                    state["dirty"] = sum(1 for item in completed_rows if not item.get("healthy") and item.get("removable", True))
+                    state["inconclusive"] = sum(1 for item in completed_rows if not item.get("healthy") and not item.get("removable", True))
                     state["challenge_count"] = sum(1 for item in completed_rows if item.get("challenge_detected"))
                     app.config["LAST_PROXY_WARMUP_LOG"] = state
 
@@ -2921,6 +2927,10 @@ def create_app(auth_code: str | None = None) -> Flask:
                         target_clean=max(0, int(target or 0)),
                         timeout=float(timeout or 12.0),
                         health_url=health_url,
+                        reputation_url=reputation_url,
+                        anonymity_url=anonymity_url,
+                        min_clean_score=int(min_clean_score if min_clean_score is not None else 80),
+                        max_latency=float(max_latency if max_latency is not None else 8.0),
                         max_workers=max(1, int(workers or 4)),
                         progress_callback=_progress,
                         cancel_event=cancel_events[task_id],
@@ -2941,6 +2951,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                         "selected_clean_count": result.get("selected_clean_count", result.get("clean", 0)),
                         "available": result.get("available", 0), "clean": result.get("clean", 0),
                         "failed": result.get("failed", 0), "target_clean": result.get("target_clean", 0),
+                        "dirty": result.get("dirty", 0), "inconclusive": result.get("inconclusive", 0),
                         "duplicate_count": result.get("duplicate_count", 0), "challenge_count": challenge_count,
                         "removed": removed, "retained": len(pool) - removed, "auto_delete": auto_delete,
                         "results": [item for item in result.get("results", []) if isinstance(item, dict)],

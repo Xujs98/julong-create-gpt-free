@@ -3525,7 +3525,7 @@ function renderProxyWarmupTools() {
     <div class="roxy-workspace-box">
       <div>
         <b>代理池预热</b>
-        <div class="hint">逐个检查代理出口和注册入口，识别 Cloudflare 挑战页；结果只返回脱敏统计。</div>
+        <div class="hint">逐个综合检查 IP 信誉、匿名性、出口一致性、延迟、业务入口和 Cloudflare 挑战；结果只返回脱敏统计。</div>
       </div>
       <div class="action-cell">
         <button class="btn" type="button" id="btnWarmupProxyLegacy">代理池预热</button>
@@ -3578,7 +3578,7 @@ async function pollProxyWarmupTaskLegacy(taskId) {
       : `已检查 ${task.checked_total ?? task.completed ?? task.total ?? 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 保留 ${task.retained ?? task.selected_clean_count ?? task.clean ?? 0} · 失败 ${task.failed || 0}`;
     const status = $('#proxyWarmupStatusLegacy');
     if (status && isActive) {
-      status.innerHTML = `<span style="color:var(--muted);">${task.status === 'cancelling' ? '正在终止预热' : '正在预热'}：已检查 ${task.completed || 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 失败 ${task.failed || 0}</span>`;
+      status.innerHTML = `<span style="color:var(--muted);">${task.status === 'cancelling' ? '正在终止预热' : '正在预热'}：已检查 ${task.completed || 0}/${task.total || 0} · 干净 ${task.healthy_total ?? task.available ?? 0} · 脏IP ${task.dirty || 0} · 待复检 ${task.inconclusive || 0}</span>`;
     }
     const cancelBtn = $('#btnCancelWarmupProxyLegacy');
     if (cancelBtn) cancelBtn.hidden = !isActive;
@@ -3588,7 +3588,7 @@ async function pollProxyWarmupTaskLegacy(taskId) {
       if (!finalizedProxyWarmupTasksLegacy.has(taskId)) {
         finalizedProxyWarmupTasksLegacy.add(taskId);
         const finalStatus = task.status === 'completed'
-          ? `<span style="color:var(--green);">预热完成</span> · 已检查 ${task.checked_total ?? task.completed ?? task.total ?? 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 保留 ${task.retained ?? task.selected_clean_count ?? task.clean ?? 0} · 失败 ${task.failed || 0} · Cloudflare ${task.challenge_count || 0}${task.auto_delete ? ` · 自动删除 ${task.removed || 0}` : ''}`
+          ? `<span style="color:var(--green);">预热完成</span> · 已检查 ${task.checked_total ?? task.completed ?? task.total ?? 0} · 干净 ${task.healthy_total ?? task.available ?? 0} · 脏IP ${task.dirty || 0} · 待复检 ${task.inconclusive || 0} · 保留 ${task.retained ?? task.selected_clean_count ?? task.clean ?? 0} · Cloudflare ${task.challenge_count || 0}${task.auto_delete ? ` · 自动删除 ${task.removed || 0}` : ''}`
           : `<span style="color:var(--red);">${task.status === 'cancelled' ? '预热已终止' : '预热失败'}</span>${task.error ? `：${esc(task.error)}` : ''} · 已检查 ${task.completed || 0}/${task.total || 0}`;
         if (task.auto_delete && Number(task.removed || 0) > 0) {
           delete CONFIG_PENDING_UPDATES.PROXY_POOL;
@@ -3620,19 +3620,24 @@ async function cancelProxyWarmupLegacy() {
 function renderProxyWarmupLogLegacy(log) {
   const rows = (log.results || []).map((item, index) => {
     const steps = (item.steps || []).map(step => `<span class="proxy-step ${step.ok ? 'ok' : 'bad'}">${step.ok ? '✓' : '×'} ${esc(step.name)}${step.detail ? `：${esc(step.detail)}` : ''}</span>`).join('');
-    const status = item.healthy ? '<b style="color:var(--green);">健康/干净</b>' : `<b style="color:var(--red);">${item.challenge_detected ? 'Cloudflare挑战' : '不健康'}</b>`;
+    const status = item.healthy
+      ? `<b style="color:var(--green);">健康/干净${Number.isFinite(Number(item.clean_score)) ? ` · ${Number(item.clean_score)}分` : ''}</b>`
+      : item.inconclusive
+        ? '<b style="color:var(--orange);">待复检</b>'
+        : `<b style="color:var(--red);">${item.challenge_detected ? 'Cloudflare挑战' : '不健康/不干净'}</b>`;
     return `<div class="proxy-log-row"><div><b>#${index + 1}</b> · <span class="mono">${esc(item.proxy || '-')}</span> · ${status}</div><div class="proxy-log-steps">${steps || esc(item.reason || '无详细步骤')}</div></div>`;
   }).join('');
-  return `<div class="proxy-log-head"><b>预热检查过程（已检查全部代理）</b><span>已检查 ${log.checked_total ?? log.total ?? 0} 个 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
+  return `<div class="proxy-log-head"><b>预热检查过程（已检查全部代理）</b><span>已检查 ${log.checked_total ?? log.total ?? 0} 个 · 干净 ${log.healthy_total ?? log.available ?? 0} · 脏IP ${log.dirty || 0} · 待复检 ${log.inconclusive || 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
 }
 function renderProxyWarmupModalRowsLegacy(log) {
   return (log.results || []).filter(Boolean).map((item, index) => {
     const bad = !item.healthy;
     const challenge = !!item.challenge_detected;
-    const level = item.healthy ? 'INFO' : (challenge ? 'WARN' : 'ERROR');
-    const levelClass = item.healthy ? '' : (challenge ? 'warn' : 'error');
+    const level = item.healthy ? 'INFO' : (item.inconclusive || challenge ? 'WARN' : 'ERROR');
+    const levelClass = item.healthy ? '' : (item.inconclusive || challenge ? 'warn' : 'error');
     const steps = (item.steps || []).map(step => `<span class="proxy-warmup-modal-step ${step.ok ? 'ok' : 'bad'}">${step.ok ? '✓' : '×'} ${esc(step.name)}${step.detail ? `：${esc(step.detail)}` : ''}</span>`).join('');
-    const status = item.healthy ? '健康/干净' : (challenge ? 'Cloudflare挑战' : '不健康');
+    const score = Number.isFinite(Number(item.clean_score)) ? ` · ${Number(item.clean_score)}分` : '';
+    const status = item.healthy ? `健康/干净${score}` : (item.inconclusive ? `待复检${score}` : `${challenge ? 'Cloudflare挑战' : '不健康/不干净'}${score}`);
     return `<div class="proxy-warmup-modal-row${bad ? ' bad' : ''}"><span class="proxy-warmup-modal-time">#${index + 1}</span><span class="proxy-warmup-modal-level ${levelClass}">${level}</span><span class="proxy-warmup-modal-message"><span>代理 ${esc(item.proxy || '-')} · ${status}</span><span>${steps || esc(item.reason || '无详细步骤')}</span></span></div>`;
   }).join('') || '<div class="job-log-empty">暂无预热记录</div>';
 }
@@ -3644,8 +3649,8 @@ function openProxyWarmupLogModalLegacy(log = null) {
   if (log) {
     $('#proxyWarmupLogModalContentLegacy').innerHTML = renderProxyWarmupModalRowsLegacy(log);
     $('#proxyWarmupLogMetaLegacy').textContent = ['running', 'cancelling'].includes(log.status)
-      ? `实时检查 ${log.completed || 0}/${log.total || 0} · 健康 ${log.healthy_total ?? log.available ?? 0} · 失败 ${log.failed || 0}`
-      : `已检查全部 ${log.checked_total ?? log.total ?? 0} 个代理 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}`;
+      ? `实时检查 ${log.completed || 0}/${log.total || 0} · 干净 ${log.healthy_total ?? log.available ?? 0} · 脏IP ${log.dirty || 0} · 待复检 ${log.inconclusive || 0}`
+      : `已检查全部 ${log.checked_total ?? log.total ?? 0} 个代理 · 干净 ${log.healthy_total ?? log.available ?? 0} · 脏IP ${log.dirty || 0} · 待复检 ${log.inconclusive || 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0}`;
     if (['running', 'cancelling'].includes(log.status) && log.task_id) {
       activeProxyWarmupTaskLegacy = log.task_id;
       clearInterval(proxyWarmupTimerLegacy);

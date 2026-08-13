@@ -158,12 +158,16 @@ def _select_registration_proxy(job_id: int, log_logger: logging.Logger) -> str |
         proxy_pool,
         timeout=getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0),
         health_url=getattr(_proxy_cfg, "PROXY_WARMUP_HEALTH_URL", ""),
+        reputation_url=getattr(_proxy_cfg, "PROXY_WARMUP_REPUTATION_URL", ""),
+        anonymity_url=getattr(_proxy_cfg, "PROXY_WARMUP_ANONYMITY_URL", ""),
+        min_clean_score=getattr(_proxy_cfg, "PROXY_WARMUP_MIN_CLEAN_SCORE", 80),
+        max_latency=getattr(_proxy_cfg, "PROXY_WARMUP_MAX_LATENCY", 8.0),
     )
     if bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)):
         unhealthy = {
             item.get("proxy_url")
             for item in selection.get("checked", [])
-            if item.get("proxy_url") and not item.get("healthy")
+            if item.get("proxy_url") and not item.get("healthy") and item.get("removable", True)
         }
         if unhealthy:
             persist_proxy_pool([item for item in proxy_pool if item not in unhealthy])

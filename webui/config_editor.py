@@ -598,7 +598,23 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PROXY_WARMUP_HEALTH_URL", "file": "proxy.py", "type": "str", "group": "代理池",
-        "label": "预热健康检查地址", "help": "通过代理访问该注册入口并识别 Cloudflare 挑战，默认使用 ChatGPT 登录入口",
+        "label": "预热业务检查地址", "help": "通过代理访问该注册入口，检查可达性、HTTP 状态和 Cloudflare 挑战；这只是干净度判定中的一项",
+    },
+    {
+        "key": "PROXY_WARMUP_REPUTATION_URL", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "IP信誉检查接口", "help": "查询出口 IP 的代理/VPN/Tor/机房/滥用/Bogon 等信誉信号；地址中的 {ip} 会替换为出口 IP",
+    },
+    {
+        "key": "PROXY_WARMUP_ANONYMITY_URL", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "代理匿名性检查地址", "help": "通过代理访问 JSON 回显接口执行匿名性检查，核对出口 IP，并识别泄漏头；可用逗号或换行填写多个地址，失败时自动回退",
+    },
+    {
+        "key": "PROXY_WARMUP_MIN_CLEAN_SCORE", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "干净度最低分", "help": "0-100；信誉风险、匿名性泄漏、业务入口失败、挑战页和高延迟都会扣分，达到该分数且关键项通过才算干净",
+    },
+    {
+        "key": "PROXY_WARMUP_MAX_LATENCY", "file": "proxy.py", "type": "float", "group": "代理池",
+        "label": "最大可接受延迟(秒)", "help": "业务入口响应超过该时间判定健康度不通过；用于过滤虽然能连接但质量过差的出口",
     },
     {
         "key": "PROXY_WARMUP_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
@@ -610,11 +626,11 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
-        "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前检查并选择一个不触发 Cloudflare 挑战的健康出口；不会改变注册方式配置",
+        "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前执行多维干净度检查并选择通过项；不会改变注册方式配置",
     },
     {
         "key": "PROXY_DELETE_UNHEALTHY_IPS", "file": "proxy.py", "type": "bool", "group": "代理池",
-        "label": "自动删除不健康IP", "help": "开启后，预热或注册前健康检查判定不健康的代理会自动从代理池删除",
+        "label": "自动删除不健康IP", "help": "开启后只删除明确命中信誉、匿名性、延迟、入口或挑战风险的脏 IP；外部检测接口故障产生的待复检项会保留",
     },
     {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",

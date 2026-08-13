@@ -92,6 +92,16 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_proxy_warmup_has_multidimensional_cleanliness_fields(self):
+        fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
+
+        self.assertIn("PROXY_WARMUP_REPUTATION_URL", fields)
+        self.assertIn("PROXY_WARMUP_ANONYMITY_URL", fields)
+        self.assertEqual(fields["PROXY_WARMUP_MIN_CLEAN_SCORE"]["type"], "int")
+        self.assertEqual(fields["PROXY_WARMUP_MAX_LATENCY"]["type"], "float")
+        self.assertIn("信誉", fields["PROXY_WARMUP_REPUTATION_URL"]["help"])
+        self.assertIn("匿名性", fields["PROXY_WARMUP_ANONYMITY_URL"]["help"])
+
     def test_page_agent_choices_have_chinese_labels_and_direct_default(self):
         """页面 Agent 机器值保持兼容，WebUI 下拉统一展示中文。"""
         fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}

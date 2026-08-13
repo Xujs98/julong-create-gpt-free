@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
 import re
 import threading
+import time
 from typing import Callable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -33,6 +34,31 @@ _CHALLENGE_MARKERS = (
     "cf-mitigated",
 )
 _PROXY_POOL_WRITE_LOCK = threading.RLock()
+_ANONYMITY_LEAK_HEADERS = (
+    "via",
+    "forwarded",
+    "x-forwarded-for",
+    "x-real-ip",
+    "client-ip",
+    "true-client-ip",
+    "proxy-connection",
+)
+_HIGH_RISK_REPUTATION_FLAGS = (
+    "is_tor",
+    "is_bogon",
+    "is_abuser",
+    "is_abuse",
+    "is_blacklisted",
+    "is_spam",
+    "is_bot",
+)
+_NETWORK_REPUTATION_FLAGS = (
+    "is_proxy",
+    "is_vpn",
+    "is_datacenter",
+    "is_hosting",
+    "is_cloud_provider",
+)
 
 
 def _masked_proxy(proxy_url: str) -> str:
@@ -182,20 +208,108 @@ def _challenge_evidence(response) -> tuple[bool, list[str]]:
     return bool(markers), markers
 
 
+def _request_json(session: Session, url: str, *, timeout: float) -> tuple[dict, float]:
+    """请求 JSON 接口，并返回对象与耗时。"""
+    started = time.monotonic()
+    response = session.get(
+        url,
+        headers={"Accept": "application/json", "User-Agent": getattr(_browser_cfg, "USER_AGENT", "Mozilla/5.0")},
+        timeout=timeout,
+    )
+    elapsed = max(0.0, time.monotonic() - started)
+    if int(response.status_code or 0) != 200:
+        raise ProxyTestError(f"HTTP {response.status_code}")
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ProxyTestError("响应不是 JSON 对象")
+    return payload, elapsed
+
+
+def _walk_reputation_values(payload: dict) -> dict[str, bool]:
+    """递归收集常见 IP 信誉布尔字段，兼容多种返回结构。"""
+    found: dict[str, bool] = {}
+
+    def walk(value) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalized = str(key or "").strip().lower().replace("-", "_")
+                if isinstance(item, bool):
+                    found[normalized] = item
+                elif isinstance(item, (dict, list, tuple)):
+                    walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    walk(payload)
+    aliases = {
+        "proxy": "is_proxy",
+        "vpn": "is_vpn",
+        "tor": "is_tor",
+        "hosting": "is_hosting",
+        "datacenter": "is_datacenter",
+        "bogon": "is_bogon",
+        "abuser": "is_abuser",
+        "abuse": "is_abuse",
+    }
+    for alias, canonical in aliases.items():
+        if alias in found and canonical not in found:
+            found[canonical] = found[alias]
+    return found
+
+
+def _reputation_assessment(payload: dict) -> dict:
+    """把信誉接口结果归一化为风险信号与分数扣减。"""
+    flags = _walk_reputation_values(payload)
+    high_risk = [name for name in _HIGH_RISK_REPUTATION_FLAGS if flags.get(name) is True]
+    network_risk = [name for name in _NETWORK_REPUTATION_FLAGS if flags.get(name) is True]
+    known = any(name in flags for name in (*_HIGH_RISK_REPUTATION_FLAGS, *_NETWORK_REPUTATION_FLAGS))
+    penalty = min(60, len(high_risk) * 35 + len(network_risk) * 12)
+    return {
+        "known": known,
+        "high_risk": high_risk,
+        "network_risk": network_risk,
+        "penalty": penalty,
+        "clean": not high_risk and not network_risk,
+    }
+
+
+def _anonymity_assessment(payload: dict, expected_ip: str) -> dict:
+    """检查回显地址与代理头，识别透明代理或来源泄漏。"""
+    headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
+    lowered = {str(key).lower(): str(value) for key, value in headers.items()}
+    leaks = sorted(name for name in _ANONYMITY_LEAK_HEADERS if lowered.get(name))
+    origin = str(payload.get("origin") or payload.get("ip") or "").strip()
+    origin_ips = [part.strip().split(":", 1)[0] for part in re.split(r"[,\s]+", origin) if part.strip()]
+    origin_verified = bool(origin_ips)
+    exit_consistent = bool(origin_verified and (not expected_ip or expected_ip in origin_ips))
+    return {
+        "origin": origin,
+        "origin_verified": origin_verified,
+        "leak_headers": leaks,
+        "exit_consistent": exit_consistent,
+        "anonymous": origin_verified and not leaks and exit_consistent,
+    }
+
+
 def test_proxy_health(
     proxy_url: str,
     timeout: float | None = None,
     *,
     health_url: str | None = None,
+    reputation_url: str | None = None,
+    anonymity_url: str | None = None,
+    min_clean_score: int | None = None,
+    max_latency: float | None = None,
 ) -> dict:
-    """检查代理出口并探测注册入口是否直接返回 Cloudflare 挑战页。
-
-    这是预热/注册前选择器使用的轻量 HTTP 健康检查，不执行挑战交互，也
-    不把挑战页当作可用出口。返回值包含脱敏代理地址，原始 URL 只用于
-    调用方在内存中继续使用。
-    """
+    """综合检查出口稳定性、IP 信誉、匿名性、延迟和业务入口挑战。"""
     timeout = max(2.0, min(45.0, float(timeout or 12.0)))
     endpoint = str(health_url or "https://chatgpt.com/auth/login").strip()
+    reputation_endpoint = str(reputation_url if reputation_url is not None else "https://us.ipapi.is/?q={ip}").strip()
+    anonymity_endpoint = str(anonymity_url if anonymity_url is not None else "https://echo.free.beeceptor.com,https://httpbin.io/get").strip()
+    anonymity_endpoints = [item.strip() for item in re.split(r"[,\r\n]+", anonymity_endpoint) if item.strip()]
+    clean_threshold = max(0, min(100, int(min_clean_score if min_clean_score is not None else 80)))
+    latency_limit = max(0.0, float(max_latency if max_latency is not None else 8.0))
     geo = test_proxy(proxy_url, timeout=timeout)
     normalized = normalize_proxy_url(proxy_url, default_scheme="auto")
     parsed = urlsplit(normalized or "")
@@ -211,63 +325,132 @@ def test_proxy_health(
         session = Session(impersonate=getattr(_browser_cfg, "IMPERSONATE", "chrome"))
         session.proxies = {"http": candidate, "https": candidate}
         try:
+            steps = [{"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"}]
+            reputation = {"known": False, "high_risk": [], "network_risk": [], "penalty": 0, "clean": not reputation_endpoint}
+            reputation_verified = not reputation_endpoint
+            if reputation_endpoint:
+                try:
+                    reputation_payload, _ = _request_json(
+                        session,
+                        reputation_endpoint.replace("{ip}", str(geo.get("ip") or "")),
+                        timeout=timeout,
+                    )
+                    reputation = _reputation_assessment(reputation_payload)
+                    reputation_verified = bool(reputation["known"])
+                    risks = [*reputation["high_risk"], *reputation["network_risk"]]
+                    detail = "未发现代理/VPN/Tor/机房/滥用风险" if not risks else ", ".join(risks)
+                    if not reputation["known"]:
+                        detail = "接口未返回可识别的信誉字段"
+                    steps.append({"name": "IP 信誉检查", "ok": reputation["clean"], "detail": detail})
+                except Exception as exc:
+                    reputation = {"known": False, "high_risk": [], "network_risk": [], "penalty": 10, "clean": False, "error": type(exc).__name__}
+                    steps.append({"name": "IP 信誉检查", "ok": False, "detail": "信誉接口请求失败"})
+
+            anonymity = {"origin": "", "leak_headers": [], "exit_consistent": True, "anonymous": True}
+            anonymity_verified = not anonymity_endpoints
+            anonymity_errors = []
+            for anonymity_check_url in anonymity_endpoints:
+                try:
+                    anonymity_payload, _ = _request_json(session, anonymity_check_url, timeout=timeout)
+                    anonymity = _anonymity_assessment(anonymity_payload, str(geo.get("ip") or ""))
+                    anonymity["endpoint"] = anonymity_check_url
+                    anonymity_verified = True
+                    problems = list(anonymity["leak_headers"])
+                    if not anonymity["exit_consistent"]:
+                        problems.append("回显出口与 GeoIP 不一致")
+                    steps.append({
+                        "name": "代理匿名性检查",
+                        "ok": anonymity["anonymous"],
+                        "detail": "未发现来源泄漏" if not problems else ", ".join(problems),
+                    })
+                    break
+                except Exception as exc:
+                    anonymity_errors.append(type(exc).__name__)
+            if anonymity_endpoints and not anonymity_verified:
+                anonymity = {"origin": "", "leak_headers": [], "exit_consistent": False, "anonymous": False, "error": ",".join(anonymity_errors[-3:])}
+                steps.append({"name": "代理匿名性检查", "ok": False, "detail": f"{len(anonymity_endpoints)} 个匿名性接口均请求失败"})
+
+            started = time.monotonic()
             response = session.get(endpoint, headers=headers, timeout=timeout, allow_redirects=True)
+            latency = max(0.0, time.monotonic() - started)
             challenge, markers = _challenge_evidence(response)
             status = int(response.status_code or 0)
             final_url = str(getattr(response, "url", "") or endpoint)
-            if status >= 400:
-                return {
-                    "ok": False,
-                    "healthy": False,
-                    "proxy": _masked_proxy(candidate),
-                    "ip": geo.get("ip", ""),
-                    "status": status,
-                    "health_url": endpoint,
-                    "final_url": final_url,
-                    "challenge_detected": challenge,
-                    "challenge_markers": markers,
-                    "reason": f"HTTP {status}",
-                    "steps": [
-                        {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
-                        {"name": "健康地址访问", "ok": False, "detail": f"HTTP {status}"},
-                    ],
-                }
+            business_ok = 200 <= status < 400
+            latency_ok = not latency_limit or latency <= latency_limit
+            steps.extend([
+                {"name": "业务入口可达性", "ok": business_ok, "detail": f"HTTP {status}"},
+                {"name": "出口延迟检查", "ok": latency_ok, "detail": f"{latency:.2f}s / 上限 {latency_limit:.2f}s"},
+                {"name": "Cloudflare 挑战识别", "ok": not challenge, "detail": ", ".join(markers) if markers else "未发现挑战特征"},
+            ])
+            score = 100
+            score -= int(reputation.get("penalty") or 0)
+            if not anonymity.get("anonymous"):
+                score -= 25
+            if not business_ok:
+                score -= 35
             if challenge:
-                return {
-                    "ok": False,
-                    "healthy": False,
-                    "proxy": _masked_proxy(candidate),
-                    "ip": geo.get("ip", ""),
-                    "status": status,
-                    "health_url": endpoint,
-                    "final_url": final_url,
-                    "challenge_detected": True,
-                    "challenge_markers": markers,
-                    "reason": "cloudflare_challenge",
-                    "steps": [
-                        {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
-                        {"name": "健康地址访问", "ok": True, "detail": f"HTTP {status}"},
-                        {"name": "Cloudflare 挑战识别", "ok": False, "detail": ", ".join(markers)},
-                    ],
-                }
+                score -= 45
+            if not latency_ok:
+                score -= 15
+            score = max(0, min(100, score))
+            verification_complete = reputation_verified and anonymity_verified
+            critical_ok = (
+                verification_complete
+                and reputation.get("clean") is True
+                and anonymity.get("anonymous") is True
+                and business_ok
+                and latency_ok
+                and not challenge
+            )
+            healthy = critical_ok and score >= clean_threshold
+            reasons = []
+            if reputation.get("high_risk") or reputation.get("network_risk"):
+                reasons.append("ip_reputation_risk")
+            if not anonymity.get("anonymous"):
+                reasons.append("anonymity_leak")
+            if not business_ok:
+                reasons.append(f"http_{status}")
+            if not latency_ok:
+                reasons.append("high_latency")
+            if challenge:
+                reasons.append("cloudflare_challenge")
+            if score < clean_threshold:
+                reasons.append("clean_score_below_threshold")
+            if not verification_complete:
+                reasons.append("cleanliness_check_incomplete")
+            definitive_dirty = bool(
+                reputation.get("high_risk")
+                or reputation.get("network_risk")
+                or (anonymity_verified and not anonymity.get("anonymous"))
+                or not business_ok
+                or not latency_ok
+                or challenge
+            )
+            steps.append({"name": "综合干净度评分", "ok": healthy, "detail": f"{score}/100，门槛 {clean_threshold}"})
             return {
-                "ok": True,
-                "healthy": True,
+                "ok": healthy,
+                "healthy": healthy,
+                "clean": healthy,
+                "clean_score": score,
+                "clean_threshold": clean_threshold,
+                "verification_complete": verification_complete,
+                "inconclusive": not verification_complete and not definitive_dirty,
+                "removable": definitive_dirty,
                 "proxy": _masked_proxy(candidate),
                 "ip": geo.get("ip", ""),
                 "country": geo.get("country", ""),
                 "country_code": geo.get("country_code", ""),
                 "status": status,
+                "latency_seconds": round(latency, 3),
                 "health_url": endpoint,
                 "final_url": final_url,
-                "challenge_detected": False,
-                "challenge_markers": [],
-                "reason": "clean",
-                "steps": [
-                    {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
-                    {"name": "健康地址访问", "ok": True, "detail": f"HTTP {status}"},
-                    {"name": "Cloudflare 挑战识别", "ok": True, "detail": "未发现挑战特征"},
-                ],
+                "challenge_detected": challenge,
+                "challenge_markers": markers,
+                "reputation": reputation,
+                "anonymity": anonymity,
+                "reason": "clean" if healthy else ",".join(dict.fromkeys(reasons)) or "not_clean",
+                "steps": steps,
             }
         except Exception as exc:
             errors.append(f"{type(exc).__name__}: {str(exc)[:120]}")
@@ -285,6 +468,10 @@ def warmup_proxy_pool(
     target_clean: int = 0,
     timeout: float | None = None,
     health_url: str | None = None,
+    reputation_url: str | None = None,
+    anonymity_url: str | None = None,
+    min_clean_score: int | None = None,
+    max_latency: float | None = None,
     max_workers: int = 4,
     progress_callback: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
@@ -306,7 +493,16 @@ def warmup_proxy_pool(
     cancelled = False
     try:
         futures = {
-            executor.submit(test_proxy_health, proxy, timeout, health_url=health_url): (index, proxy)
+            executor.submit(
+                test_proxy_health,
+                proxy,
+                timeout,
+                health_url=health_url,
+                reputation_url=reputation_url,
+                anonymity_url=anonymity_url,
+                min_clean_score=min_clean_score,
+                max_latency=max_latency,
+            ): (index, proxy)
             for index, proxy in enumerate(proxies)
         }
         for future in as_completed(futures):
@@ -323,10 +519,12 @@ def warmup_proxy_pool(
                 results[index] = {
                     "ok": False,
                     "healthy": False,
+                    "removable": True,
+                    "inconclusive": False,
                     "proxy": _masked_proxy(proxy),
-                    "reason": f"{type(exc).__name__}: 连接或挑战检查失败",
+                    "reason": f"{type(exc).__name__}: 代理多维检查失败",
                     "challenge_detected": False,
-                    "steps": [{"name": "代理检查", "ok": False, "detail": "连接或挑战检查失败"}],
+                    "steps": [{"name": "代理多维检查", "ok": False, "detail": "出口连接或检测请求失败"}],
                 }
             if progress_callback and not (cancel_event and cancel_event.is_set()):
                 try:
@@ -354,6 +552,8 @@ def warmup_proxy_pool(
         healthy_indexes = healthy_indexes[:target]
     clean_proxy_urls = [proxies[i] for i in healthy_indexes]
     failures = [result for result in results if isinstance(result, dict) and not result.get("healthy")]
+    dirty_results = [result for result in failures if result.get("removable", True)]
+    inconclusive_results = [result for result in failures if not result.get("removable", True)]
     return {
         "ok": bool(clean_proxy_urls),
         "checked_all": True,
@@ -366,12 +566,15 @@ def warmup_proxy_pool(
         "clean": len(clean_proxy_urls),
         "selected_clean_count": len(clean_proxy_urls),
         "failed": len(failures),
+        "dirty": len(dirty_results),
+        "inconclusive": len(inconclusive_results),
         "target_clean": target,
         "results": [result for result in results if isinstance(result, dict)],
         "failures": failures,
         "clean_proxy_urls": clean_proxy_urls,
         "healthy_proxy_urls": [proxies[i] for i in healthy_indexes_all],
-        "unhealthy_proxy_urls": [proxies[i] for i, result in enumerate(results) if isinstance(result, dict) and not result.get("healthy")],
+        "unhealthy_proxy_urls": [proxies[i] for i, result in enumerate(results) if isinstance(result, dict) and not result.get("healthy") and result.get("removable", True)],
+        "inconclusive_proxy_urls": [proxies[i] for i, result in enumerate(results) if isinstance(result, dict) and not result.get("healthy") and not result.get("removable", True)],
     }
 
 
@@ -381,6 +584,10 @@ def choose_healthy_proxy(
     preferred: str | None = None,
     timeout: float | None = None,
     health_url: str | None = None,
+    reputation_url: str | None = None,
+    anonymity_url: str | None = None,
+    min_clean_score: int | None = None,
+    max_latency: float | None = None,
 ) -> dict:
     """先检查 preferred，再随机检查其余出口，返回一个健康代理。"""
     candidates = []
@@ -399,9 +606,17 @@ def choose_healthy_proxy(
     checked = []
     for proxy in candidates:
         try:
-            result = test_proxy_health(proxy, timeout=timeout, health_url=health_url)
+            result = test_proxy_health(
+                proxy,
+                timeout=timeout,
+                health_url=health_url,
+                reputation_url=reputation_url,
+                anonymity_url=anonymity_url,
+                min_clean_score=min_clean_score,
+                max_latency=max_latency,
+            )
         except Exception as exc:
-            result = {"ok": False, "healthy": False, "proxy": _masked_proxy(proxy), "reason": f"{type(exc).__name__}: 连接或挑战检查失败"}
+            result = {"ok": False, "healthy": False, "removable": True, "proxy": _masked_proxy(proxy), "reason": f"{type(exc).__name__}: 代理多维检查失败"}
         result["proxy_url"] = proxy
         checked.append(result)
         if result.get("healthy"):
