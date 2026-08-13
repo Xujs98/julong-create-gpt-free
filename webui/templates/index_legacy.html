@@ -3455,6 +3455,41 @@ function renderRoxyWorkspaceTools() {
   `;
 }
 
+function renderProxyWarmupTools() {
+  if (CONFIG_ACTIVE_GROUP !== '代理池') return '';
+  return `
+    <div class="roxy-workspace-box">
+      <div>
+        <b>代理池预热</b>
+        <div class="hint">逐个检查代理出口和注册入口，识别 Cloudflare 挑战页；结果只返回脱敏统计。</div>
+      </div>
+      <div class="action-cell">
+        <button class="btn" type="button" id="btnWarmupProxyLegacy">代理池预热</button>
+      </div>
+      <div id="proxyWarmupStatusLegacy" class="muted" style="font-size:12px;">预热尚未运行</div>
+    </div>
+  `;
+}
+
+async function warmupProxyPoolLegacy() {
+  const btn = $('#btnWarmupProxyLegacy');
+  const status = $('#proxyWarmupStatusLegacy');
+  if (!btn || !status) return;
+  btn.disabled = true;
+  status.textContent = '正在预热代理池，请稍候...';
+  try {
+    const r = await api('/api/proxy/warmup', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+    });
+    const color = r.challenge_count || r.failed ? 'var(--red)' : 'var(--green)';
+    status.innerHTML = `<span style="color:${color};">${r.ok ? '✅ 预热完成' : '⚠️ 没有可用干净 IP'}</span> · 输入 ${r.total || 0} · 健康 ${r.available || 0} · 干净 ${r.clean || 0} · 失败 ${r.failed || 0} · Cloudflare挑战 ${r.challenge_count || 0}${r.auto_delete ? ` · 自动删除 ${r.removed || 0}` : ''}`;
+    showToast(r.ok ? '代理池预热完成' : '代理池没有可用干净 IP');
+    await loadConfig();
+  } catch(e) {
+    status.innerHTML = `<span style="color:var(--red);">预热失败：${esc(e.message)}</span>`;
+  } finally { btn.disabled = false; }
+}
+
 function renderCloudMailTokenTools() {
   if (CONFIG_ACTIVE_GROUP !== '邮箱 / OTP') return '';
   const hasCloudMail = CONFIG.some(f => String(f.key || '').startsWith('CLOUDMAIL_'));
@@ -3562,10 +3597,13 @@ function renderConfigPanel() {
     <div class="config-panel">
       <h3>${esc(CONFIG_ACTIVE_GROUP)}</h3>
       ${renderRoxyWorkspaceTools()}
+      ${renderProxyWarmupTools()}
       ${renderConfigFields(fields)}
     </div>
   `;
   bindRoxyWorkspaceTools();
+  const warmupBtn = $('#btnWarmupProxyLegacy');
+  if (warmupBtn) warmupBtn.addEventListener('click', warmupProxyPoolLegacy);
   syncRegionProfileControl();
 }
 

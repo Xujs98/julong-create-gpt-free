@@ -593,6 +593,30 @@ EDITABLE_FIELDS = [
         "label": "注册前检查并清理代理", "help": "开启后，每次开始注册任务都会检查代理池全部出口；自动删除失败项并保留可用项，没有可用代理时才终止任务",
     },
     {
+        "key": "PROXY_WARMUP_TARGET_CLEAN_IPS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "预热保留干净IP数量", "help": "点击“代理池预热”时，从代理池筛选并保留的健康出口数量；超过实际健康数量时保留全部健康项",
+    },
+    {
+        "key": "PROXY_WARMUP_HEALTH_URL", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "预热健康检查地址", "help": "通过代理访问该注册入口并识别 Cloudflare 挑战，默认使用 ChatGPT 登录入口",
+    },
+    {
+        "key": "PROXY_WARMUP_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
+        "label": "预热单代理超时(秒)", "help": "出口 IP 与注册入口健康探测的单代理超时",
+    },
+    {
+        "key": "PROXY_WARMUP_WORKERS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "预热并发数", "help": "预热同时检查的代理数量，建议 2-6",
+    },
+    {
+        "key": "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前检查并选择一个不触发 Cloudflare 挑战的健康出口；不会改变注册方式配置",
+    },
+    {
+        "key": "PROXY_DELETE_UNHEALTHY_IPS", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "自动删除不健康IP", "help": "开启后，预热或注册前健康检查判定不健康的代理会自动从代理池删除",
+    },
+    {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },

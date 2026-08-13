@@ -2867,6 +2867,51 @@ def create_app(auth_code: str | None = None) -> Flask:
             logger.warning("代理测试失败: %s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    @app.post("/api/proxy/warmup")
+    def api_proxy_warmup():
+        """并发预热代理池，识别出口健康度和 Cloudflare 挑战页。"""
+        try:
+            from config import proxy as _proxy_cfg
+            from core.proxy_test import ProxyTestError, persist_proxy_pool, warmup_proxy_pool
+
+            data = request.get_json(silent=True) or {}
+            pool = list(getattr(_proxy_cfg, "PROXY_POOL", []) or [])
+            target = data.get("target_clean", getattr(_proxy_cfg, "PROXY_WARMUP_TARGET_CLEAN_IPS", 3))
+            timeout = data.get("timeout", getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0))
+            workers = data.get("workers", getattr(_proxy_cfg, "PROXY_WARMUP_WORKERS", 4))
+            health_url = str(data.get("health_url") or getattr(_proxy_cfg, "PROXY_WARMUP_HEALTH_URL", "")).strip()
+            result = warmup_proxy_pool(
+                pool,
+                target_clean=max(0, int(target or 0)),
+                timeout=float(timeout or 12.0),
+                health_url=health_url,
+                max_workers=max(1, int(workers or 4)),
+            )
+            removed = 0
+            if bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)):
+                unhealthy = set(result.get("unhealthy_proxy_urls") or [])
+                retained = [proxy for proxy in pool if proxy not in unhealthy]
+                if unhealthy:
+                    persist_proxy_pool(retained)
+                    removed = len(unhealthy)
+            challenge_count = sum(1 for item in result.get("failures", []) if item.get("challenge_detected"))
+            result.update({
+                "removed": removed,
+                "challenge_count": challenge_count,
+                "retained": len(pool) - removed,
+                "auto_delete": bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)),
+            })
+            # 原始代理 URL 仅用于后端持久化，API 只返回脱敏结果。
+            result.pop("clean_proxy_urls", None)
+            result.pop("healthy_proxy_urls", None)
+            result.pop("unhealthy_proxy_urls", None)
+            # 预热本身已完成时即返回统计，即使当前没有达到目标干净 IP 数量，
+            # 前端仍需展示输入/健康/挑战/失败数量，而不是只显示 HTTP 错误。
+            return jsonify(result), 200
+        except Exception as exc:
+            logger.warning("代理池预热失败：%s: %s", type(exc).__name__, exc)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
     @app.post("/api/agent/test")
     def api_agent_test():
         """校验页面 Agent 配置；local 模式执行本地配置检查，模型模式发最小探测请求。"""

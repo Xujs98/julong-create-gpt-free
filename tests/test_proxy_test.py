@@ -3,10 +3,53 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from core.cloakbrowser_driver import _normalize_proxy as normalize_cloak_proxy
-from core.proxy_test import ProxyTestError, test_proxy as run_proxy_test, test_proxy_pool as run_proxy_pool_test
+from core.proxy_test import (
+    ProxyTestError,
+    _challenge_evidence,
+    choose_healthy_proxy,
+    test_proxy as run_proxy_test,
+    test_proxy_pool as run_proxy_pool_test,
+    warmup_proxy_pool,
+)
 
 
 class ProxyTestTests(unittest.TestCase):
+    def test_challenge_page_markers_include_html_title(self):
+        response = MagicMock()
+        response.text = "<html><title>Just a Moment...</title></html>"
+        response.headers = {}
+        detected, markers = _challenge_evidence(response)
+        self.assertTrue(detected)
+        self.assertIn("just a moment", markers)
+
+    @patch("core.proxy_test.test_proxy_health")
+    def test_warmup_reports_all_healthy_and_target_clean(self, health):
+        health.side_effect = [
+            {"healthy": True, "proxy": "http://a.test:1"},
+            {"healthy": True, "proxy": "http://b.test:2"},
+            {"healthy": False, "proxy": "http://c.test:3", "challenge_detected": True},
+        ]
+        result = warmup_proxy_pool(
+            ["http://a.test:1", "http://b.test:2", "http://c.test:3"],
+            target_clean=1,
+            max_workers=1,
+        )
+        self.assertEqual(result["available"], 2)
+        self.assertEqual(result["clean"], 1)
+        self.assertEqual(len(result["healthy_proxy_urls"]), 2)
+        self.assertEqual(len(result["unhealthy_proxy_urls"]), 1)
+
+    @patch("core.proxy_test.test_proxy_health")
+    def test_choose_healthy_proxy_keeps_preferred_first(self, health):
+        health.side_effect = [
+            {"healthy": False, "proxy": "http://preferred.test:1"},
+            {"healthy": True, "proxy": "http://other.test:2"},
+        ]
+        result = choose_healthy_proxy(
+            ["http://preferred.test:1", "http://other.test:2"],
+            preferred="http://preferred.test:1",
+        )
+        self.assertEqual(result["proxy_url"], "http://other.test:2")
     def test_cloak_uses_remote_dns_for_explicit_socks5(self):
         self.assertEqual(
             normalize_cloak_proxy("socks5://user:pass@proxy.example:3000"),

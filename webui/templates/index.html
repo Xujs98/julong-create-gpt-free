@@ -7663,8 +7663,10 @@ function renderProxyTestToolsV2() {
       </div>
       <div class="action-cell">
         <button class="btn" type="button" id="btnTestProxyV2">测试当前代理</button>
+        <button class="btn" type="button" id="btnWarmupProxyV2">代理池预热</button>
       </div>
       <div id="proxyTestStatusV2" class="muted" style="font-size:12px;">尚未测试</div>
+      <div id="proxyWarmupStatusV2" class="muted" style="font-size:12px;margin-top:6px;">预热尚未运行</div>
     </div>
   `;
 }
@@ -7675,6 +7677,27 @@ function bindProxyTestToolsV2() {
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => testCurrentProxyV2());
   }
+  const warmupBtn = $('#btnWarmupProxyV2');
+  if (warmupBtn && !warmupBtn.dataset.bound) {
+    warmupBtn.dataset.bound = '1';
+    warmupBtn.addEventListener('click', () => warmupProxyPoolV2());
+  }
+}
+
+async function warmupProxyPoolV2() {
+  const btn = $('#btnWarmupProxyV2');
+  const status = $('#proxyWarmupStatusV2');
+  if (!btn || !status) return;
+  btn.disabled = true;
+  status.innerHTML = '<span style="color:var(--muted);">正在预热代理池，请稍候...</span>';
+  try {
+    const r = await api('/api/proxy/warmup', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const color = r.challenge_count || r.failed ? 'var(--red)' : 'var(--green)';
+    status.innerHTML = `<span style="color:${color};">${r.ok ? '✅ 预热完成' : '⚠️ 没有可用干净 IP'}</span> · 输入 ${r.total || 0} · 健康 ${r.available || 0} · 干净 ${r.clean || 0} · 失败 ${r.failed || 0} · Cloudflare挑战 ${r.challenge_count || 0}${r.auto_delete ? ` · 自动删除 ${r.removed || 0}` : ''}`;
+    showToast(r.ok ? '代理池预热完成' : '代理池没有可用干净 IP');
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red);">预热失败：${esc(e.message)}</span>`;
+  } finally { btn.disabled = false; }
 }
 
 async function testCurrentProxyV2() {

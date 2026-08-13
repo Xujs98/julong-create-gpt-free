@@ -145,6 +145,40 @@ def _release_unconsumed_job_email(email: str | None, reason: str) -> None:
         logger.exception("[Service] 回收未消耗邮箱失败: %s", email)
 
 
+def _select_registration_proxy(job_id: int, log_logger: logging.Logger) -> str | None:
+    """按配置检查并选择本次注册出口。"""
+    from config import proxy as _proxy_cfg
+
+    if not bool(getattr(_proxy_cfg, "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", False)):
+        return None
+    from core.proxy_test import choose_healthy_proxy, persist_proxy_pool
+
+    proxy_pool = list(getattr(_proxy_cfg, "PROXY_POOL", []) or [])
+    selection = choose_healthy_proxy(
+        proxy_pool,
+        timeout=getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0),
+        health_url=getattr(_proxy_cfg, "PROXY_WARMUP_HEALTH_URL", ""),
+    )
+    if bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)):
+        unhealthy = {
+            item.get("proxy_url")
+            for item in selection.get("checked", [])
+            if item.get("proxy_url") and not item.get("healthy")
+        }
+        if unhealthy:
+            persist_proxy_pool([item for item in proxy_pool if item not in unhealthy])
+            log_logger.warning("[Job %s] 已自动删除不健康代理：%s 个", job_id, len(unhealthy))
+    if not selection.get("ok"):
+        raise RuntimeError("注册前健康检查失败：代理池没有可用健康出口")
+    selected = str(selection.get("proxy_url") or "").strip()
+    log_logger.info(
+        "[Job %s] 注册前健康检查通过：代理=%s",
+        job_id,
+        (selection.get("result") or {}).get("proxy") or "已选择健康出口",
+    )
+    return selected or None
+
+
 def _is_final_session_access_token_timeout(error: object) -> bool:
     """
     识别注册最后一步已经返回 /api/auth/session 200 但没有 accessToken 的失败。
@@ -364,6 +398,8 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             # 配置或依赖缺失时在领取邮箱前终止，避免无效任务占用邮箱池。
             from core.registration_driver_health import require_registration_driver_ready
             require_registration_driver_ready()
+            # 先确认健康出口，再领取邮箱；健康代理不足时不消耗邮箱池素材。
+            registration_proxy = _select_registration_proxy(job_id, log_logger)
             # 每个任务使用入队时固化的来源，避免执行期间被全局配置或其它批次串改。
             email, name, birthday = _prepare_registration_args(str(current.get("email_source") or "") or None)
             db.update_job(job_id, email=email)
@@ -372,8 +408,17 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             retry_limit = _registration_transient_retry_limit()
             for registration_attempt in range(0, retry_limit + 1):
                 check_stop_requested()
+                if registration_attempt > 0:
+                    registration_proxy = _select_registration_proxy(job_id, log_logger)
                 try:
-                    result = run_registration(email=email, name=name, birthday=birthday)
+                    registration_kwargs = {
+                        "email": email,
+                        "name": name,
+                        "birthday": birthday,
+                    }
+                    if registration_proxy:
+                        registration_kwargs["proxy"] = registration_proxy
+                    result = run_registration(**registration_kwargs)
                 except StopRequested:
                     raise
                 except Exception as exc:

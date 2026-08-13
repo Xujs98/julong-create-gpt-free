@@ -22,6 +22,18 @@ PROXY_POOL = [
 # 开启后，每次创建注册批次前检查代理池全部出口；失败项自动删除，至少一项可用即继续。
 PROXY_CHECK_BEFORE_REGISTRATION = False
 
+# 代理池预热/注册健康检查：通过代理访问注册入口并识别 Cloudflare 挑战页。
+# 预热按钮会按此数量保留干净出口；目标大于实际健康数量时保留全部健康项。
+PROXY_WARMUP_TARGET_CLEAN_IPS = 3
+PROXY_WARMUP_HEALTH_URL = "https://chatgpt.com/auth/login"
+PROXY_WARMUP_TIMEOUT = 12.0
+PROXY_WARMUP_WORKERS = 4
+
+# 开启后每个注册任务开始前选择一个未出现 Cloudflare 挑战的健康出口。
+PROXY_HEALTH_CHECK_BEFORE_REGISTRATION = False
+# 开启后健康检查/预热判定不健康的代理会从代理池配置中自动删除。
+PROXY_DELETE_UNHEALTHY_IPS = False
+
 # 套餐/Plus 试用资格查询与 Codex Agent Token 生成共用这组独立网络策略，
 # 避免批量请求被注册代理池中的临时本地代理拖垮，也避免无条件直连造成出口策略失控。
 #   auto   = 优先使用 PLAN_CHECK_PROXY 或代理池；本地代理端口未监听时回退直连
@@ -62,6 +74,12 @@ PROXY = pick_proxy()
 apply_env_overrides(globals(), {
     'PROXY_POOL': 'list_str_multiline',
     'PROXY_CHECK_BEFORE_REGISTRATION': 'bool',
+    'PROXY_WARMUP_TARGET_CLEAN_IPS': 'int',
+    'PROXY_WARMUP_HEALTH_URL': 'str',
+    'PROXY_WARMUP_TIMEOUT': 'float',
+    'PROXY_WARMUP_WORKERS': 'int',
+    'PROXY_HEALTH_CHECK_BEFORE_REGISTRATION': 'bool',
+    'PROXY_DELETE_UNHEALTHY_IPS': 'bool',
     'PLAN_CHECK_PROXY_MODE': 'str',
     'PLAN_CHECK_PROXY': 'str',
     'PLAN_CHECK_TIMEOUT': 'float',
