@@ -3552,25 +3552,59 @@ async function warmupProxyPoolLegacy() {
     $('#btnCancelWarmupProxyLegacy').hidden = false;
     $('#btnCancelWarmupProxyLegacy').disabled = false;
     openProxyWarmupLogModalLegacy();
-    await pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy);
+    const task = await pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy);
     clearInterval(proxyWarmupTimerLegacy);
-    proxyWarmupTimerLegacy = setInterval(() => pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy), 1000);
+    if (task && ['running', 'cancelling'].includes(task.status)) {
+      const taskId = activeProxyWarmupTaskLegacy;
+      proxyWarmupTimerLegacy = setInterval(() => pollProxyWarmupTaskLegacy(taskId), 1000);
+    }
     showToast('预热任务已启动');
   } catch(e) {
     status.innerHTML = `<span style="color:var(--red);">预热失败：${esc(e.message)}</span>`;
   } finally { btn.disabled = false; }
 }
 let proxyWarmupTimerLegacy = null, activeProxyWarmupTaskLegacy = null;
+const finalizedProxyWarmupTasksLegacy = new Set();
 async function pollProxyWarmupTaskLegacy(taskId) {
   try {
     const r = await api(`/api/proxy/warmup/${encodeURIComponent(taskId)}`);
     const task = r.task || {};
-    $('#proxyWarmupLogModalContentLegacy').innerHTML = renderProxyWarmupModalRowsLegacy(task);
-    $('#proxyWarmupLogMetaLegacy').textContent = `实时检查 ${task.completed || 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 失败 ${task.failed || 0}${task.status === 'completed' ? ' · 预热完成' : ''}`;
+    const isActive = ['running', 'cancelling'].includes(task.status);
+    const content = $('#proxyWarmupLogModalContentLegacy');
+    const meta = $('#proxyWarmupLogMetaLegacy');
+    if (content) content.innerHTML = renderProxyWarmupModalRowsLegacy(task);
+    if (meta) meta.textContent = isActive
+      ? `实时检查 ${task.completed || 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 失败 ${task.failed || 0}${task.status === 'cancelling' ? ' · 正在终止' : ''}`
+      : `已检查 ${task.checked_total ?? task.completed ?? task.total ?? 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 保留 ${task.retained ?? task.selected_clean_count ?? task.clean ?? 0} · 失败 ${task.failed || 0}`;
+    const status = $('#proxyWarmupStatusLegacy');
+    if (status && isActive) {
+      status.innerHTML = `<span style="color:var(--muted);">${task.status === 'cancelling' ? '正在终止预热' : '正在预热'}：已检查 ${task.completed || 0}/${task.total || 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 失败 ${task.failed || 0}</span>`;
+    }
     const cancelBtn = $('#btnCancelWarmupProxyLegacy');
-    if (cancelBtn) cancelBtn.hidden = !['running', 'cancelling'].includes(task.status);
-    if (task.status !== 'running' && task.status !== 'cancelling') { clearInterval(proxyWarmupTimerLegacy); proxyWarmupTimerLegacy = null; }
+    if (cancelBtn) cancelBtn.hidden = !isActive;
+    if (!isActive) {
+      clearInterval(proxyWarmupTimerLegacy);
+      proxyWarmupTimerLegacy = null;
+      if (!finalizedProxyWarmupTasksLegacy.has(taskId)) {
+        finalizedProxyWarmupTasksLegacy.add(taskId);
+        const finalStatus = task.status === 'completed'
+          ? `<span style="color:var(--green);">预热完成</span> · 已检查 ${task.checked_total ?? task.completed ?? task.total ?? 0} · 健康 ${task.healthy_total ?? task.available ?? 0} · 保留 ${task.retained ?? task.selected_clean_count ?? task.clean ?? 0} · 失败 ${task.failed || 0} · Cloudflare ${task.challenge_count || 0}${task.auto_delete ? ` · 自动删除 ${task.removed || 0}` : ''}`
+          : `<span style="color:var(--red);">${task.status === 'cancelled' ? '预热已终止' : '预热失败'}</span>${task.error ? `：${esc(task.error)}` : ''} · 已检查 ${task.completed || 0}/${task.total || 0}`;
+        if (task.auto_delete && Number(task.removed || 0) > 0) {
+          delete CONFIG_PENDING_UPDATES.PROXY_POOL;
+          await loadConfig();
+          showToast(`预热完成，已自动删除 ${Number(task.removed)} 个不健康代理，代理池已刷新`);
+        } else if (task.status === 'completed') {
+          showToast('代理池预热完成');
+        }
+        const finalStatusEl = $('#proxyWarmupStatusLegacy');
+        if (finalStatusEl) finalStatusEl.innerHTML = finalStatus;
+      }
+      if (activeProxyWarmupTaskLegacy === taskId) activeProxyWarmupTaskLegacy = null;
+    }
+    return task;
   } catch (_) {}
+  return null;
 }
 async function cancelProxyWarmupLegacy() {
   if (!activeProxyWarmupTaskLegacy) return;
@@ -3609,13 +3643,13 @@ function openProxyWarmupLogModalLegacy(log = null) {
   updateModalScrollLock();
   if (log) {
     $('#proxyWarmupLogModalContentLegacy').innerHTML = renderProxyWarmupModalRowsLegacy(log);
-    $('#proxyWarmupLogMetaLegacy').textContent = log.status === 'running'
+    $('#proxyWarmupLogMetaLegacy').textContent = ['running', 'cancelling'].includes(log.status)
       ? `实时检查 ${log.completed || 0}/${log.total || 0} · 健康 ${log.healthy_total ?? log.available ?? 0} · 失败 ${log.failed || 0}`
       : `已检查全部 ${log.checked_total ?? log.total ?? 0} 个代理 · 健康 ${log.healthy_total ?? log.available ?? 0} · 筛选保留 ${log.selected_clean_count ?? log.clean ?? 0} · 失败 ${log.failed || 0}`;
-    if (log.status === 'running' && log.task_id) {
+    if (['running', 'cancelling'].includes(log.status) && log.task_id) {
       activeProxyWarmupTaskLegacy = log.task_id;
       clearInterval(proxyWarmupTimerLegacy);
-      proxyWarmupTimerLegacy = setInterval(() => pollProxyWarmupTaskLegacy(activeProxyWarmupTaskLegacy), 1000);
+      proxyWarmupTimerLegacy = setInterval(() => pollProxyWarmupTaskLegacy(log.task_id), 1000);
     }
   } else {
     $('#proxyWarmupLogModalContentLegacy').textContent = '正在读取预热检查日志...';
