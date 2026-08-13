@@ -110,3 +110,21 @@ def test_live_refresh_automatically_queues_plan_recheck():
         trigger="live_check_refresh",
         proxy="PROXY",
     )
+
+
+def test_plan_query_enables_oaics_check_with_account_country():
+    account = {
+        "id": 1,
+        "email": "user@example.com",
+        "proxy_country_code": "US",
+    }
+    with patch("core.plan_check_service.check_account_plan", return_value={"ok": True}) as query:
+        plan_check_service._check_plan_with_account_context(
+            account,
+            "TOKEN",
+            proxy="PROXY",
+            timezone_offset_min="-",
+        )
+
+    assert query.call_args.kwargs["check_oaics"] is True
+    assert query.call_args.kwargs["billing_country"] == "US"

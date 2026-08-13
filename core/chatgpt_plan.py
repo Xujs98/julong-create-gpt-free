@@ -14,10 +14,12 @@ from urllib.parse import quote, urlparse
 
 from core.session import BrowserSession
 from core.proxy_utils import rotate_proxy_session
+from core.oaics_checker import detect_oaics_checkout
 
 logger = logging.getLogger(__name__)
 
 ACCOUNTS_CHECK_PATH = "/backend-api/accounts/check/v4-2023-04-27"
+CHECKOUT_PATH = "/backend-api/payments/checkout"
 
 
 def now_iso() -> str:
@@ -202,6 +204,88 @@ def _common_headers(
     return headers
 
 
+def _checkout_headers(
+    env: BrowserSession,
+    token: str,
+    *,
+    account_id: str | None = None,
+    device_id: str | None = None,
+) -> dict[str, str]:
+    headers = _common_headers(
+        env,
+        token,
+        account_id=account_id,
+        device_id=device_id,
+    )
+    headers.update({
+        "origin": "https://chatgpt.com",
+        "x-openai-target-path": CHECKOUT_PATH,
+        "x-openai-target-route": CHECKOUT_PATH,
+    })
+    return headers
+
+
+def check_oaics_eligibility(
+    env: BrowserSession,
+    token: str,
+    *,
+    account_id: str | None = None,
+    device_id: str | None = None,
+    billing_country: str = "",
+    promo_campaign_id: str | None = None,
+    timeout: float = 15.0,
+) -> dict[str, Any]:
+    """Create a checkout session and classify its OAICS/Stripe session prefix."""
+    checked_at = now_iso()
+    payload = {
+        "plan_name": "chatgptplusplan",
+        "team_plan_data": None,
+        "billing_interval": "month",
+        "promo_campaign_id": promo_campaign_id or None,
+        "checkout_ui_mode": "embedded",
+    }
+    resp = None
+    try:
+        resp = env.post(
+            f"https://chatgpt.com{CHECKOUT_PATH}",
+            headers=_checkout_headers(
+                env,
+                token,
+                account_id=account_id,
+                device_id=device_id,
+            ),
+            json=payload,
+            allow_redirects=False,
+            timeout=timeout,
+        )
+        http_status = int(resp.status_code)
+        if not 200 <= http_status < 300:
+            return {
+                "oaics_check_status": "failed",
+                "oaics_checked_at": checked_at,
+                "oaics_check_http_status": http_status,
+                "oaics_check_error": f"OAICS checkout HTTP {http_status}",
+            }
+        data = resp.json()
+        detected = detect_oaics_checkout(data, billing_country=billing_country)
+        return {
+            "oaics_check_status": "success",
+            "oaics_checked_at": checked_at,
+            "oaics_check_http_status": http_status,
+            "oaics_eligible": bool(detected["is_oaics"]),
+            "oaics_session_kind": detected["session_kind"],
+            "oaics_processor_entity": detected["processor_entity"],
+            "oaics_check_error": None,
+        }
+    except Exception as exc:
+        return {
+            "oaics_check_status": "failed",
+            "oaics_checked_at": checked_at,
+            "oaics_check_http_status": int(resp.status_code) if resp is not None else None,
+            "oaics_check_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+        }
+
+
 def _restore_plan_session_context(
     env: BrowserSession,
     *,
@@ -364,6 +448,8 @@ def check_account_plan(
     device_id: str | None = None,
     session_cookies: list[dict] | None = None,
     session: BrowserSession | None = None,
+    billing_country: str = "",
+    check_oaics: bool = False,
 ) -> dict:
     token = normalize_token(token)
     if not token:
@@ -478,6 +564,22 @@ def check_account_plan(
                     parsed["request_timeout"] = timeout_seconds
                     parsed["retryable"] = False
                     parsed.update(route_meta)
+                    if check_oaics and str(parsed.get("current_plan_type") or "").lower() == "free":
+                        parsed.update(check_oaics_eligibility(
+                            env,
+                            token,
+                            account_id=account_id,
+                            device_id=device_id,
+                            billing_country=billing_country,
+                            promo_campaign_id=parsed.get("plus_trial_campaign_id"),
+                            timeout=timeout_seconds,
+                        ))
+                    elif check_oaics:
+                        parsed.update({
+                            "oaics_check_status": "skipped",
+                            "oaics_checked_at": now_iso(),
+                            "oaics_check_error": None,
+                        })
                     return parsed
         except Exception as exc:
             logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)

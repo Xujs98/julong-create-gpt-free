@@ -291,6 +291,7 @@
     .accounts-table .sub-cell { margin-top: 1px; font-size: 11px; }
     .accounts-table .mono { font-size: 11px; }
     .accounts-table .pill { min-width: auto; padding: 2px 6px; font-size: 11px; }
+    .accounts-table .account-plan-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
     .accounts-table .actions { gap: 4px; }
     .accounts-table .actions button { min-height: 24px; padding: 0 7px; font-size: 11px; border-radius: 5px; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
 
@@ -590,7 +591,7 @@
     <section class="card">
       <div class="toolbar accounts-toolbar">
         <div class="accounts-topbar">
-          <div class="search"><input id="qAccounts" placeholder="搜索邮箱、Token、来源；&& 联合，! 排除" title="联合搜索示例：!free；free(可Plus试用)&&[2FA]；free&&![2FA]；[提链]&&[2FA]。状态：[2FA] [无2FA] [提链] [未提链] [接码] [Token] [Codex] [Agent] [归档] [查活正常] [查活失败] [套餐查询失败]；!**free 兼容 Markdown 星号"></div>
+          <div class="search"><input id="qAccounts" placeholder="搜索邮箱、Token、来源；&& 联合，! 排除" title="联合搜索示例：!free；free(可Plus试用)&&[2FA]；free&&![2FA]；[提链]&&[2FA]。状态：[oaics] [2FA] [无2FA] [提链] [未提链] [接码] [Token] [Codex] [Agent] [归档] [查活正常] [查活失败] [套餐查询失败]；!**free 兼容 Markdown 星号"></div>
           <div class="account-filter-strip btn-group">
             <span class="muted selected-hint" id="accountsSelectedHint">已选 0</span>
             <label class="inline-num" title="批量补跑 Codex 的并发线程数">线程
@@ -1530,6 +1531,9 @@ function _planHoverMarkup(r) {
     _planHoverItem('活动标识', r.discount_promo_campaign_id, true),
     _planHoverItem('购买渠道', r.last_purchase_origin_platform),
     _planHoverItem('查询时间', _fmtPlanTime(r.plan_checked_at, false)),
+    _planHoverItem('OAICS资格', r.oaics_check_status === 'success' ? (r.oaics_eligible ? '有 · [oaics]' : '无') : (r.oaics_check_status === 'failed' ? `检测失败${r.oaics_check_error ? ` · ${r.oaics_check_error}` : ''}` : '未检测')),
+    _planHoverItem('OAICS检测时间', _fmtPlanTime(r.oaics_checked_at, false)),
+    _planHoverItem('OAICS处理实体', r.oaics_processor_entity),
     _planHoverItem('网络路径', _planNetworkLabel(r), true),
   ].filter(Boolean).join('');
   return `<div class="plan-hover-head"><div><div class="plan-hover-name">${esc(plan)}</div><div class="plan-hover-sub">账号 #${esc(r.id)} · 完整套餐信息</div></div><span class="plan-hover-state${active ? '' : ' is-off'}">${statusText}</span></div><div class="plan-hover-grid">${rows || _planHoverItem('套餐详情', '暂无更多信息', true)}</div>`;
@@ -1602,6 +1606,15 @@ function _hidePlanHoverCard() {
   window.addEventListener('scroll', _hidePlanHoverCard, true);
   window.addEventListener('resize', _hidePlanHoverCard);
 })();
+function _oaicsBadge(r) {
+  if (!(r.oaics_eligible === true)) return '';
+  const detail = [
+    'OAICS资格已确认',
+    r.oaics_checked_at ? `检测: ${r.oaics_checked_at}` : '',
+    r.oaics_processor_entity ? `处理实体: ${r.oaics_processor_entity}` : '',
+  ].filter(Boolean).join('；');
+  return `<span class="pill status-success" title="${esc(detail)}">[oaics]</span>`;
+}
 function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
@@ -1775,7 +1788,7 @@ function renderAccounts() {
       <td>${esc(r.email_source || '-')}</td>
       <td class="col-registration">${_accountRegistrationMethodCell(r)}</td>
       <td><div class="account-token-actions">${r.has_access_token || r.has_session ? `${r.has_access_token ? `<button type="button" class="account-token-copy" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" title="复制完整 access token">AT</button>` : ''}${r.has_session ? `<button type="button" class="account-token-copy session" data-account-copy-secret="session" data-account-id="${esc(r.id)}" title="复制已保存的完整 Session">Session</button>` : ''}` : '<span class="muted">无AT</span>'}</div>${_liveStatusSub(r)}</td>
-      <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
+      <td><div class="account-plan-line">${_planCell(r)}${_oaicsBadge(r)}</div><div class="sub-cell">${_extractLinkCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
       <td>${_accountTotpCell(r)}</td>
       <td>${_codexCell(r)}</td>

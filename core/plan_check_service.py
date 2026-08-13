@@ -77,6 +77,8 @@ def _check_plan_with_account_context(
         account_id=str(account.get("account_id") or "") or None,
         device_id=str(account.get("device_id") or "") or None,
         session_cookies=list(saved_session.get("cookies") or []),
+        billing_country=str(account.get("proxy_country_code") or ""),
+        check_oaics=True,
     )
 
 
@@ -182,6 +184,8 @@ def _run_plan_check(
                 account_id=str(account.get("account_id") or "") or None,
                 device_id=str(account.get("device_id") or "") or None,
                 session_cookies=list((extract_saved_session(account) or {}).get("cookies") or []),
+                billing_country=str(account.get("proxy_country_code") or ""),
+                check_oaics=True,
             )
             if recheck_result.get("ok"):
                 result = recheck_result

@@ -31,6 +31,20 @@ def _plus_payload(account_id="account-1"):
     }
 
 
+def _free_payload(account_id="account-1"):
+    return {
+        "accounts": {
+            account_id: {
+                "account": {"account_id": account_id, "plan_type": "free"},
+                "entitlement": {
+                    "subscription_plan": "chatgptfreeplan",
+                    "has_active_subscription": False,
+                },
+            }
+        }
+    }
+
+
 def test_plan_headers_include_account_id_and_saved_device():
     env = SimpleNamespace(
         device_id="random-device",
@@ -77,6 +91,57 @@ def test_plan_query_reuses_saved_session_context_and_parses_plus():
     assert headers["oai-device-id"] == "saved-device"
     env.session.cookies.set.assert_any_call("sid", "COOKIE", domain=".chatgpt.com", path="/", secure=False)
     env.session.close.assert_called_once()
+
+
+def test_free_plan_query_checks_oaics_checkout_session_prefix():
+    env = SimpleNamespace(
+        device_id="saved-device",
+        proxy="PROXY",
+        session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
+        get_chatgpt_headers=lambda **_kwargs: {},
+        navigator_language=lambda: "zh-CN",
+        get=MagicMock(return_value=_Response(_free_payload())),
+        post=MagicMock(return_value=_Response({"checkout_session_id": "oaics_test"})),
+    )
+    with patch("core.chatgpt_plan.BrowserSession", return_value=env):
+        result = chatgpt_plan.check_account_plan(
+            "TOKEN",
+            proxy="PROXY",
+            account_id="account-1",
+            device_id="saved-device",
+            billing_country="US",
+            check_oaics=True,
+            max_attempts=1,
+        )
+
+    assert result["ok"] is True
+    assert result["oaics_check_status"] == "success"
+    assert result["oaics_eligible"] is True
+    assert result["oaics_session_kind"] == "oaics"
+    assert result["oaics_processor_entity"] == "openai_llc"
+    checkout = env.post.call_args
+    assert checkout.args[0].endswith("/backend-api/payments/checkout")
+    assert checkout.kwargs["json"]["plan_name"] == "chatgptplusplan"
+
+
+def test_free_plan_keeps_plan_success_when_oaics_check_fails():
+    failed = _Response({"error": "blocked"})
+    failed.status_code = 403
+    env = SimpleNamespace(
+        device_id="saved-device",
+        proxy="PROXY",
+        session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
+        get_chatgpt_headers=lambda **_kwargs: {},
+        navigator_language=lambda: "zh-CN",
+        get=MagicMock(return_value=_Response(_free_payload())),
+        post=MagicMock(return_value=failed),
+    )
+    with patch("core.chatgpt_plan.BrowserSession", return_value=env):
+        result = chatgpt_plan.check_account_plan("TOKEN", proxy="PROXY", check_oaics=True, max_attempts=1)
+
+    assert result["ok"] is True
+    assert result["oaics_check_status"] == "failed"
+    assert "403" in result["oaics_check_error"]
 
 
 def test_http_401_reports_backend_auth_failure_for_live_refresh():

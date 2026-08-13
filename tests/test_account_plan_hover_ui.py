@@ -63,3 +63,10 @@ def test_account_list_keeps_complete_paid_plan_hover_fields():
     for key, value in row.items():
         if key not in {"id", "email"}:
             assert compact[key] == value
+
+
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_plan_cell_displays_oaics_badge(template):
+    source = template.read_text(encoding="utf-8")
+    assert "[oaics]" in source
+    assert "r.oaics_eligible === true" in source

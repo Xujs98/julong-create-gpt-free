@@ -1571,6 +1571,18 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
             row["plus_trial_duration_num_periods"] = result.get("plus_trial_duration_num_periods")
             row["plus_trial_duration_period"] = result.get("plus_trial_duration_period")
             row["eligible_offer_ids"] = result.get("eligible_offer_ids") or []
+            row["oaics_check_status"] = result.get("oaics_check_status") or "skipped"
+            row["oaics_checked_at"] = result.get("oaics_checked_at")
+            row["oaics_check_http_status"] = result.get("oaics_check_http_status")
+            row["oaics_check_error"] = result.get("oaics_check_error")
+            if result.get("oaics_check_status") == "success":
+                row["oaics_eligible"] = bool(result.get("oaics_eligible"))
+                row["oaics_session_kind"] = result.get("oaics_session_kind")
+                row["oaics_processor_entity"] = result.get("oaics_processor_entity")
+            elif result.get("oaics_check_status") == "skipped":
+                row["oaics_eligible"] = False
+                row["oaics_session_kind"] = None
+                row["oaics_processor_entity"] = None
             row["plan_last_success_at"] = result.get("checked_at") or _now()
             row["plan_last_success_result_json"] = json.dumps(result, ensure_ascii=False)
         row["plan_check_proxy_mode"] = result.get("proxy_mode")
@@ -1753,6 +1765,10 @@ def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
 
     if str(row.get("plan_check_status") or "").lower() == "failed":
         status_aliases.extend(["套餐查询失败", "[套餐查询失败]"])
+    if row.get("oaics_eligible") is True:
+        status_aliases.extend(["oaics", "[oaics]"])
+    elif row.get("oaics_eligible") is False:
+        status_aliases.extend(["无oaics", "[无oaics]"])
     return plan_aliases, status_aliases
 
 
@@ -1881,6 +1897,8 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived", "link_completed", "sms_completed",
         "plan_type", "current_plan_type", "plus_trial_eligible",
+        "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_checked_at",
+        "oaics_session_kind", "oaics_processor_entity",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -1954,6 +1972,10 @@ def list_account_plan_check_statuses(
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
+                    "oaics_eligible": row.get("oaics_eligible"),
+                    "oaics_check_status": row.get("oaics_check_status"),
+                    "oaics_check_error": row.get("oaics_check_error"),
+                    "oaics_checked_at": row.get("oaics_checked_at"),
                     # 悬浮卡详情也纳入轻量轮询签名，避免同秒完成查询时沿用旧详情。
                     "subscription_plan": row.get("subscription_plan"),
                     "has_active_subscription": row.get("has_active_subscription"),

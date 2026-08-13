@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 
+from core import db
 from core.db import _account_matches_query
 
 
@@ -52,6 +54,12 @@ def test_plain_search_remains_case_insensitive():
     assert _account_matches_query(_row(), "ICLOUD")
 
 
+def test_oaics_status_alias_is_searchable():
+    assert _account_matches_query(_row(oaics_eligible=True), "[oaics]")
+    assert not _account_matches_query(_row(oaics_eligible=False), "[oaics]")
+    assert _account_matches_query(_row(oaics_eligible=False), "[无oaics]")
+
+
 def test_account_search_inputs_explain_formula_syntax():
     root = Path(__file__).parents[1]
     for relative in ("webui/templates/index.html", "webui/templates/index_legacy.html"):
@@ -63,6 +71,7 @@ def test_account_search_inputs_explain_formula_syntax():
         for label in (
             "[2FA]", "[无2FA]", "[提链]", "[未提链]", "[接码]", "[Token]",
             "[Codex]", "[Agent]", "[归档]", "[查活正常]", "[查活失败]", "[套餐查询失败]",
+            "[oaics]",
         ):
             assert label in source
         assert "!**free" in source
@@ -82,6 +91,28 @@ def test_account_search_supports_all_documented_status_aliases():
         ("[查活正常]", {"live_check_ok": True}),
         ("[查活失败]", {"live_check_ok": False}),
         ("[套餐查询失败]", {"plan_check_status": "failed"}),
+        ("[oaics]", {"oaics_eligible": True}),
     ]
     for query, options in cases:
         assert _account_matches_query(_row(**options), query), query
+
+
+def test_plan_update_persists_oaics_qualification(monkeypatch):
+    accounts = [_row(oaics_eligible=False)]
+    monkeypatch.setattr(db, "_load_accounts", lambda: accounts)
+    monkeypatch.setattr(db, "_save_accounts", lambda rows: None)
+
+    assert db.update_account_plan_check(acc_id=1, result={
+        "ok": True,
+        "checked_at": "2026-08-13T12:00:00",
+        "current_plan_type": "free",
+        "oaics_check_status": "success",
+        "oaics_checked_at": "2026-08-13T12:00:01",
+        "oaics_eligible": True,
+        "oaics_session_kind": "oaics",
+        "oaics_processor_entity": "openai_llc",
+    })
+
+    assert accounts[0]["oaics_eligible"] is True
+    assert accounts[0]["oaics_session_kind"] == "oaics"
+    assert json.loads(accounts[0]["plan_check_result_json"])["oaics_eligible"] is True
