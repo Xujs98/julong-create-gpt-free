@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from config import cloakbrowser as _cfg
+from config import proxy as _proxy_cfg
 from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, setup_2fa_from_browser
 from core.cloakbrowser_driver import build_cloak_driver
@@ -27,11 +28,26 @@ from core.roxy_registration import (  # noqa: F401
     _require_password_if_enabled, _create_password_enabled,
     _registration_password, _has_access_token, _is_email_verification_page,
     _is_login_password_page, _is_signup_password_page, _page_snapshot, _is_profile_like,
+    _cloudflare_challenge_state,
 )
 
 logger = logging.getLogger(__name__)
 
 _CLOAK_LOGIN_URL = "https://chatgpt.com/auth/login"
+_BROWSER_PROXY_CHALLENGE_MARKER = "BrowserProxyChallenge"
+
+
+def _reject_initial_browser_proxy_challenge(driver, proxy: str | None) -> None:
+    """真实浏览器入口出现挑战时立即把当前出口交给任务层轮换。"""
+    actual_proxy = str(getattr(driver, "upstream_proxy_url", None) or proxy or "").strip()
+    if not actual_proxy or not bool(getattr(_proxy_cfg, "PROXY_BROWSER_CHALLENGE_AUTO_ROTATE", True)):
+        return
+    state = _cloudflare_challenge_state(driver)
+    if state.get("challenge"):
+        raise RuntimeError(
+            f"{_BROWSER_PROXY_CHALLENGE_MARKER}: Cloudflare 人机验证："
+            "真实指纹浏览器出口触发挑战，立即淘汰并自动换代理"
+        )
 
 
 def _is_transient_cloak_error(error: object) -> bool:
@@ -451,6 +467,7 @@ def _run_cloak_registration_impl(
         logger.info("[Cloak注册] 打开登录页：%s", _CLOAK_LOGIN_URL)
         _safe_cloak_get(driver, _CLOAK_LOGIN_URL)
         human_delay("navigate")
+        _reject_initial_browser_proxy_challenge(driver, proxy)
         _wait_for_cloudflare_challenge(
             driver,
             timeout=int(getattr(_cfg, "CLOAK_CHALLENGE_TIMEOUT", 300) or 300),
@@ -767,12 +784,18 @@ def _run_cloak_registration_impl(
             keep_browser_on_error = False
         if keep_browser_on_error:
             logger.warning("[Cloak注册] 已保留浏览器窗口供检查；关闭窗口后再开始下一条任务")
-        try:
-            from core.email_provider import release_email
-            release_email(email, status="failed" if create_acknowledged else "available", note=f"Cloak注册失败: {str(exc)[:180]}")
-        except Exception:
-            pass
-        return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        if _BROWSER_PROXY_CHALLENGE_MARKER not in str(exc):
+            try:
+                from core.email_provider import release_email
+                release_email(email, status="failed" if create_acknowledged else "available", note=f"Cloak注册失败: {str(exc)[:180]}")
+            except Exception:
+                pass
+        result = {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        if _BROWSER_PROXY_CHALLENGE_MARKER in str(exc):
+            result["_failed_proxy_url"] = str(
+                proxy or getattr(driver, "upstream_proxy_url", None) or ""
+            ).strip()
+        return result
     finally:
         if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN) and not keep_browser_on_error:
             try:
@@ -810,6 +833,8 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
             headless_override=headless_override,
         )
         last_result = result if isinstance(result, dict) else {"success": False, "error": str(result)}
+        if _BROWSER_PROXY_CHALLENGE_MARKER in str(last_result.get("error") or ""):
+            return last_result
         if last_result.get("success") or not _is_transient_cloak_error(last_result.get("error")) or attempt >= retry_limit:
             return last_result
         logger.warning(

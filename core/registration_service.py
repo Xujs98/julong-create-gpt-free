@@ -145,15 +145,68 @@ def _release_unconsumed_job_email(email: str | None, reason: str) -> None:
         logger.exception("[Service] 回收未消耗邮箱失败: %s", email)
 
 
-def _select_registration_proxy(job_id: int, log_logger: logging.Logger) -> str | None:
+def _proxy_identity(proxy: str | None) -> str:
+    """统一 socks5/socks5h 表示，确保浏览器反馈能对应回代理池原项。"""
+    from urllib.parse import urlsplit, urlunsplit
+    from core.proxy_utils import normalize_proxy_url
+
+    try:
+        normalized = str(normalize_proxy_url(proxy, default_scheme="auto") or "").strip()
+        parsed = urlsplit(normalized)
+        scheme = "socks5h" if parsed.scheme.lower() == "socks5" else parsed.scheme.lower()
+        return urlunsplit((scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        return str(proxy or "").strip()
+
+
+def _delete_proxies_from_pool(proxy_urls: set[str]) -> int:
+    """在同一写锁内读取并删除，避免并发任务把已淘汰代理重新写回。"""
+    identities = {_proxy_identity(item) for item in proxy_urls if str(item or "").strip()}
+    if not identities:
+        return 0
+    from config import proxy as _proxy_cfg
+    from core.proxy_test import _PROXY_POOL_WRITE_LOCK, persist_proxy_pool
+
+    with _PROXY_POOL_WRITE_LOCK:
+        current = list(getattr(_proxy_cfg, "PROXY_POOL", []) or [])
+        retained = [item for item in current if _proxy_identity(item) not in identities]
+        removed = len(current) - len(retained)
+        if removed:
+            persist_proxy_pool(retained)
+        return removed
+
+
+def _select_registration_proxy(
+    job_id: int,
+    log_logger: logging.Logger,
+    *,
+    excluded_proxies: set[str] | None = None,
+) -> str | None:
     """按配置检查并选择本次注册出口。"""
     from config import proxy as _proxy_cfg
 
-    if not bool(getattr(_proxy_cfg, "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", False)):
+    health_check_enabled = bool(
+        getattr(_proxy_cfg, "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", False)
+    )
+    if not health_check_enabled and not excluded_proxies:
         return None
-    from core.proxy_test import choose_healthy_proxy, persist_proxy_pool
+    from core.proxy_test import choose_healthy_proxy
 
-    proxy_pool = list(getattr(_proxy_cfg, "PROXY_POOL", []) or [])
+    excluded = excluded_proxies or set()
+    excluded_identities = {_proxy_identity(item) for item in excluded}
+    proxy_pool_all = list(getattr(_proxy_cfg, "PROXY_POOL", []) or [])
+    proxy_pool = [
+        item for item in proxy_pool_all
+        if _proxy_identity(item) not in excluded_identities
+    ]
+    if not health_check_enabled:
+        if not proxy_pool:
+            raise RuntimeError("真实浏览器触发验证后，代理池没有剩余可轮换出口")
+        import random
+
+        selected = random.choice(proxy_pool)
+        log_logger.info("[Job %s] 已绕过触发验证的出口并随机换用剩余代理", job_id)
+        return selected
     selection = choose_healthy_proxy(
         proxy_pool,
         timeout=getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0),
@@ -162,6 +215,7 @@ def _select_registration_proxy(job_id: int, log_logger: logging.Logger) -> str |
         anonymity_url=getattr(_proxy_cfg, "PROXY_WARMUP_ANONYMITY_URL", ""),
         min_clean_score=getattr(_proxy_cfg, "PROXY_WARMUP_MIN_CLEAN_SCORE", 80),
         max_latency=getattr(_proxy_cfg, "PROXY_WARMUP_MAX_LATENCY", 8.0),
+        exit_samples=getattr(_proxy_cfg, "PROXY_WARMUP_EXIT_SAMPLES", 3),
     )
     if bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)):
         unhealthy = {
@@ -170,8 +224,8 @@ def _select_registration_proxy(job_id: int, log_logger: logging.Logger) -> str |
             if item.get("proxy_url") and not item.get("healthy") and item.get("removable", True)
         }
         if unhealthy:
-            persist_proxy_pool([item for item in proxy_pool if item not in unhealthy])
-            log_logger.warning("[Job %s] 已自动删除不健康代理：%s 个", job_id, len(unhealthy))
+            removed = _delete_proxies_from_pool(unhealthy)
+            log_logger.warning("[Job %s] 已自动删除不健康代理：%s 个", job_id, removed)
     if not selection.get("ok"):
         raise RuntimeError("注册前健康检查失败：代理池没有可用健康出口")
     selected = str(selection.get("proxy_url") or "").strip()
@@ -181,6 +235,34 @@ def _select_registration_proxy(job_id: int, log_logger: logging.Logger) -> str |
         (selection.get("result") or {}).get("proxy") or "已选择健康出口",
     )
     return selected or None
+
+
+def _is_browser_proxy_challenge(error: object) -> bool:
+    return "BrowserProxyChallenge" in str(error or "")
+
+
+def _quarantine_browser_challenged_proxy(
+    proxy: str | None,
+    excluded_proxies: set[str],
+    job_id: int,
+    log_logger: logging.Logger,
+) -> None:
+    """任务内禁用真实浏览器触发挑战的出口，并按配置从代理池删除。"""
+    value = str(proxy or "").strip()
+    if not value:
+        return
+    excluded_proxies.add(value)
+    from config import proxy as _proxy_cfg
+
+    deleted = False
+    if bool(getattr(_proxy_cfg, "PROXY_DELETE_UNHEALTHY_IPS", False)):
+        deleted = bool(_delete_proxies_from_pool({value}))
+    log_logger.warning(
+        "[Job %s] 真实浏览器确认当前出口触发人机验证，已%s并在本任务禁用：proxy=%s",
+        job_id,
+        "从代理池删除" if deleted else "隔离",
+        "已脱敏",
+    )
 
 
 def _is_final_session_access_token_timeout(error: object) -> bool:
@@ -403,7 +485,10 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             from core.registration_driver_health import require_registration_driver_ready
             require_registration_driver_ready()
             # 先确认健康出口，再领取邮箱；健康代理不足时不消耗邮箱池素材。
-            registration_proxy = _select_registration_proxy(job_id, log_logger)
+            excluded_proxies: set[str] = set()
+            registration_proxy = _select_registration_proxy(
+                job_id, log_logger, excluded_proxies=excluded_proxies
+            )
             # 每个任务使用入队时固化的来源，避免执行期间被全局配置或其它批次串改。
             email, name, birthday = _prepare_registration_args(str(current.get("email_source") or "") or None)
             db.update_job(job_id, email=email)
@@ -413,7 +498,9 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             for registration_attempt in range(0, retry_limit + 1):
                 check_stop_requested()
                 if registration_attempt > 0:
-                    registration_proxy = _select_registration_proxy(job_id, log_logger)
+                    registration_proxy = _select_registration_proxy(
+                        job_id, log_logger, excluded_proxies=excluded_proxies
+                    )
                 try:
                     registration_kwargs = {
                         "email": email,
@@ -427,11 +514,14 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     raise
                 except Exception as exc:
                     transient_error = f"{type(exc).__name__}: {exc}"
+                    if _is_browser_proxy_challenge(transient_error):
+                        _quarantine_browser_challenged_proxy(
+                            registration_proxy, excluded_proxies, job_id, log_logger
+                        )
                     if registration_attempt >= retry_limit or not _is_transient_registration_failure(transient_error):
                         raise
-                    _release_unconsumed_job_email(email, transient_error)
                     log_logger.warning(
-                        "[Job %s] 注册瞬态异常，准备重建浏览器/出口后重试：attempt=%s/%s error=%s",
+                        "[Job %s] 注册瞬态异常，保留当前邮箱领取并准备重建浏览器/出口后重试：attempt=%s/%s error=%s",
                         job_id,
                         registration_attempt + 1,
                         retry_limit,
@@ -443,6 +533,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 if isinstance(result, dict) and result.get("success"):
                     break
                 error_text = (result or {}).get("error") if isinstance(result, dict) else "unknown"
+                if _is_browser_proxy_challenge(error_text):
+                    _quarantine_browser_challenged_proxy(
+                        (result or {}).get("_failed_proxy_url") or registration_proxy,
+                        excluded_proxies,
+                        job_id,
+                        log_logger,
+                    )
                 has_account = bool((result or {}).get("account_id")) if isinstance(result, dict) else False
                 if (
                     registration_attempt >= retry_limit
@@ -450,9 +547,8 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     or not _is_transient_registration_failure(error_text)
                 ):
                     break
-                _release_unconsumed_job_email(email, str(error_text))
                 log_logger.warning(
-                    "[Job %s] 注册瞬态失败，准备重建浏览器/出口后重试：attempt=%s/%s error=%s",
+                    "[Job %s] 注册瞬态失败，保留当前邮箱领取并准备重建浏览器/出口后重试：attempt=%s/%s error=%s",
                     job_id,
                     registration_attempt + 1,
                     retry_limit,

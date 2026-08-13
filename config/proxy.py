@@ -30,11 +30,15 @@ PROXY_WARMUP_REPUTATION_URL = "https://us.ipapi.is/?q={ip}"
 PROXY_WARMUP_ANONYMITY_URL = "https://echo.free.beeceptor.com,https://httpbin.io/get"
 PROXY_WARMUP_MIN_CLEAN_SCORE = 80
 PROXY_WARMUP_MAX_LATENCY = 8.0
+PROXY_WARMUP_EXIT_SAMPLES = 3
 PROXY_WARMUP_TIMEOUT = 12.0
 PROXY_WARMUP_WORKERS = 4
 
 # 开启后每个注册任务开始前选择一个通过多维干净度检查的健康出口。
 PROXY_HEALTH_CHECK_BEFORE_REGISTRATION = False
+# 真实指纹浏览器打开注册入口仍出现人机验证时，立即淘汰本次代理并换下一个，
+# 不在已判定不可靠的出口上继续等待人工验证。
+PROXY_BROWSER_CHALLENGE_AUTO_ROTATE = True
 # 开启后健康检查/预热判定不健康的代理会从代理池配置中自动删除。
 PROXY_DELETE_UNHEALTHY_IPS = False
 
@@ -84,9 +88,11 @@ apply_env_overrides(globals(), {
     'PROXY_WARMUP_ANONYMITY_URL': 'str',
     'PROXY_WARMUP_MIN_CLEAN_SCORE': 'int',
     'PROXY_WARMUP_MAX_LATENCY': 'float',
+    'PROXY_WARMUP_EXIT_SAMPLES': 'int',
     'PROXY_WARMUP_TIMEOUT': 'float',
     'PROXY_WARMUP_WORKERS': 'int',
     'PROXY_HEALTH_CHECK_BEFORE_REGISTRATION': 'bool',
+    'PROXY_BROWSER_CHALLENGE_AUTO_ROTATE': 'bool',
     'PROXY_DELETE_UNHEALTHY_IPS': 'bool',
     'PLAN_CHECK_PROXY_MODE': 'str',
     'PLAN_CHECK_PROXY': 'str',

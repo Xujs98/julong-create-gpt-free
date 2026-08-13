@@ -434,6 +434,84 @@ def test_cloak_navigation_accepts_timeout_when_target_dom_is_ready():
     driver.get.assert_called_once()
 
 
+def test_initial_real_browser_challenge_rejects_proxy_immediately():
+    driver = Mock(upstream_proxy_url="http://proxy.test:8080")
+    with patch.object(
+        cloakbrowser_registration._proxy_cfg,
+        "PROXY_BROWSER_CHALLENGE_AUTO_ROTATE",
+        True,
+    ), patch(
+        "core.cloakbrowser_registration._cloudflare_challenge_state",
+        return_value={"challenge": True},
+    ):
+        try:
+            cloakbrowser_registration._reject_initial_browser_proxy_challenge(
+                driver, "http://proxy.test:8080"
+            )
+        except RuntimeError as exc:
+            assert "BrowserProxyChallenge" in str(exc)
+            assert "自动换代理" in str(exc)
+        else:
+            raise AssertionError("real-browser challenge must reject the current proxy")
+
+
+def test_initial_real_browser_challenge_keeps_manual_wait_when_auto_rotate_disabled():
+    driver = Mock(upstream_proxy_url="http://proxy.test:8080")
+    with patch.object(
+        cloakbrowser_registration._proxy_cfg,
+        "PROXY_BROWSER_CHALLENGE_AUTO_ROTATE",
+        False,
+    ), patch("core.cloakbrowser_registration._cloudflare_challenge_state") as challenge_state:
+        cloakbrowser_registration._reject_initial_browser_proxy_challenge(
+            driver, "http://proxy.test:8080"
+        )
+
+    challenge_state.assert_not_called()
+
+
+def test_cloak_initial_challenge_returns_actual_auto_selected_proxy_to_service():
+    driver = Mock(upstream_proxy_url="socks5h://user:pass@proxy.test:1080")
+    opened = Mock(profile_id="cloak-test", raw={})
+    with patch(
+        "core.cloakbrowser_registration.build_cloak_driver",
+        return_value=(driver, opened),
+    ), patch.object(cloakbrowser_registration._cfg, "CLOAK_ENABLE_AGENT", False), patch.object(
+        cloakbrowser_registration._cfg, "CLOAK_KEEP_BROWSER_OPEN_ON_ERROR", False
+    ), patch.object(
+        cloakbrowser_registration._cfg, "CLOAK_KEEP_BROWSER_OPEN", False
+    ), patch(
+        "core.cloakbrowser_registration._safe_cloak_get"
+    ), patch(
+        "core.cloakbrowser_registration.human_delay"
+    ), patch(
+        "core.cloakbrowser_registration._reject_initial_browser_proxy_challenge",
+        side_effect=RuntimeError("BrowserProxyChallenge: Cloudflare 人机验证"),
+    ):
+        result = cloakbrowser_registration._run_cloak_registration_impl(
+            "user@example.test", "Test User", "1990-01-01", proxy=None
+        )
+
+    assert result["success"] is False
+    assert result["_failed_proxy_url"] == "socks5h://user:pass@proxy.test:1080"
+    driver.quit.assert_called_once()
+
+
+def test_cloak_browser_proxy_challenge_returns_to_service_without_same_proxy_retry():
+    failed = {
+        "success": False,
+        "error": "RuntimeError: BrowserProxyChallenge: Cloudflare 人机验证",
+    }
+    with patch.object(cloakbrowser_registration._cfg, "CLOAK_NAVIGATION_RETRIES", 3), patch(
+        "core.cloakbrowser_registration._run_in_isolated_thread", return_value=failed
+    ) as run_once:
+        result = cloakbrowser_registration.run_cloak_registration(
+            "user@example.test", "Test User", "1990-01-01", proxy="http://proxy.test:8080"
+        )
+
+    assert result == failed
+    run_once.assert_called_once()
+
+
 def test_email_entry_falls_back_to_welcome_login_anchor():
     from core.roxy_registration import _click_email_entry_option
 

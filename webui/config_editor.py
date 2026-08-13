@@ -617,6 +617,10 @@ EDITABLE_FIELDS = [
         "label": "最大可接受延迟(秒)", "help": "业务入口响应超过该时间判定健康度不通过；用于过滤虽然能连接但质量过差的出口",
     },
     {
+        "key": "PROXY_WARMUP_EXIT_SAMPLES", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "出口稳定性采样次数", "help": "同一代理连续建立多次新连接并核对出口 IP；出现不同出口说明是按连接轮换代理，无法保证注册时仍使用预热通过的 IP",
+    },
+    {
         "key": "PROXY_WARMUP_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
         "label": "预热单代理超时(秒)", "help": "出口 IP 与注册入口健康探测的单代理超时",
     },
@@ -627,6 +631,10 @@ EDITABLE_FIELDS = [
     {
         "key": "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
         "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前执行多维干净度检查并选择通过项；不会改变注册方式配置",
+    },
+    {
+        "key": "PROXY_BROWSER_CHALLENGE_AUTO_ROTATE", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "浏览器遇验证自动换IP", "help": "真实指纹浏览器打开注册页仍出现 Cloudflare 人机验证时，立即关闭当前窗口、淘汰该代理并换下一个，不再原地等待人工验证",
     },
     {
         "key": "PROXY_DELETE_UNHEALTHY_IPS", "file": "proxy.py", "type": "bool", "group": "代理池",

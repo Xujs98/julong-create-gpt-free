@@ -225,6 +225,22 @@ def _request_json(session: Session, url: str, *, timeout: float) -> tuple[dict, 
     return payload, elapsed
 
 
+def _sample_proxy_exits(proxy_url: str, *, timeout: float, samples: int) -> tuple[dict, list[str]]:
+    """用彼此独立的新连接采样出口，识别按连接轮换的代理入口。"""
+    sample_count = max(1, min(5, int(samples or 1)))
+    first_result: dict | None = None
+    exits: list[str] = []
+    for _ in range(sample_count):
+        result = test_proxy(proxy_url, timeout=timeout)
+        if first_result is None:
+            first_result = result
+        exit_ip = str(result.get("ip") or "").strip()
+        if not exit_ip:
+            raise ProxyTestError("出口稳定性采样未返回 IP")
+        exits.append(exit_ip)
+    return first_result or {}, exits
+
+
 def _walk_reputation_values(payload: dict) -> dict[str, bool]:
     """递归收集常见 IP 信誉布尔字段，兼容多种返回结构。"""
     found: dict[str, bool] = {}
@@ -301,6 +317,7 @@ def test_proxy_health(
     anonymity_url: str | None = None,
     min_clean_score: int | None = None,
     max_latency: float | None = None,
+    exit_samples: int | None = None,
 ) -> dict:
     """综合检查出口稳定性、IP 信誉、匿名性、延迟和业务入口挑战。"""
     timeout = max(2.0, min(45.0, float(timeout or 12.0)))
@@ -310,7 +327,9 @@ def test_proxy_health(
     anonymity_endpoints = [item.strip() for item in re.split(r"[,\r\n]+", anonymity_endpoint) if item.strip()]
     clean_threshold = max(0, min(100, int(min_clean_score if min_clean_score is not None else 80)))
     latency_limit = max(0.0, float(max_latency if max_latency is not None else 8.0))
-    geo = test_proxy(proxy_url, timeout=timeout)
+    sample_count = max(1, min(5, int(exit_samples if exit_samples is not None else 3)))
+    geo, sampled_exit_ips = _sample_proxy_exits(proxy_url, timeout=timeout, samples=sample_count)
+    stable_exit = len(set(sampled_exit_ips)) == 1
     normalized = normalize_proxy_url(proxy_url, default_scheme="auto")
     parsed = urlsplit(normalized or "")
     candidates = [normalized]
@@ -325,7 +344,18 @@ def test_proxy_health(
         session = Session(impersonate=getattr(_browser_cfg, "IMPERSONATE", "chrome"))
         session.proxies = {"http": candidate, "https": candidate}
         try:
-            steps = [{"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"}]
+            steps = [
+                {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
+                {
+                    "name": "出口稳定性检查",
+                    "ok": stable_exit,
+                    "detail": (
+                        f"{sample_count}/{sample_count} 次出口一致"
+                        if stable_exit
+                        else f"发现 {len(set(sampled_exit_ips))} 个不同出口，按连接轮换"
+                    ),
+                },
+            ]
             reputation = {"known": False, "high_risk": [], "network_risk": [], "penalty": 0, "clean": not reputation_endpoint}
             reputation_verified = not reputation_endpoint
             if reputation_endpoint:
@@ -384,6 +414,8 @@ def test_proxy_health(
                 {"name": "Cloudflare 挑战识别", "ok": not challenge, "detail": ", ".join(markers) if markers else "未发现挑战特征"},
             ])
             score = 100
+            if not stable_exit:
+                score -= 100
             score -= int(reputation.get("penalty") or 0)
             if not anonymity.get("anonymous"):
                 score -= 25
@@ -397,6 +429,7 @@ def test_proxy_health(
             verification_complete = reputation_verified and anonymity_verified
             critical_ok = (
                 verification_complete
+                and stable_exit
                 and reputation.get("clean") is True
                 and anonymity.get("anonymous") is True
                 and business_ok
@@ -405,6 +438,8 @@ def test_proxy_health(
             )
             healthy = critical_ok and score >= clean_threshold
             reasons = []
+            if not stable_exit:
+                reasons.append("rotating_exit")
             if reputation.get("high_risk") or reputation.get("network_risk"):
                 reasons.append("ip_reputation_risk")
             if not anonymity.get("anonymous"):
@@ -420,7 +455,8 @@ def test_proxy_health(
             if not verification_complete:
                 reasons.append("cleanliness_check_incomplete")
             definitive_dirty = bool(
-                reputation.get("high_risk")
+                not stable_exit
+                or reputation.get("high_risk")
                 or reputation.get("network_risk")
                 or (anonymity_verified and not anonymity.get("anonymous"))
                 or not business_ok
@@ -447,6 +483,8 @@ def test_proxy_health(
                 "final_url": final_url,
                 "challenge_detected": challenge,
                 "challenge_markers": markers,
+                "exit_samples": sampled_exit_ips,
+                "stable_exit": stable_exit,
                 "reputation": reputation,
                 "anonymity": anonymity,
                 "reason": "clean" if healthy else ",".join(dict.fromkeys(reasons)) or "not_clean",
@@ -472,6 +510,7 @@ def warmup_proxy_pool(
     anonymity_url: str | None = None,
     min_clean_score: int | None = None,
     max_latency: float | None = None,
+    exit_samples: int | None = None,
     max_workers: int = 4,
     progress_callback: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
@@ -502,6 +541,7 @@ def warmup_proxy_pool(
                 anonymity_url=anonymity_url,
                 min_clean_score=min_clean_score,
                 max_latency=max_latency,
+                exit_samples=exit_samples,
             ): (index, proxy)
             for index, proxy in enumerate(proxies)
         }
@@ -588,6 +628,7 @@ def choose_healthy_proxy(
     anonymity_url: str | None = None,
     min_clean_score: int | None = None,
     max_latency: float | None = None,
+    exit_samples: int | None = None,
 ) -> dict:
     """先检查 preferred，再随机检查其余出口，返回一个健康代理。"""
     candidates = []
@@ -614,6 +655,7 @@ def choose_healthy_proxy(
                 anonymity_url=anonymity_url,
                 min_clean_score=min_clean_score,
                 max_latency=max_latency,
+                exit_samples=exit_samples,
             )
         except Exception as exc:
             result = {"ok": False, "healthy": False, "removable": True, "proxy": _masked_proxy(proxy), "reason": f"{type(exc).__name__}: 代理多维检查失败"}

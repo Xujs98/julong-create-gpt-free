@@ -99,6 +99,8 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
         self.assertIn("PROXY_WARMUP_ANONYMITY_URL", fields)
         self.assertEqual(fields["PROXY_WARMUP_MIN_CLEAN_SCORE"]["type"], "int")
         self.assertEqual(fields["PROXY_WARMUP_MAX_LATENCY"]["type"], "float")
+        self.assertEqual(fields["PROXY_WARMUP_EXIT_SAMPLES"]["type"], "int")
+        self.assertEqual(fields["PROXY_BROWSER_CHALLENGE_AUTO_ROTATE"]["type"], "bool")
         self.assertIn("信誉", fields["PROXY_WARMUP_REPUTATION_URL"]["help"])
         self.assertIn("匿名性", fields["PROXY_WARMUP_ANONYMITY_URL"]["help"])
 

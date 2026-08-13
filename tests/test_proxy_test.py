@@ -107,6 +107,38 @@ class ProxyTestTests(unittest.TestCase):
         self.assertTrue(result["verification_complete"])
         self.assertFalse(result["removable"])
         self.assertEqual(result["clean_score"], 100)
+        self.assertEqual(result["exit_samples"], ["203.0.113.9"] * 3)
+        self.assertTrue(result["stable_exit"])
+
+    @patch("core.proxy_test.Session")
+    @patch("core.proxy_test._request_json")
+    @patch("core.proxy_test.test_proxy")
+    def test_multidimensional_health_rejects_connection_rotating_exit(self, geo, request_json, session_class):
+        geo.side_effect = [
+            {"ip": "203.0.113.9", "country": "US", "country_code": "US"},
+            {"ip": "203.0.113.10", "country": "US", "country_code": "US"},
+            {"ip": "203.0.113.9", "country": "US", "country_code": "US"},
+        ]
+        request_json.side_effect = [
+            ({"is_proxy": False, "is_vpn": False, "is_datacenter": False, "is_tor": False, "is_abuser": False}, 0.1),
+            ({"origin": "203.0.113.9", "headers": {}}, 0.1),
+        ]
+        response = MagicMock(status_code=200, text="<html><title>Login</title></html>", headers={}, url="https://service.test/login")
+        session_class.return_value.get.return_value = response
+
+        result = run_proxy_health_test(
+            "http://proxy.test:8080",
+            health_url="https://service.test/login",
+            reputation_url="https://reputation.test/{ip}",
+            anonymity_url="https://echo.test/get",
+            exit_samples=3,
+        )
+
+        self.assertFalse(result["healthy"])
+        self.assertFalse(result["stable_exit"])
+        self.assertTrue(result["removable"])
+        self.assertIn("rotating_exit", result["reason"])
+        self.assertEqual(result["exit_samples"], ["203.0.113.9", "203.0.113.10", "203.0.113.9"])
 
     @patch("core.proxy_test.test_proxy_health")
     def test_warmup_reports_all_healthy_and_target_clean(self, health):
@@ -129,6 +161,14 @@ class ProxyTestTests(unittest.TestCase):
         self.assertEqual(result["selected_clean_count"], 1)
         self.assertEqual(len(result["healthy_proxy_urls"]), 2)
         self.assertEqual(len(result["unhealthy_proxy_urls"]), 1)
+
+    @patch("core.proxy_test.test_proxy_health")
+    def test_warmup_passes_exit_stability_sample_count(self, health):
+        health.return_value = {"healthy": True, "proxy": "http://a.test:1"}
+
+        warmup_proxy_pool(["http://a.test:1"], exit_samples=5, max_workers=1)
+
+        self.assertEqual(health.call_args.kwargs["exit_samples"], 5)
 
     @patch("core.proxy_test.test_proxy_health")
     def test_choose_healthy_proxy_keeps_preferred_first(self, health):

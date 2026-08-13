@@ -209,6 +209,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "link_completed", "sms_completed", "proxy_country_code",
         "proxy_country_name", "proxy_region", "proxy_city", "proxy_exit_ip",
         "plan_type", "current_plan_type", "plus_trial_eligible",
+        "oaics_eligible", "oaics_check_status",
         "plan_check_status", "codex_status", "codex_agent_status",
         "twofa_status", "twofa_requested",
     ):
@@ -223,6 +224,7 @@ def _compact_account_for_list(row: dict) -> dict:
         # 套餐悬浮详情：完整订阅状态、计费周期、有效期、续费及折扣信息。
         "plan_check_error", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
+        "oaics_check_error", "oaics_checked_at", "oaics_session_kind", "oaics_processor_entity",
         "subscription_plan", "has_active_subscription", "is_delinquent",
         "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
         "billing_period", "billing_currency", "last_purchase_origin_platform", "last_will_renew",
@@ -2884,6 +2886,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             anonymity_url = str(data.get("anonymity_url") or getattr(_proxy_cfg, "PROXY_WARMUP_ANONYMITY_URL", "")).strip()
             min_clean_score = data.get("min_clean_score", getattr(_proxy_cfg, "PROXY_WARMUP_MIN_CLEAN_SCORE", 80))
             max_latency = data.get("max_latency", getattr(_proxy_cfg, "PROXY_WARMUP_MAX_LATENCY", 8.0))
+            exit_samples = data.get("exit_samples", getattr(_proxy_cfg, "PROXY_WARMUP_EXIT_SAMPLES", 3))
             task_id = uuid.uuid4().hex
             state = {
                 "task_id": task_id, "status": "running", "started_at": time.time(),
@@ -2931,6 +2934,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                         anonymity_url=anonymity_url,
                         min_clean_score=int(min_clean_score if min_clean_score is not None else 80),
                         max_latency=float(max_latency if max_latency is not None else 8.0),
+                        exit_samples=max(1, min(5, int(exit_samples or 3))),
                         max_workers=max(1, int(workers or 4)),
                         progress_callback=_progress,
                         cancel_event=cancel_events[task_id],
