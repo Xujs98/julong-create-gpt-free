@@ -443,6 +443,15 @@
       border-radius: 8px; padding: 12px; display: grid; gap: 10px;
     }
     .roxy-workspace-box .row { align-items: flex-end; }
+    .config-field-stat { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .proxy-warmup-log { max-height: 360px; overflow: auto; border-top: 1px solid #cbd8f3; padding-top: 8px; font-size: 12px; }
+    .proxy-log-head { display:flex; justify-content:space-between; gap:12px; margin-bottom:6px; color:var(--muted); }
+    .proxy-log-head b { color:var(--text); }
+    .proxy-log-row { padding:8px 0; border-bottom:1px solid #dfe7f7; line-height:1.45; }
+    .proxy-log-row:last-child { border-bottom:0; }
+    .proxy-log-steps { display:flex; flex-wrap:wrap; gap:5px 10px; margin-top:4px; color:var(--muted); }
+    .proxy-step.ok { color:var(--green); }
+    .proxy-step.bad { color:var(--red); }
     .roxy-invite-link {
       display: inline-flex; align-items: center; justify-content: center; width: fit-content;
       min-height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid #9bbcff;
@@ -3275,6 +3284,9 @@ function renderConfigField(f) {
     html += `<input type="number" step="0.1" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'list_str_multiline') {
     html += `<textarea data-key="${attrEsc(f.key)}" placeholder="每行一条，可留空">${attrEsc((fv||[]).join('\n'))}</textarea>`;
+    if (f.key === 'PROXY_POOL') {
+      html += `<div id="proxyPoolCountLegacy" class="config-field-stat">${proxyPoolStatsText(fv)}</div>`;
+    }
   } else {
     // 空字符串/占位符 '-' 都显示为空输入框，避免误保存成真实值
     const shown = isPlaceholderEmpty(fv) ? '' : fv;
@@ -3288,6 +3300,21 @@ function renderConfigField(f) {
     html += `<input type="${inputType}" data-key="${attrEsc(f.key)}"${regionAttrs} value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
   return html + `</label>`;
+}
+function proxyPoolStats(value) {
+  const lines = String(Array.isArray(value) ? value.join('\n') : (value || ''))
+    .split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+  const unique = [...new Set(lines)];
+  return { input: lines.length, unique: unique.length, duplicates: Math.max(0, lines.length - unique.length) };
+}
+function proxyPoolStatsText(value) {
+  const s = proxyPoolStats(value);
+  const duplicate = s.duplicates ? ` · 重复 ${s.duplicates} 行` : '';
+  return `代理池 IP 数量：<b>${s.unique}</b> · 输入 ${s.input} 行${duplicate}`;
+}
+function updateProxyPoolCountLegacy(value) {
+  const el = document.getElementById('proxyPoolCountLegacy');
+  if (el) el.innerHTML = proxyPoolStatsText(value);
 }
 function regionProfileAutoEnabled() {
   if (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'AUTO_BROWSER_LOCALE_FROM_IP')) {
@@ -3465,8 +3492,10 @@ function renderProxyWarmupTools() {
       </div>
       <div class="action-cell">
         <button class="btn" type="button" id="btnWarmupProxyLegacy">代理池预热</button>
+        <button class="btn" type="button" id="btnWarmupLogLegacy">预热日志</button>
       </div>
       <div id="proxyWarmupStatusLegacy" class="muted" style="font-size:12px;">预热尚未运行</div>
+      <div id="proxyWarmupLogLegacy" class="proxy-warmup-log" hidden></div>
     </div>
   `;
 }
@@ -3483,11 +3512,30 @@ async function warmupProxyPoolLegacy() {
     });
     const color = r.challenge_count || r.failed ? 'var(--red)' : 'var(--green)';
     status.innerHTML = `<span style="color:${color};">${r.ok ? '✅ 预热完成' : '⚠️ 没有可用干净 IP'}</span> · 输入 ${r.total || 0} · 健康 ${r.available || 0} · 干净 ${r.clean || 0} · 失败 ${r.failed || 0} · Cloudflare挑战 ${r.challenge_count || 0}${r.auto_delete ? ` · 自动删除 ${r.removed || 0}` : ''}`;
+    const panel = $('#proxyWarmupLogLegacy');
+    if (panel) { panel.hidden = false; panel.innerHTML = renderProxyWarmupLogLegacy(r); }
     showToast(r.ok ? '代理池预热完成' : '代理池没有可用干净 IP');
     await loadConfig();
   } catch(e) {
     status.innerHTML = `<span style="color:var(--red);">预热失败：${esc(e.message)}</span>`;
   } finally { btn.disabled = false; }
+}
+function renderProxyWarmupLogLegacy(log) {
+  const rows = (log.results || []).map((item, index) => {
+    const steps = (item.steps || []).map(step => `<span class="proxy-step ${step.ok ? 'ok' : 'bad'}">${step.ok ? '✓' : '×'} ${esc(step.name)}${step.detail ? `：${esc(step.detail)}` : ''}</span>`).join('');
+    const status = item.healthy ? '<b style="color:var(--green);">健康/干净</b>' : `<b style="color:var(--red);">${item.challenge_detected ? 'Cloudflare挑战' : '不健康'}</b>`;
+    return `<div class="proxy-log-row"><div><b>#${index + 1}</b> · <span class="mono">${esc(item.proxy || '-')}</span> · ${status}</div><div class="proxy-log-steps">${steps || esc(item.reason || '无详细步骤')}</div></div>`;
+  }).join('');
+  return `<div class="proxy-log-head"><b>预热检查过程</b><span>共 ${log.total || 0} 个唯一代理 · 健康 ${log.available || 0} · 失败 ${log.failed || 0}</span></div>${rows || '<div class="muted">暂无逐代理记录</div>'}`;
+}
+async function loadProxyWarmupLogLegacy() {
+  const panel = $('#proxyWarmupLogLegacy');
+  if (!panel) return;
+  panel.hidden = false;
+  try {
+    const r = await api('/api/proxy/warmup/log');
+    panel.innerHTML = renderProxyWarmupLogLegacy(r.log || {});
+  } catch (e) { panel.innerHTML = `<span style="color:var(--red);">${esc(e.message)}</span>`; }
 }
 
 function renderCloudMailTokenTools() {
@@ -3604,6 +3652,8 @@ function renderConfigPanel() {
   bindRoxyWorkspaceTools();
   const warmupBtn = $('#btnWarmupProxyLegacy');
   if (warmupBtn) warmupBtn.addEventListener('click', warmupProxyPoolLegacy);
+  const warmupLogBtn = $('#btnWarmupLogLegacy');
+  if (warmupLogBtn) warmupLogBtn.addEventListener('click', loadProxyWarmupLogLegacy);
   syncRegionProfileControl();
 }
 
@@ -3719,6 +3769,7 @@ $('#configForm').addEventListener('input', (e) => {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
+  if (f.key === 'PROXY_POOL') updateProxyPoolCountLegacy(el.value);
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControl();
 });
 $('#configForm').addEventListener('change', (e) => {

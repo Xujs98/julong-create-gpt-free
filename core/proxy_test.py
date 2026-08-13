@@ -226,6 +226,10 @@ def test_proxy_health(
                     "challenge_detected": challenge,
                     "challenge_markers": markers,
                     "reason": f"HTTP {status}",
+                    "steps": [
+                        {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
+                        {"name": "健康地址访问", "ok": False, "detail": f"HTTP {status}"},
+                    ],
                 }
             if challenge:
                 return {
@@ -239,6 +243,11 @@ def test_proxy_health(
                     "challenge_detected": True,
                     "challenge_markers": markers,
                     "reason": "cloudflare_challenge",
+                    "steps": [
+                        {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
+                        {"name": "健康地址访问", "ok": True, "detail": f"HTTP {status}"},
+                        {"name": "Cloudflare 挑战识别", "ok": False, "detail": ", ".join(markers)},
+                    ],
                 }
             return {
                 "ok": True,
@@ -253,6 +262,11 @@ def test_proxy_health(
                 "challenge_detected": False,
                 "challenge_markers": [],
                 "reason": "clean",
+                "steps": [
+                    {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
+                    {"name": "健康地址访问", "ok": True, "detail": f"HTTP {status}"},
+                    {"name": "Cloudflare 挑战识别", "ok": True, "detail": "未发现挑战特征"},
+                ],
             }
         except Exception as exc:
             errors.append(f"{type(exc).__name__}: {str(exc)[:120]}")
@@ -273,10 +287,11 @@ def warmup_proxy_pool(
     max_workers: int = 4,
 ) -> dict:
     """并发预热代理池，返回干净出口和挑战/连接失败明细。"""
+    raw_values = [str(item or "").strip() for item in (proxy_urls or [])]
+    input_count = sum(1 for value in raw_values if value)
     proxies = []
     seen = set()
-    for item in proxy_urls or []:
-        value = str(item or "").strip()
+    for value in raw_values:
         if value and value not in seen:
             proxies.append(value)
             seen.add(value)
@@ -300,6 +315,7 @@ def warmup_proxy_pool(
                     "proxy": _masked_proxy(proxy),
                     "reason": f"{type(exc).__name__}: 连接或挑战检查失败",
                     "challenge_detected": False,
+                    "steps": [{"name": "代理检查", "ok": False, "detail": "连接或挑战检查失败"}],
                 }
     healthy_indexes_all = [i for i, result in enumerate(results) if isinstance(result, dict) and result.get("healthy")]
     healthy_indexes = list(healthy_indexes_all)
@@ -310,6 +326,8 @@ def warmup_proxy_pool(
     failures = [result for result in results if isinstance(result, dict) and not result.get("healthy")]
     return {
         "ok": bool(clean_proxy_urls),
+        "input_count": input_count,
+        "duplicate_count": max(0, input_count - len(proxies)),
         "total": len(proxies),
         "available": len(healthy_indexes_all),
         "clean": len(clean_proxy_urls),

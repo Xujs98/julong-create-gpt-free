@@ -2905,12 +2905,21 @@ def create_app(auth_code: str | None = None) -> Flask:
             result.pop("clean_proxy_urls", None)
             result.pop("healthy_proxy_urls", None)
             result.pop("unhealthy_proxy_urls", None)
+            app.config["LAST_PROXY_WARMUP_LOG"] = result
             # 预热本身已完成时即返回统计，即使当前没有达到目标干净 IP 数量，
             # 前端仍需展示输入/健康/挑战/失败数量，而不是只显示 HTTP 错误。
             return jsonify(result), 200
         except Exception as exc:
             logger.warning("代理池预热失败：%s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.get("/api/proxy/warmup/log")
+    def api_proxy_warmup_log():
+        """读取本次 WebUI 进程最近一次预热的脱敏明细。"""
+        result = app.config.get("LAST_PROXY_WARMUP_LOG")
+        if not result:
+            return jsonify({"ok": False, "error": "暂无预热日志"}), 404
+        return jsonify({"ok": True, "log": result})
 
     @app.post("/api/agent/test")
     def api_agent_test():
