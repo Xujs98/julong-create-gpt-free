@@ -51,6 +51,7 @@ def test_twofa_worker_refreshes_login_and_persists_new_secret():
         "id": 9,
         "email": "user@example.test",
         "registration_password": "PASSWORD",
+        "device_id": "ACCOUNT_DEVICE",
         "extra_json": '{"session":{"cookies":[{"name":"sid","value":"COOKIE"}]}}',
     }
     fake_env = SimpleNamespace(
@@ -86,11 +87,39 @@ def test_twofa_worker_refreshes_login_and_persists_new_secret():
     assert result["ok"] is True
     assert result["totp_secret"] == "TOTPSECRET"
     liveness.assert_called_once_with(
-        "user@example.test", proxy="PROXY", clear_log=False, account=account
+        "user@example.test",
+        proxy="PROXY",
+        clear_log=False,
+        account=account,
+        preflight_attempts=1,
+        rotate_proxy_on_retry=False,
     )
     update_live.assert_called_once()
     setup.assert_called_once_with(fake_env, "user@example.test")
+    assert fake_env.device_id == "ACCOUNT_DEVICE"
     save.assert_called_once()
     assert save.call_args.args[1]["totp_secret"] == "TOTPSECRET"
     fake_env.session.close.assert_called_once()
     slots.release.assert_called_once()
+
+
+def test_twofa_prefers_account_saved_proxy_over_plan_check_route():
+    account = {
+        "proxy_used": "socks5://user:pass@proxy.example:3000",
+        "live_check_proxy_used": "socks5://user:pass@latest.example:3000",
+    }
+
+    selected, source = twofa_setup_service._resolve_twofa_proxy(account, None)
+
+    assert selected == "socks5://user:pass@latest.example:3000"
+    assert source == "account:live_check_proxy_used"
+
+
+def test_twofa_explicit_proxy_overrides_account_saved_proxy():
+    account = {"proxy_used": "socks5://user:pass@proxy.example:3000"}
+    with patch("core.twofa_setup_service.resolve_plan_check_route", return_value={"proxy": "REQUEST_PROXY"}) as route:
+        selected, source = twofa_setup_service._resolve_twofa_proxy(account, "REQUEST_PROXY")
+
+    assert selected == "REQUEST_PROXY"
+    assert source == "request"
+    route.assert_called_once_with("REQUEST_PROXY")

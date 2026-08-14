@@ -54,8 +54,14 @@ def _is_retryable_network_error(exc: BaseException) -> bool:
     return any(h in text for h in _RETRYABLE_NETWORK_HINTS)
 
 
-def _network_preflight_with_retry(email: str, proxy: str | None, max_attempts: int = 4) -> tuple[BrowserSession, str]:
-    """Providers → CSRF → Signin 网络预检；失败换新 IP 重试（每轮新会话新代理）。"""
+def _network_preflight_with_retry(
+    email: str,
+    proxy: str | None,
+    max_attempts: int = 4,
+    *,
+    rotate_proxy_on_retry: bool = True,
+) -> tuple[BrowserSession, str]:
+    """Providers → CSRF → Signin 网络预检；可选择固定已保存代理环境。"""
     session: BrowserSession | None = None
     last_exc: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
@@ -64,7 +70,7 @@ def _network_preflight_with_retry(email: str, proxy: str | None, max_attempts: i
                 session.session.close()
             except Exception:
                 pass
-        attempt_proxy = rotate_proxy_session(proxy) if proxy else proxy
+        attempt_proxy = rotate_proxy_session(proxy) if proxy and rotate_proxy_on_retry else proxy
         from core.fingerprint_profile import session_fingerprint_kwargs
         session = BrowserSession(proxy=attempt_proxy, **session_fingerprint_kwargs(email))
         logger.info(
@@ -256,7 +262,15 @@ def _navigate_auth_step(session: BrowserSession, url: str, referer: str) -> str:
     return str(getattr(resp, "url", "") or target)
 
 
-def _refresh_with_password_protocol(account: dict, email: str, proxy: str | None, checked_at: str) -> dict:
+def _refresh_with_password_protocol(
+    account: dict,
+    email: str,
+    proxy: str | None,
+    checked_at: str,
+    *,
+    preflight_attempts: int = 4,
+    rotate_proxy_on_retry: bool = True,
+) -> dict:
     """仅使用 HTTP 协议提交保存密码和 TOTP，完成 OAuth 回调并刷新 Session/AT。"""
     password = str(account.get("registration_password") or "").strip()
     totp_secret = str(account.get("totp_secret") or "").replace(" ", "").strip()
@@ -269,7 +283,12 @@ def _refresh_with_password_protocol(account: dict, email: str, proxy: str | None
             "[查活] 使用纯协议邮箱 + 保存密码%s刷新 AT，全程仅发送协议请求",
             " + TOTP" if totp_secret else "",
         )
-        session, authorize_url = _network_preflight_with_retry(email, proxy)
+        session, authorize_url = _network_preflight_with_retry(
+            email,
+            proxy,
+            max_attempts=max(1, int(preflight_attempts or 1)),
+            rotate_proxy_on_retry=rotate_proxy_on_retry,
+        )
         final_url = follow_authorize(session, authorize_url, allow_password_page=True)
         if _is_email_verification_state(final_url):
             raise RuntimeError("有密码账号的 authorize 会话落入邮箱验证码步骤，协议状态与保存资料不一致")
@@ -386,6 +405,8 @@ def check_account_liveness(
     account: dict | None = None,
     driver: str = "protocol",
     headless: bool = False,
+    preflight_attempts: int = 4,
+    rotate_proxy_on_retry: bool = True,
 ) -> dict:
     """
     重新登录账号并刷新最新 accessToken。
@@ -450,11 +471,23 @@ def check_account_liveness(
             return restored
 
         if str(account.get("registration_password") or "").strip():
-            return _refresh_with_password_protocol(account, email, proxy, checked_at)
+            return _refresh_with_password_protocol(
+                account,
+                email,
+                proxy,
+                checked_at,
+                preflight_attempts=preflight_attempts,
+                rotate_proxy_on_retry=rotate_proxy_on_retry,
+            )
 
         logger.info("[查活] 账号未保存注册密码，使用旧账号邮箱 OTP 登录兜底")
         logger.info("[查活] OTP 流程：Providers → CSRF → Signin → Authorize → 发送邮箱 OTP → OAuth callback → Session/AT")
-        session, authorize_url = _network_preflight_with_retry(email, proxy)
+        session, authorize_url = _network_preflight_with_retry(
+            email,
+            proxy,
+            max_attempts=max(1, int(preflight_attempts or 1)),
+            rotate_proxy_on_retry=rotate_proxy_on_retry,
+        )
 
         otp_after_ts = time.time()
         final_url = follow_authorize(session, authorize_url)
