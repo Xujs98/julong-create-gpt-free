@@ -629,6 +629,10 @@ EDITABLE_FIELDS = [
         "label": "预热并发数", "help": "预热同时检查的代理数量，建议 2-6",
     },
     {
+        "key": "PROXY_WARMUP_RECHECK_CLEAN_IPS", "file": "proxy.py", "type": "bool", "group": "代理池",
+        "label": "预热后复查干净IP", "help": "开启后，第一轮预热通过的健康出口会再检测一轮；只有两轮都通过的 IP 才会进入最终保留结果。",
+    },
+    {
         "key": "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
         "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前执行多维干净度检查并选择通过项；不会改变注册方式配置",
     },

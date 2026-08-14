@@ -33,6 +33,8 @@ PROXY_WARMUP_MAX_LATENCY = 8.0
 PROXY_WARMUP_EXIT_SAMPLES = 3
 PROXY_WARMUP_TIMEOUT = 12.0
 PROXY_WARMUP_WORKERS = 4
+# 开启后，第一轮预热筛出的健康出口会再完整检测一次；只有两轮都通过的 IP 才会保留。
+PROXY_WARMUP_RECHECK_CLEAN_IPS = False
 
 # 开启后每个注册任务开始前选择一个通过多维干净度检查的健康出口。
 PROXY_HEALTH_CHECK_BEFORE_REGISTRATION = False
@@ -91,6 +93,7 @@ apply_env_overrides(globals(), {
     'PROXY_WARMUP_EXIT_SAMPLES': 'int',
     'PROXY_WARMUP_TIMEOUT': 'float',
     'PROXY_WARMUP_WORKERS': 'int',
+    'PROXY_WARMUP_RECHECK_CLEAN_IPS': 'bool',
     'PROXY_HEALTH_CHECK_BEFORE_REGISTRATION': 'bool',
     'PROXY_BROWSER_CHALLENGE_AUTO_ROTATE': 'bool',
     'PROXY_DELETE_UNHEALTHY_IPS': 'bool',

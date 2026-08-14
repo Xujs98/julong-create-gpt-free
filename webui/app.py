@@ -2967,12 +2967,21 @@ def create_app(auth_code: str | None = None) -> Flask:
             min_clean_score = data.get("min_clean_score", getattr(_proxy_cfg, "PROXY_WARMUP_MIN_CLEAN_SCORE", 80))
             max_latency = data.get("max_latency", getattr(_proxy_cfg, "PROXY_WARMUP_MAX_LATENCY", 8.0))
             exit_samples = data.get("exit_samples", getattr(_proxy_cfg, "PROXY_WARMUP_EXIT_SAMPLES", 3))
+            recheck_clean = data.get("recheck_clean") if "recheck_clean" in data else getattr(
+                _proxy_cfg, "PROXY_WARMUP_RECHECK_CLEAN_IPS", False
+            )
+            if isinstance(recheck_clean, str):
+                recheck_clean = recheck_clean.strip().lower() in {"1", "true", "yes", "on"}
+            else:
+                recheck_clean = bool(recheck_clean)
             task_id = uuid.uuid4().hex
             state = {
                 "task_id": task_id, "status": "running", "started_at": time.time(),
                 "input_count": sum(1 for item in pool if str(item or "").strip()),
                 "total": len({str(item or "").strip() for item in pool if str(item or "").strip()}),
-                "completed": 0, "results": [], "error": "",
+                "completed": 0, "results": [], "recheck_results": [],
+                "recheck_enabled": recheck_clean, "recheck_completed": 0, "recheck_total": 0,
+                "phase": "initial", "error": "",
             }
             tasks = app.config.setdefault("PROXY_WARMUP_TASKS", {})
             cancel_events = app.config.setdefault("PROXY_WARMUP_CANCEL_EVENTS", {})
@@ -2988,20 +2997,33 @@ def create_app(auth_code: str | None = None) -> Flask:
                 def _progress(event):
                     result_item = dict(event.get("result") or {})
                     result_item.pop("proxy_url", None)
+                    phase = str(event.get("phase") or "initial")
+                    state["phase"] = phase
                     state["completed"] = int(event.get("completed") or 0)
-                    rows = list(state.get("results") or [])
+                    state["total"] = int(event.get("total") or state.get("total") or 0)
                     index = int(event.get("index") or 0)
-                    while len(rows) <= index:
-                        rows.append(None)
-                    rows[index] = result_item
-                    state["results"] = rows
-                    completed_rows = [item for item in rows if isinstance(item, dict)]
-                    state["healthy_total"] = sum(1 for item in completed_rows if item.get("healthy"))
-                    state["available"] = state["healthy_total"]
-                    state["failed"] = sum(1 for item in completed_rows if not item.get("healthy"))
-                    state["dirty"] = sum(1 for item in completed_rows if not item.get("healthy") and item.get("removable", True))
-                    state["inconclusive"] = sum(1 for item in completed_rows if not item.get("healthy") and not item.get("removable", True))
-                    state["challenge_count"] = sum(1 for item in completed_rows if item.get("challenge_detected"))
+                    if phase == "recheck":
+                        rows = list(state.get("recheck_results") or [])
+                        while len(rows) <= index:
+                            rows.append(None)
+                        rows[index] = result_item
+                        state["recheck_results"] = rows
+                        state["recheck_completed"] = int(event.get("phase_completed") or len([item for item in rows if isinstance(item, dict)]))
+                        state["recheck_total"] = int(event.get("phase_total") or state.get("recheck_total") or 0)
+                        state["recheck_healthy_total"] = sum(1 for item in rows if isinstance(item, dict) and item.get("healthy"))
+                    else:
+                        rows = list(state.get("results") or [])
+                        while len(rows) <= index:
+                            rows.append(None)
+                        rows[index] = result_item
+                        state["results"] = rows
+                        completed_rows = [item for item in rows if isinstance(item, dict)]
+                        state["healthy_total"] = sum(1 for item in completed_rows if item.get("healthy"))
+                        state["available"] = state["healthy_total"]
+                        state["failed"] = sum(1 for item in completed_rows if not item.get("healthy"))
+                        state["dirty"] = sum(1 for item in completed_rows if not item.get("healthy") and item.get("removable", True))
+                        state["inconclusive"] = sum(1 for item in completed_rows if not item.get("healthy") and not item.get("removable", True))
+                        state["challenge_count"] = sum(1 for item in completed_rows if item.get("challenge_detected"))
                     app.config["LAST_PROXY_WARMUP_LOG"] = state
 
                 try:
@@ -3016,6 +3038,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                         max_latency=float(max_latency if max_latency is not None else 8.0),
                         exit_samples=max(1, min(5, int(exit_samples or 3))),
                         max_workers=max(1, int(workers or 4)),
+                        recheck_clean=recheck_clean,
                         progress_callback=_progress,
                         cancel_event=cancel_events[task_id],
                     )
@@ -3039,6 +3062,12 @@ def create_app(auth_code: str | None = None) -> Flask:
                         "duplicate_count": result.get("duplicate_count", 0), "challenge_count": challenge_count,
                         "removed": removed, "retained": len(pool) - removed, "auto_delete": auto_delete,
                         "results": [item for item in result.get("results", []) if isinstance(item, dict)],
+                        "recheck_enabled": bool(result.get("recheck_enabled")),
+                        "recheck_candidate_count": result.get("recheck_candidate_count", 0),
+                        "recheck_checked_total": result.get("recheck_checked_total", 0),
+                        "recheck_healthy_total": result.get("recheck_healthy_total", 0),
+                        "recheck_results": [item for item in result.get("recheck_results", []) if isinstance(item, dict)],
+                        "phase": "completed",
                         "completed_at": time.time(),
                     })
                 except Exception as exc:
@@ -3047,7 +3076,10 @@ def create_app(auth_code: str | None = None) -> Flask:
                 app.config["LAST_PROXY_WARMUP_LOG"] = state
 
             threading.Thread(target=_run_warmup, name=f"proxy-warmup-{task_id[:8]}", daemon=True).start()
-            return jsonify({"ok": True, "task_id": task_id, "status": "running", "total": state["total"]}), 202
+            return jsonify({
+                "ok": True, "task_id": task_id, "status": "running", "total": state["total"],
+                "recheck_enabled": recheck_clean,
+            }), 202
         except Exception as exc:
             logger.warning("代理池预热失败：%s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400

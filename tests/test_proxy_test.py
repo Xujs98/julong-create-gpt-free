@@ -300,5 +300,32 @@ class ProxyTestTests(unittest.TestCase):
         self.assertNotIn("secret", str(result["failures"]))
 
 
+    @patch("core.proxy_test.test_proxy_health")
+    def test_warmup_rechecks_first_pass_healthy_exits_before_selection(self, health):
+        health.side_effect = [
+            {"healthy": True, "proxy": "http://a.test:1"},
+            {"healthy": True, "proxy": "http://b.test:2"},
+            {"healthy": False, "removable": True, "proxy": "http://c.test:3"},
+            {"healthy": True, "proxy": "http://a.test:1"},
+            {"healthy": False, "removable": True, "proxy": "http://b.test:2"},
+        ]
+
+        result = warmup_proxy_pool(
+            ["http://a.test:1", "http://b.test:2", "http://c.test:3"],
+            target_clean=2,
+            max_workers=1,
+            recheck_clean=True,
+        )
+
+        self.assertEqual(health.call_count, 5)
+        self.assertTrue(result["recheck_enabled"])
+        self.assertEqual(result["recheck_candidate_count"], 2)
+        self.assertEqual(result["recheck_checked_total"], 2)
+        self.assertEqual(result["checked_total"], 5)
+        self.assertEqual(result["healthy_proxy_urls"], ["http://a.test:1"])
+        self.assertEqual(result["clean_proxy_urls"], ["http://a.test:1"])
+        self.assertIn("http://b.test:2", result["unhealthy_proxy_urls"])
+
+
 if __name__ == "__main__":
     unittest.main()

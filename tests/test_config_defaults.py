@@ -103,6 +103,17 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
         self.assertEqual(fields["PROXY_BROWSER_CHALLENGE_AUTO_ROTATE"]["type"], "bool")
         self.assertIn("信誉", fields["PROXY_WARMUP_REPUTATION_URL"]["help"])
         self.assertIn("匿名性", fields["PROXY_WARMUP_ANONYMITY_URL"]["help"])
+        self.assertEqual(fields["PROXY_WARMUP_RECHECK_CLEAN_IPS"]["type"], "bool")
+        self.assertIn("再检测一轮", fields["PROXY_WARMUP_RECHECK_CLEAN_IPS"]["help"])
+
+        source = (config_editor._CONFIG_DIR / "proxy.py").read_text(encoding="utf-8")
+        self.assertFalse(
+            config_editor._parse_value_from_source(
+                source,
+                "PROXY_WARMUP_RECHECK_CLEAN_IPS",
+                "bool",
+            )
+        )
 
     def test_page_agent_choices_have_chinese_labels_and_direct_default(self):
         """页面 Agent 机器值保持兼容，WebUI 下拉统一展示中文。"""

@@ -512,10 +512,115 @@ def warmup_proxy_pool(
     max_latency: float | None = None,
     exit_samples: int | None = None,
     max_workers: int = 4,
+    recheck_clean: bool = False,
     progress_callback: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict:
-    """并发预热代理池，返回干净出口和挑战/连接失败明细。"""
+    """并发预热代理池；可对首轮健康出口再完整复查一次。"""
+    if recheck_clean:
+        # 先不截断首轮结果，确保复查失败时可从其余首轮健康出口中补足目标数量。
+        raw_values = [str(item or "").strip() for item in (proxy_urls or [])]
+        unique_count = len(dict.fromkeys(value for value in raw_values if value))
+
+        def _initial_progress(event: dict) -> None:
+            if not progress_callback:
+                return
+            payload = dict(event)
+            payload.update({"phase": "initial", "completed": int(event.get("completed") or 0), "total": unique_count})
+            progress_callback(payload)
+
+        first = warmup_proxy_pool(
+            proxy_urls,
+            target_clean=0,
+            timeout=timeout,
+            health_url=health_url,
+            reputation_url=reputation_url,
+            anonymity_url=anonymity_url,
+            min_clean_score=min_clean_score,
+            max_latency=max_latency,
+            exit_samples=exit_samples,
+            max_workers=max_workers,
+            recheck_clean=False,
+            progress_callback=_initial_progress if progress_callback else None,
+            cancel_event=cancel_event,
+        )
+        candidates = list(first.get("healthy_proxy_urls") or [])
+        if cancel_event and cancel_event.is_set():
+            raise ProxyTestError("预热已终止")
+        if not candidates:
+            first.update({
+                "recheck_enabled": True,
+                "recheck_candidate_count": 0,
+                "recheck_checked_total": 0,
+                "recheck_healthy_total": 0,
+                "recheck_results": [],
+                "recheck_failures": [],
+                "checked_operations_total": first.get("checked_total", 0),
+            })
+            return first
+
+        def _recheck_progress(event: dict) -> None:
+            if not progress_callback:
+                return
+            payload = dict(event)
+            payload.update({
+                "phase": "recheck",
+                "completed": unique_count + int(event.get("completed") or 0),
+                "total": unique_count + len(candidates),
+                "phase_completed": int(event.get("completed") or 0),
+                "phase_total": len(candidates),
+            })
+            progress_callback(payload)
+
+        second = warmup_proxy_pool(
+            candidates,
+            target_clean=target_clean,
+            timeout=timeout,
+            health_url=health_url,
+            reputation_url=reputation_url,
+            anonymity_url=anonymity_url,
+            min_clean_score=min_clean_score,
+            max_latency=max_latency,
+            exit_samples=exit_samples,
+            max_workers=max_workers,
+            recheck_clean=False,
+            progress_callback=_recheck_progress if progress_callback else None,
+            cancel_event=cancel_event,
+        )
+        dirty_urls = list(dict.fromkeys([
+            *(first.get("unhealthy_proxy_urls") or []),
+            *(second.get("unhealthy_proxy_urls") or []),
+        ]))
+        inconclusive_urls = list(dict.fromkeys([
+            *(first.get("inconclusive_proxy_urls") or []),
+            *(second.get("inconclusive_proxy_urls") or []),
+        ]))
+        combined_failures = [*(first.get("failures") or []), *(second.get("failures") or [])]
+        first.update({
+            "ok": bool(second.get("clean_proxy_urls")),
+            "checked_total": int(first.get("checked_total") or 0) + int(second.get("checked_total") or 0),
+            "checked_operations_total": int(first.get("checked_total") or 0) + int(second.get("checked_total") or 0),
+            "available": second.get("available", 0),
+            "healthy_total": second.get("healthy_total", 0),
+            "clean": second.get("clean", 0),
+            "selected_clean_count": second.get("selected_clean_count", 0),
+            "failed": len(combined_failures),
+            "dirty": len(dirty_urls),
+            "inconclusive": len(inconclusive_urls),
+            "target_clean": second.get("target_clean", int(target_clean or 0)),
+            "failures": combined_failures,
+            "clean_proxy_urls": second.get("clean_proxy_urls") or [],
+            "healthy_proxy_urls": second.get("healthy_proxy_urls") or [],
+            "unhealthy_proxy_urls": dirty_urls,
+            "inconclusive_proxy_urls": inconclusive_urls,
+            "recheck_enabled": True,
+            "recheck_candidate_count": len(candidates),
+            "recheck_checked_total": second.get("checked_total", 0),
+            "recheck_healthy_total": second.get("healthy_total", 0),
+            "recheck_results": second.get("results") or [],
+            "recheck_failures": second.get("failures") or [],
+        })
+        return first
     raw_values = [str(item or "").strip() for item in (proxy_urls or [])]
     input_count = sum(1 for value in raw_values if value)
     proxies = []
@@ -615,6 +720,13 @@ def warmup_proxy_pool(
         "healthy_proxy_urls": [proxies[i] for i in healthy_indexes_all],
         "unhealthy_proxy_urls": [proxies[i] for i, result in enumerate(results) if isinstance(result, dict) and not result.get("healthy") and result.get("removable", True)],
         "inconclusive_proxy_urls": [proxies[i] for i, result in enumerate(results) if isinstance(result, dict) and not result.get("healthy") and not result.get("removable", True)],
+        "recheck_enabled": False,
+        "recheck_candidate_count": 0,
+        "recheck_checked_total": 0,
+        "recheck_healthy_total": 0,
+        "recheck_results": [],
+        "recheck_failures": [],
+        "checked_operations_total": len(proxies),
     }
 
 
