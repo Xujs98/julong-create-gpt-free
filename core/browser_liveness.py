@@ -86,8 +86,53 @@ def _session_result(driver, session_info: dict, *, driver_name: str, proxy_used:
     }
 
 
-def _fill_login_password(driver, password: str) -> None:
-    """填写已有账号密码并提交当前登录表单。"""
+def _password_login_page_state(driver) -> dict:
+    """读取登录密码页的可提交状态与可见错误，供无头模式诊断。"""
+    try:
+        return driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const input = [...document.querySelectorAll('input[type="password"],input[autocomplete="current-password"]')]
+          .find(el => visible(el) && !el.disabled && !el.readOnly);
+        const form = input?.closest('form') || null;
+        const scope = form || document;
+        const submit = [...scope.querySelectorAll('button[type="submit"],input[type="submit"]')]
+          .find(visible) || null;
+        const errors = [...document.querySelectorAll(
+          '.react-aria-FieldError,[slot="errorMessage"],[role="alert"],[aria-live="assertive"],'
+          + '[id$="-error"],[class*="error" i]'
+        )].filter(visible).map(el => (el.innerText || el.textContent || '')
+          .replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 8);
+        const busy = submit ? (
+          String(submit.getAttribute('aria-busy') || '').toLowerCase() === 'true'
+          || /loading|pending|spinner/.test(String(submit.className || '').toLowerCase())
+          || !!submit.querySelector('[role="progressbar"],[class*="spinner" i],[class*="loading" i]')
+        ) : false;
+        return {
+          url: location.href,
+          passwordPresent: !!input,
+          passwordLength: input ? String(input.value || '').length : 0,
+          passwordInvalid: input ? String(input.getAttribute('aria-invalid') || '').toLowerCase() === 'true' : false,
+          submitPresent: !!submit,
+          submitDisabled: submit ? (!!submit.disabled || String(submit.getAttribute('aria-disabled') || '').toLowerCase() === 'true') : false,
+          submitLoading: busy,
+          errors
+        };
+        """) or {}
+    except Exception as exc:
+        return {"url": getattr(driver, "current_url", ""), "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _password_error_message(state: dict) -> str:
+    """提取密码页明确展示的错误，避免把原地校验误报成页面超时。"""
+    errors = [str(item or "").strip() for item in (state.get("errors") or []) if str(item or "").strip()]
+    if not errors:
+        return ""
+    return "；".join(dict.fromkeys(errors))[:500]
+
+
+def _fill_login_password(driver, password: str) -> dict:
+    """稳定填写已有账号密码，选择同一表单的提交按钮并点击。"""
     marker = f"live-password-{int(time.time() * 1000)}"
     targets = driver.execute_script(r"""
     const marker = String(arguments[0] || '');
@@ -97,12 +142,33 @@ def _fill_login_password(driver, password: str) -> None:
     const input = [...document.querySelectorAll('input[type="password"],input[autocomplete="current-password"]')].find(visible);
     if (!input) return {ok:false, reason:'missing_password_input', url:location.href};
     const form = input.closest('form');
-    const button = [...(form || document).querySelectorAll('button[type="submit"],input[type="submit"],button')]
-      .find(el => visible(el) && el.getAttribute('aria-disabled') !== 'true');
+    const scope = form || document;
+    let buttons = [...scope.querySelectorAll('button[type="submit"],input[type="submit"]')].filter(el => {
+      return !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+        && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+    });
+    if (!buttons.length) {
+      buttons = [...scope.querySelectorAll('button:not([type]),button[type="button"]')].filter(el => {
+        if (!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)) return false;
+        const semantic = [el.id, el.name, el.value, el.getAttribute('aria-label'), el.getAttribute('title'), el.textContent]
+          .join(' ').toLowerCase();
+        return !/show|hide|reveal|forgot|reset|passwordless|one.?time|oauth|google|apple|microsoft/.test(semantic);
+      });
+    }
+    const ir = input.getBoundingClientRect();
+    const button = buttons.map((el, idx) => {
+      const r = el.getBoundingClientRect();
+      return {el, idx, below: r.top >= ir.bottom - 10, distance: Math.max(0, r.top - ir.bottom)};
+    }).sort((a, b) => Number(b.below) - Number(a.below) || a.distance - b.distance || a.idx - b.idx)[0]?.el;
     if (!button) return {ok:false, reason:'missing_password_submit', url:location.href};
     input.setAttribute('data-live-password-input', marker);
     button.setAttribute('data-live-password-submit', marker);
-    return {ok:true,inputSelector:`[data-live-password-input="${marker}"]`,buttonSelector:`[data-live-password-submit="${marker}"]`};
+    return {
+      ok:true,
+      inputSelector:`[data-live-password-input="${marker}"]`,
+      buttonSelector:`[data-live-password-submit="${marker}"]`,
+      url:location.href
+    };
     """, marker) or {}
     if not targets.get("ok"):
         raise RuntimeError(f"登录密码页处理失败: {targets}")
@@ -113,21 +179,84 @@ def _fill_login_password(driver, password: str) -> None:
     if len(inputs) != 1 or len(buttons) != 1:
         raise RuntimeError(f"登录密码元素定位异常: inputs={len(inputs)} buttons={len(buttons)}")
     target = inputs[0]
-    fill = getattr(target, "fill", None)
-    if callable(fill):
-        fill(password)
-    else:
-        target.clear()
-        target.send_keys(password)
-    buttons[0].click()
+    submit = buttons[0]
+    from core.roxy_registration import _human_click, _human_type_text, _set_element_value
+
+    _human_type_text(driver, target, password, clear=True)
+    fill_state = driver.execute_script(r"""
+    const input = arguments[0];
+    input.dispatchEvent(new Event('input', {bubbles:true}));
+    input.dispatchEvent(new Event('change', {bubbles:true}));
+    input.blur();
+    const submit = arguments[1];
+    return {
+      passwordLength: String(input.value || '').length,
+      submitDisabled: !!submit.disabled || String(submit.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+    };
+    """, target, submit) or {}
+    if int(fill_state.get("passwordLength") or 0) != len(password):
+        _set_element_value(driver, target, password)
+
+    enable_end = time.time() + 6
+    submit_state = {}
+    while time.time() < enable_end:
+        submit_state = driver.execute_script(r"""
+        const input = arguments[0], submit = arguments[1];
+        return {
+          passwordLength: String(input.value || '').length,
+          disabled: !!submit.disabled || String(submit.getAttribute('aria-disabled') || '').toLowerCase() === 'true',
+          ariaInvalid: String(input.getAttribute('aria-invalid') || '').toLowerCase() === 'true'
+        };
+        """, target, submit) or {}
+        if int(submit_state.get("passwordLength") or 0) == len(password) and not submit_state.get("disabled"):
+            break
+        time.sleep(0.2)
+    if int(submit_state.get("passwordLength") or 0) != len(password):
+        raise RuntimeError(f"登录密码填写校验失败: expected_length={len(password)} state={submit_state}")
+    if submit_state.get("disabled"):
+        raise RuntimeError(f"登录密码提交按钮持续不可用: state={submit_state}")
+
+    _human_click(driver, submit, label="live_password_submit")
+    return {
+        "ok": True,
+        "marker": marker,
+        "url_before": str(targets.get("url") or ""),
+        "password_length": len(password),
+        "submit_mode": "click",
+    }
 
 
-def _wait_after_password(driver, timeout: int = 35) -> str:
+def _resubmit_login_password_form(driver, marker: str = "") -> dict:
+    """首轮点击未触发导航时，通过原生 form.requestSubmit 做一次受控兜底。"""
+    return driver.execute_script(r"""
+    const marker = String(arguments[0] || '');
+    const input = (marker && document.querySelector(`[data-live-password-input="${marker}"]`))
+      || [...document.querySelectorAll('input[type="password"],input[autocomplete="current-password"]')]
+        .find(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+    if (!input) return {ok:false, reason:'missing_password_input', url:location.href};
+    const form = input.closest('form');
+    const submit = (marker && document.querySelector(`[data-live-password-submit="${marker}"]`))
+      || form?.querySelector('button[type="submit"],input[type="submit"]');
+    if (!form) return {ok:false, reason:'missing_form', url:location.href};
+    if (submit && (!!submit.disabled || String(submit.getAttribute('aria-disabled') || '').toLowerCase() === 'true')) {
+      return {ok:false, reason:'submit_disabled', url:location.href};
+    }
+    if (typeof form.requestSubmit === 'function') form.requestSubmit(submit || undefined);
+    else if (submit) submit.click();
+    else form.submit();
+    return {ok:true, reason:'request_submit', url:location.href};
+    """, marker) or {}
+
+
+def _wait_after_password(driver, timeout: int = 45, *, submission: dict | None = None) -> str:
     """等待密码提交后的登录态、TOTP 或邮箱验证码页面。"""
     from core.roxy_registration import _has_access_token, _is_email_verification_page
 
-    end = time.time() + max(5, int(timeout or 35))
+    started = time.time()
+    end = started + max(5, int(timeout or 45))
     last_url = ""
+    last_state: dict = {}
+    resubmitted = False
     while time.time() < end:
         if _has_access_token(driver):
             return "logged_in"
@@ -140,8 +269,34 @@ def _wait_after_password(driver, timeout: int = 35) -> str:
             return "totp"
         if _is_email_verification_page(driver):
             return "email_otp"
+        last_state = _password_login_page_state(driver)
+        error_message = _password_error_message(last_state)
+        if error_message:
+            raise RuntimeError(f"密码登录页面返回错误：{error_message}")
+        if (
+            not resubmitted
+            and time.time() - started >= 4
+            and last_state.get("passwordPresent")
+            and int(last_state.get("passwordLength") or 0) > 0
+            and last_state.get("submitPresent")
+            and not last_state.get("submitDisabled")
+            and not last_state.get("submitLoading")
+        ):
+            retry = _resubmit_login_password_form(driver, str((submission or {}).get("marker") or ""))
+            resubmitted = True
+            logger.warning("[查活][浏览器] 密码页首轮点击未产生跳转，已执行一次 requestSubmit 兜底：%s", retry)
         time.sleep(0.5)
-    raise RuntimeError(f"提交密码后未进入登录态/MFA/邮箱验证码页，最后地址: {last_url[:300]}")
+    diagnostic = {
+        "url": str(last_state.get("url") or last_url)[:300],
+        "passwordPresent": bool(last_state.get("passwordPresent")),
+        "passwordLength": int(last_state.get("passwordLength") or 0),
+        "passwordInvalid": bool(last_state.get("passwordInvalid")),
+        "submitPresent": bool(last_state.get("submitPresent")),
+        "submitDisabled": bool(last_state.get("submitDisabled")),
+        "submitLoading": bool(last_state.get("submitLoading")),
+        "resubmitted": resubmitted,
+    }
+    raise RuntimeError(f"提交密码后未进入登录态/MFA/邮箱验证码页，诊断: {diagnostic}")
 
 
 def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") -> dict:
@@ -200,8 +355,8 @@ def _browser_login(driver, account: dict, email: str, *, headless: bool) -> dict
         if password:
             otp_after_ts = time.time()
             logger.info("[查活][浏览器] 使用保存账号密码登录")
-            _fill_login_password(driver, password)
-            state = _wait_after_password(driver)
+            submission = _fill_login_password(driver, password)
+            state = _wait_after_password(driver, submission=submission)
         else:
             otp_after_ts = time.time()
             switched = _click_passwordless_signup_if_present(driver)
