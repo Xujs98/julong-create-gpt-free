@@ -45,12 +45,19 @@ def test_valid_access_token_without_session_cookies_requests_login_refresh():
 def test_expired_access_token_requests_login_refresh():
     account = {"access_token": "TOKEN"}
     checked = {"ok": False, "http_status": 401, "needs_live_check": True, "token_expired": True}
+    decision = {}
     with patch("core.live_check_service.check_account_plan", return_value=checked), patch(
         "core.live_check_service._append_log"
     ):
-        result = _check_existing_access_token(account, proxy="PROXY", email="user@example.com")
+        result = _check_existing_access_token(
+            account,
+            proxy="PROXY",
+            email="user@example.com",
+            decision=decision,
+        )
 
     assert result is None
+    assert decision["force_fresh_login"] is True
 
 
 def test_network_failure_does_not_mark_account_deactivated():
@@ -70,6 +77,7 @@ def test_network_failure_uses_selected_browser_fallback():
     """选择指纹浏览器时，协议 AT 校验的 CF 403 应继续浏览器确认。"""
     account = {"access_token": "TOKEN"}
     checked = {"ok": False, "http_status": 403, "error": "HTTP 403"}
+    decision = {}
     with patch("core.live_check_service.check_account_plan", return_value=checked), patch(
         "core.live_check_service._append_log"
     ) as append_log:
@@ -78,9 +86,11 @@ def test_network_failure_uses_selected_browser_fallback():
             proxy="PROXY",
             email="user@example.com",
             browser_fallback=True,
+            decision=decision,
         )
 
     assert result is None
+    assert decision["force_fresh_login"] is False
     assert any("指纹浏览器确认" in call.args[1] for call in append_log.call_args_list)
 
 
@@ -148,6 +158,7 @@ def test_browser_driver_delegates_without_protocol_login(tmp_path):
         proxy="PROXY",
         driver_name="cloak",
         headless=True,
+        force_fresh_login=False,
     )
     protocol_session.assert_not_called()
     protocol_password.assert_not_called()

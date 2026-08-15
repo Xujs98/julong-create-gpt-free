@@ -4,9 +4,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.browser_liveness import (
+    _browser_login,
+    _clear_browser_auth_state,
     _fill_login_password,
     _password_error_message,
     _wait_after_password,
+    check_account_liveness_browser,
 )
 
 
@@ -90,3 +93,77 @@ def test_wait_after_password_returns_logged_in_without_resubmit():
     ) as resubmit:
         assert _wait_after_password(driver, timeout=5) == "logged_in"
     resubmit.assert_not_called()
+
+
+def test_clear_browser_auth_state_uses_cdp_cookie_and_origin_cleanup():
+    driver = MagicMock()
+
+    _clear_browser_auth_state(driver)
+
+    driver.delete_all_cookies.assert_called_once()
+    driver.execute_cdp_cmd.assert_any_call("Network.clearBrowserCookies", {})
+    assert driver.execute_cdp_cmd.call_count == 3
+
+
+def test_browser_login_retries_when_existing_session_token_is_rejected():
+    driver = MagicMock(current_url="https://chatgpt.example/")
+    stale_session = {"accessToken": "STALE"}
+    valid_session = {"accessToken": "VALID"}
+    with patch("core.roxy_registration._safe_get"), patch(
+        "core.browser_liveness._restore_cookies", return_value=0
+    ), patch("core.browser_liveness._clear_browser_auth_state"), patch(
+        "core.roxy_registration._wait_for_cloudflare_challenge"
+    ), patch("core.roxy_registration._maybe_accept"), patch(
+        "core.roxy_registration._submit_email_and_wait_next", return_value="logged_in"
+    ), patch(
+        "core.roxy_registration._fetch_chatgpt_session", side_effect=[stale_session, valid_session]
+    ), patch(
+        "core.browser_liveness._browser_token_status", side_effect=[401, 200]
+    ), patch(
+        "core.browser_liveness._browser_login", wraps=_browser_login
+    ) as browser_login:
+        result = browser_login(
+            driver,
+            {"registration_password": "PASSWORD"},
+            "user@example.com",
+            headless=False,
+        )
+
+    assert result == valid_session
+    assert browser_login.call_count == 2
+    assert browser_login.call_args_list[-1].kwargs["restore_saved_session"] is False
+    assert browser_login.call_args_list[-1].kwargs["stale_session_retry"] is True
+
+
+def test_browser_liveness_forces_fresh_login_without_saved_session_reuse():
+    driver = MagicMock()
+    closer = MagicMock()
+    session = {"accessToken": "NEW_TOKEN"}
+    result = {"ok": True, "status": "live", "access_token": "NEW_TOKEN"}
+    with patch(
+        "core.browser_liveness._open_roxy", return_value=(driver, None, closer)
+    ), patch(
+        "core.browser_liveness._browser_login", return_value=session
+    ) as browser_login, patch(
+        "core.browser_liveness._browser_token_status", return_value=200
+    ), patch(
+        "core.browser_liveness._session_result", return_value=result
+    ):
+        actual = check_account_liveness_browser(
+            "user@example.com",
+            {"access_token": "OLD_TOKEN"},
+            proxy=None,
+            driver_name="roxy",
+            headless=False,
+            force_fresh_login=True,
+        )
+
+    assert actual == result
+    browser_login.assert_called_once_with(
+        driver,
+        {"access_token": "OLD_TOKEN"},
+        "user@example.com",
+        headless=False,
+        restore_saved_session=False,
+    )
+    closer.assert_called_once()

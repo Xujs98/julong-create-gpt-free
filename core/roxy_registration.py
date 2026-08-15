@@ -1308,11 +1308,12 @@ def _submit_email_and_wait_next(
     attempts: int = 3,
     *,
     allow_login_password: bool = False,
+    allow_existing_session: bool = True,
 ) -> str:
     """填写并提交邮箱，确认进入密码、验证码或登录态后返回。"""
     last_state = None
     for attempt in range(1, attempts + 1):
-        if _has_access_token(driver):
+        if allow_existing_session and _has_access_token(driver):
             logger.info("%s 打开登录页后已存在有效登录态，直接复用当前 session", _log_prefix(driver))
             return "logged_in"
         _type_email_address(driver, email, timeout=20)

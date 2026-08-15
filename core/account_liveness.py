@@ -407,6 +407,7 @@ def check_account_liveness(
     headless: bool = False,
     preflight_attempts: int = 4,
     rotate_proxy_on_retry: bool = True,
+    force_fresh_login: bool = False,
 ) -> dict:
     """
     重新登录账号并刷新最新 accessToken。
@@ -462,6 +463,7 @@ def check_account_liveness(
                 proxy=proxy,
                 driver_name=selected_driver,
                 headless=bool(headless),
+                force_fresh_login=bool(force_fresh_login),
             )
 
         logger.info("[查活] 协议流程：保存 Session Cookie → 账号密码/TOTP → 旧账号邮箱 OTP 兜底 → Session/AT")

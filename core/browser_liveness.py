@@ -69,6 +69,30 @@ def _restore_cookies(driver, account: dict) -> int:
     return added
 
 
+def _clear_browser_auth_state(driver) -> None:
+    """彻底清理 ChatGPT/Auth 登录态，避免残留 Session 被误判为新登录成功。"""
+    try:
+        driver.delete_all_cookies()
+    except Exception:
+        pass
+    try:
+        driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
+    except Exception:
+        pass
+    for origin in ("https://chatgpt.com", "https://auth.openai.com"):
+        try:
+            driver.execute_cdp_cmd(
+                "Storage.clearDataForOrigin",
+                {"origin": origin, "storageTypes": "cookies,local_storage,session_storage"},
+            )
+        except Exception:
+            pass
+    try:
+        driver.execute_script("localStorage.clear(); sessionStorage.clear();")
+    except Exception:
+        pass
+
+
 def _session_result(driver, session_info: dict, *, driver_name: str, proxy_used: str | None) -> dict:
     """把浏览器刷新结果整理成数据库查活结构。"""
     access_token = str(session_info.get("accessToken") or "").strip()
@@ -315,7 +339,15 @@ def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") ->
     return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
 
 
-def _browser_login(driver, account: dict, email: str, *, headless: bool) -> dict:
+def _browser_login(
+    driver,
+    account: dict,
+    email: str,
+    *,
+    headless: bool,
+    restore_saved_session: bool = True,
+    stale_session_retry: bool = False,
+) -> dict:
     """在当前指纹浏览器内执行 Session 恢复或账号重新登录。"""
     from core.roxy_registration import (
         _click_passwordless_signup_if_present,
@@ -325,8 +357,11 @@ def _browser_login(driver, account: dict, email: str, *, headless: bool) -> dict
         _wait_for_cloudflare_challenge,
     )
 
+    if not restore_saved_session:
+        _clear_browser_auth_state(driver)
+        logger.info("[查活][浏览器] 已清空旧登录态，跳过保存 Session/Cookie")
     _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com",))
-    restored = _restore_cookies(driver, account)
+    restored = _restore_cookies(driver, account) if restore_saved_session else 0
     if restored:
         logger.info("[查活][浏览器] 已写入保存 Session Cookie：%s 个", restored)
         _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com",))
@@ -339,18 +374,47 @@ def _browser_login(driver, account: dict, email: str, *, headless: bool) -> dict
                 return session_info
             logger.info("[查活][浏览器] 保存 Session 的 AT 校验状态=%s，继续重新登录", token_status)
 
-    driver.delete_all_cookies()
+    if restore_saved_session:
+        _clear_browser_auth_state(driver)
+        logger.info("[查活][浏览器] 保存 Session 校验未通过，已清空旧登录态")
+    logger.info("[查活][浏览器] 强制重新登录获取新 Session/AT")
     _safe_get(driver, "https://chatgpt.com/auth/login", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
     _wait_for_cloudflare_challenge(driver, timeout=300, headless=headless)
     from core.roxy_registration import _maybe_accept
     _maybe_accept(driver)
     otp_after_ts = time.time()
-    state = _submit_email_and_wait_next(driver, email, attempts=3, allow_login_password=True)
+    state = _submit_email_and_wait_next(
+        driver,
+        email,
+        attempts=3,
+        allow_login_password=True,
+        allow_existing_session=False,
+    )
     password = str(account.get("registration_password") or "").strip()
     totp_secret = str(account.get("totp_secret") or "").replace(" ", "").strip()
 
     if state == "logged_in":
-        return _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
+        session_info = _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
+        token = str(session_info.get("accessToken") or "").strip()
+        token_status = _browser_token_status(driver, token) if token else 0
+        if 200 <= token_status < 300:
+            logger.info("[查活][浏览器] 当前 Session 的 AT 已通过浏览器内在线校验")
+            return session_info
+        if not stale_session_retry:
+            logger.warning(
+                "[查活][浏览器] 登录页检测到的 Session 实为残留失效状态（AT 校验=%s），彻底清理后重新登录一次",
+                token_status,
+            )
+            _clear_browser_auth_state(driver)
+            return _browser_login(
+                driver,
+                account,
+                email,
+                headless=headless,
+                restore_saved_session=False,
+                stale_session_retry=True,
+            )
+        raise RuntimeError(f"彻底清理登录态后仍读取到失效 Session：AT 浏览器内校验状态={token_status}")
     if state == "login_password":
         if password:
             otp_after_ts = time.time()
@@ -374,6 +438,8 @@ def _browser_login(driver, account: dict, email: str, *, headless: bool) -> dict
         logger.info("[查活][浏览器] 等待邮箱登录验证码")
         code = wait_for_otp(email, after_ts=otp_after_ts)
         return _submit_code_and_fetch_session(driver, code, code_kind="email_otp")
+    if state == "logged_in":
+        return _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
     if state == "password":
         raise RuntimeError("已注册账号进入创建密码页，登录状态与账号资料不一致")
     raise RuntimeError(f"指纹浏览器登录进入未知状态: {state}")
@@ -427,6 +493,7 @@ def check_account_liveness_browser(
     proxy: str | None,
     driver_name: str,
     headless: bool,
+    force_fresh_login: bool = False,
 ) -> dict:
     """按配置启动指纹浏览器查活，返回与协议查活一致的数据结构。"""
     selected = str(driver_name or "").strip().lower()
@@ -439,7 +506,19 @@ def check_account_liveness_browser(
     try:
         logger.info("[查活] 使用 %s 指纹浏览器，headless=%s", selected, bool(headless))
         driver, proxy_used, closer = opener(proxy, bool(headless))
-        session_info = _browser_login(driver, account, email, headless=bool(headless))
+        if force_fresh_login:
+            logger.info("[查活][浏览器] 现有 AT 已明确失效，本次跳过所有保存 Session/Cookie")
+        session_info = _browser_login(
+            driver,
+            account,
+            email,
+            headless=bool(headless),
+            restore_saved_session=not bool(force_fresh_login),
+        )
+        token = str(session_info.get("accessToken") or "").strip()
+        token_status = _browser_token_status(driver, token) if token else 0
+        if not 200 <= token_status < 300:
+            raise RuntimeError(f"浏览器 Session 已返回 AT，但在线校验未通过：HTTP {token_status or 0}")
         result = _session_result(driver, session_info, driver_name=selected, proxy_used=proxy_used)
         logger.info("[查活][浏览器] 完成：driver=%s 已刷新 Session/AT", selected)
         return result

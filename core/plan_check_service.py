@@ -96,7 +96,10 @@ def _refresh_login_for_plan(account: dict, *, proxy: str | None) -> dict | None:
         clear_log=False,
         account=account,
     )
-    db.update_account_liveness(int(account.get("id") or 0), result)
+    # 套餐查询只是查活之后的附加任务。协议刷新若被 CF/网络拦截，不应把
+    # 已经由指纹浏览器确认成功的查活状态覆盖成失败；仅成功刷新时同步登录态。
+    if result.get("ok"):
+        db.update_account_liveness(int(account.get("id") or 0), result)
     return result
 
 
@@ -141,7 +144,10 @@ def _run_plan_check(
                 current_token = latest_token
                 account = latest_account
 
-        if result.get("needs_live_check") or result.get("token_expired") is True:
+        if (
+            trigger != "live_check_refresh"
+            and (result.get("needs_live_check") or result.get("token_expired") is True)
+        ):
             live_result = _refresh_login_for_plan(account, proxy=proxy)
             if live_result and live_result.get("ok") and live_result.get("access_token"):
                 refreshed_account = db.get_account(account_id) or {
@@ -163,6 +169,12 @@ def _run_plan_check(
             elif live_result:
                 result["live_refresh_performed"] = True
                 result["live_refresh_error"] = live_result.get("error") or "协议刷新登录态失败"
+        elif trigger == "live_check_refresh" and (
+            result.get("needs_live_check") or result.get("token_expired") is True
+        ):
+            # 当前 AT 刚由查活线程在真实浏览器内校验并保存，再发起协议登录只会
+            # 造成重复登录，并可能用网络 403 覆盖真实的浏览器查活成功状态。
+            result["live_refresh_skipped"] = "fresh_browser_session"
 
         recheck_delay = _registration_recheck_delay()
         should_recheck = (

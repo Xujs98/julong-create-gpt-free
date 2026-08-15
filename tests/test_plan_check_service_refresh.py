@@ -128,3 +128,54 @@ def test_plan_query_enables_oaics_check_with_account_country():
 
     assert query.call_args.kwargs["check_oaics"] is True
     assert query.call_args.kwargs["billing_country"] == "US"
+
+
+def test_failed_plan_protocol_refresh_does_not_overwrite_live_status():
+    account = {
+        "id": 1,
+        "email": "user@example.com",
+        "registration_password": "PASSWORD",
+    }
+    failed = {"ok": False, "status": "failed", "error": "HTTP 403"}
+    with patch("core.account_liveness.check_account_liveness", return_value=failed), patch(
+        "core.plan_check_service.db.update_account_liveness"
+    ) as update_live:
+        result = plan_check_service._refresh_login_for_plan(account, proxy="PROXY")
+
+    assert result == failed
+    update_live.assert_not_called()
+
+
+def test_fresh_browser_live_check_does_not_start_duplicate_protocol_refresh():
+    account = {
+        "id": 1,
+        "email": "user@example.com",
+        "access_token": "NEW_TOKEN",
+        "registration_password": "PASSWORD",
+    }
+    rejected = {
+        "ok": False,
+        "http_status": 401,
+        "needs_live_check": True,
+        "token_expired": True,
+        "error": "HTTP 401",
+    }
+    with patch("core.plan_check_service.db.mark_account_plan_check_running", return_value=True), patch(
+        "core.plan_check_service.db.get_account", return_value=account
+    ), patch("core.plan_check_service._wait_for_rate_slot"), patch(
+        "core.plan_check_service._check_plan_with_account_context", return_value=rejected
+    ), patch("core.plan_check_service._refresh_login_for_plan") as refresh, patch(
+        "core.plan_check_service.db.update_account_plan_check"
+    ), patch.object(plan_check_service._QUEUE_SLOTS, "release"):
+        result = plan_check_service._run_plan_check(
+            account_id=1,
+            email="user@example.com",
+            access_token="NEW_TOKEN",
+            trigger="live_check_refresh",
+            proxy="PROXY",
+            timezone_offset_min="-",
+        )
+
+    assert result["ok"] is False
+    assert result["live_refresh_skipped"] == "fresh_browser_session"
+    refresh.assert_not_called()

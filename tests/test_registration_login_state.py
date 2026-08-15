@@ -17,6 +17,29 @@ class RegistrationLoginStateTests(unittest.TestCase):
         type_email.assert_not_called()
         has_token.assert_called_once()
 
+    @patch("core.roxy_registration._wait_email_submit_next_state", return_value="login_password")
+    @patch("core.roxy_registration._submit_email_step")
+    @patch("core.roxy_registration.human_delay")
+    @patch("core.roxy_registration._email_input_value_state")
+    @patch("core.roxy_registration._type_email_address")
+    @patch("core.roxy_registration._has_access_token", return_value=True)
+    def test_fresh_login_disables_existing_session_reuse(
+        self, has_token, type_email, input_state, delay, submit_step, wait_state
+    ):
+        input_state.return_value = {"inputs": [{"value": "user@example.test"}]}
+
+        result = _submit_email_and_wait_next(
+            Mock(),
+            "user@example.test",
+            allow_login_password=True,
+            allow_existing_session=False,
+        )
+
+        self.assertEqual(result, "login_password")
+        has_token.assert_not_called()
+        type_email.assert_called_once()
+        submit_step.assert_called_once()
+
     @patch("core.roxy_registration._is_email_verification_page", return_value=False)
     def test_resend_wait_accepts_completed_navigation(self, is_verification):
         result = _click_resend_email_otp(Mock(), timeout=1)

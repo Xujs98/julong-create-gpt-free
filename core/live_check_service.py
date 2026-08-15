@@ -45,10 +45,13 @@ def _check_existing_access_token(
     proxy: str | None,
     email: str,
     browser_fallback: bool = False,
+    decision: dict | None = None,
 ) -> dict | None:
     """Return a liveness result, or None when an expired token requires re-login."""
     access_token = str(account.get("access_token") or "").strip()
     if not access_token:
+        if decision is not None:
+            decision["force_fresh_login"] = True
         _append_log(email, "[查活] 未保存 AT，进入重新登录刷新流程")
         return None
 
@@ -77,6 +80,8 @@ def _check_existing_access_token(
         }
 
     if checked.get("needs_live_check") or checked.get("token_expired") or checked.get("http_status") == 401:
+        if decision is not None:
+            decision["force_fresh_login"] = True
         _append_log(email, "[查活] 现有 AT 已过期/失效，进入重新登录刷新流程")
         return None
 
@@ -85,6 +90,8 @@ def _check_existing_access_token(
         checked.get("http_status") in {403, 429}
         or any(word in error.lower() for word in ("403", "429", "timeout", "connection", "proxy"))
     ):
+        if decision is not None:
+            decision["force_fresh_login"] = False
         _append_log(email, "[查活] 现有 AT 的协议在线校验受网络/CF 拦截，转由选定指纹浏览器确认")
         return None
     return {
@@ -119,11 +126,13 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             f"driver={selected_driver} headless={selected_headless if selected_driver != 'protocol' else '-'}"
         )
         account = db.get_account(account_id) or {}
+        login_decision: dict = {}
         result = _check_existing_access_token(
             account,
             proxy=selected_proxy,
             email=email,
             browser_fallback=selected_driver != "protocol",
+            decision=login_decision,
         )
         used_relogin = result is None
         if used_relogin:
@@ -134,6 +143,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
                 account=account,
                 driver=selected_driver,
                 headless=selected_headless,
+                force_fresh_login=bool(login_decision.get("force_fresh_login")),
             )
         # 早期 providers/csrf 403 通常是该出口被 CF 拦截，不代表账号死亡。
         # auto/proxy 模式下如果用了代理，额外直连兜底一次，便于和套餐查询的 auto 语义保持接近。
@@ -155,6 +165,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
                 account=account,
                 driver=selected_driver,
                 headless=selected_headless,
+                force_fresh_login=bool(login_decision.get("force_fresh_login")),
             )
         db.update_account_liveness(account_id, result)
         if result.get("ok") and result.get("check_method") != "access_token":
