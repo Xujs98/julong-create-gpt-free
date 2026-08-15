@@ -2,9 +2,12 @@
 """iCloud 邮箱池客户端：读取导入的 HTML 取码地址并轮询验证码。"""
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -12,6 +15,7 @@ from config import email as _email_cfg
 from core.generic_api_mail_client import (
     _extract_code,
     _extract_html_selector_code,
+    _parse_generic_api_ts,
     _extract_yangyang_openai_code,
 )
 
@@ -75,6 +79,68 @@ def release_account(email: str, status: str = "available", note: str | None = No
     _CONTEXT_CACHE.pop(_key(email), None)
 
 
+_MAILBOX_SHELL_MARKERS = (
+    "/data",
+    "loadData",
+)
+_SIX_DIGIT_RE = re.compile(r"\b(\d{6})\b")
+
+
+def _mailbox_data_url(code_url: str, page_body: str) -> str | None:
+    """识别动态邮箱页面，并生成页面脚本实际请求的 /data 地址。"""
+    body = str(page_body or "")
+    has_code_placeholder = 'id="code"' in body or "id='code'" in body
+    if not has_code_placeholder or not all(marker in body for marker in _MAILBOX_SHELL_MARKERS):
+        return None
+    try:
+        parsed = urlsplit(str(code_url or ""))
+    except Exception:
+        return None
+    path = (parsed.path or "").rstrip("/")
+    if not path or path.endswith("/data"):
+        return None
+    return urlunsplit((parsed.scheme, parsed.netloc, f"{path}/data", "", ""))
+
+
+def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
+    """从动态邮箱页面的 JSON 数据中按时间倒序读取最新验证码。"""
+    if not isinstance(payload, dict):
+        return None
+    candidates: list[dict] = []
+    latest = payload.get("latest")
+    if isinstance(latest, dict):
+        candidates.append(latest)
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        candidates.extend(item for item in messages if isinstance(item, dict))
+
+    def msg_ts(item: dict) -> float:
+        return _parse_generic_api_ts(
+            item.get("received_at") or item.get("receivedAt") or item.get("time") or item.get("date")
+        ) or 0.0
+
+    candidates.sort(key=msg_ts, reverse=True)
+    for item in candidates:
+        timestamp = msg_ts(item)
+        if after_ts and timestamp and timestamp + 2 < after_ts:
+            continue
+        raw_code = item.get("code") or item.get("otp") or item.get("verification_code")
+        code = _SIX_DIGIT_RE.search(str(raw_code or ""))
+        if code:
+            return code.group(1)
+
+        html_body = str(item.get("html_body") or item.get("htmlBody") or "")
+        body = str(item.get("body") or item.get("text") or "")
+        code_value = (
+            _extract_html_selector_code(html_body)
+            or _extract_yangyang_openai_code(str(item.get("subject") or ""), html_body or body)
+            or _extract_code(body)
+        )
+        if code_value:
+            return code_value
+    return None
+
+
 def fetch_latest_otp(
     email: str,
     after_ts: float | None = None,
@@ -108,12 +174,35 @@ def fetch_latest_otp(
                 last_error = f"HTTP {response.status_code}: {(response.text or '')[:160]}"
             else:
                 body = response.text or ""
-                # iCloud API 返回 HTML；先用带 OpenAI 语义的抽取器，减少模板数字误判。
-                code = (
-                    _extract_html_selector_code(body)
-                    or _extract_yangyang_openai_code("", body)
-                    or _extract_code(body)
-                )
+                # 部分 HTML 接码站点是 SPA：首屏只有 id="code" 占位符，真实内容由 /data JSON 注入。
+                # 先处理选择器和动态数据，避免整页 CSS 颜色值被误判为六位验证码。
+                code = _extract_html_selector_code(body)
+                data_url = _mailbox_data_url(account.code_url, body)
+                if not code and data_url:
+                    try:
+                        data_response = requests.get(
+                            data_url,
+                            headers={**headers, "Accept": "application/json,text/plain,*/*"},
+                            timeout=timeout,
+                            verify=verify,
+                        )
+                        if data_response.status_code == 200:
+                            try:
+                                payload = data_response.json()
+                            except (TypeError, ValueError, json.JSONDecodeError):
+                                payload = json.loads(data_response.text or "{}")
+                            code = _mailbox_payload_code(payload, after_ts=after_ts)
+                            if code:
+                                logger.info("[iCloud] 动态邮箱 /data 提取到验证码=%s", code)
+                        else:
+                            last_error = f"动态邮箱数据 HTTP {data_response.status_code}"
+                    except requests.RequestException as exc:
+                        last_error = f"动态邮箱数据请求失败: {type(exc).__name__}: {exc}"
+                    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                        last_error = f"动态邮箱数据解析失败: {type(exc).__name__}: {exc}"
+                if not code and not data_url:
+                    # 静态 HTML 邮件继续使用带 OpenAI 语义的抽取器，再回退整页识别。
+                    code = _extract_yangyang_openai_code("", body) or _extract_code(body)
                 if code:
                     # HTML 取码页只暴露“当前验证码”，没有邮件时间戳；2FA 重认证时
                     # 必须显式排除注册阶段已经使用过的验证码，等待页面更新为新码。

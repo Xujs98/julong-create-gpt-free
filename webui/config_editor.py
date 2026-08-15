@@ -453,7 +453,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "HTML_OTP_SELECTORS", "file": "email.py", "type": "list_str_multiline", "group": "邮箱 / OTP",
-        "label": "HTML验证码选择器", "help": "每行一个 CSS 选择器，按顺序尝试：#otp、.verification-code、id=otp、class=verification-code 或 tag#id/tag.class；命中元素后优先提取其文本",
+        "label": "HTML验证码选择器", "help": "每行一个 CSS 选择器，按顺序尝试：#otp、.verification-code、id=otp、class=verification-code 或 tag#id/tag.class；命中元素后优先提取其文本。SPA 页面首屏为占位符时会自动读取页面的 /data 接口",
     },
     {
         "key": "GPTMAIL_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",

@@ -55,6 +55,35 @@ class HtmlOtpSelectorTests(unittest.TestCase):
             )
         self.assertEqual(code, "010949")
 
+    @patch("core.icloud_client.requests.get")
+    @patch("core.icloud_client.get_account_context")
+    def test_icloud_dynamic_mailbox_reads_data_endpoint(self, get_context, request_get):
+        get_context.return_value = icloud_client.ICloudEmailAccount(
+            email="sample@icloud.com", code_url="http://mail.example/mailbox/token"
+        )
+        shell = Mock(
+            status_code=200,
+            text='<style>#163133{color:red}</style><div id="code">—</div>'
+            '<script>function loadData(){return fetch("/mailbox/token/data")}</script>',
+        )
+        data = Mock(status_code=200)
+        data.json.return_value = {
+            "latest": {
+                "code": "208823",
+                "received_at": "2026-08-15T23:33:53Z",
+            }
+        }
+        request_get.side_effect = [shell, data]
+
+        with patch.object(email_config, "HTML_OTP_SELECTORS", ["id=code"]):
+            code = icloud_client.fetch_latest_otp(
+                "sample@icloud.com", after_ts=0, max_wait=2, poll_interval=1, settle_seconds=0
+            )
+
+        self.assertEqual(code, "208823")
+        self.assertEqual(request_get.call_count, 2)
+        self.assertTrue(request_get.call_args_list[1].args[0].endswith("/mailbox/token/data"))
+
 
 if __name__ == "__main__":
     unittest.main()
