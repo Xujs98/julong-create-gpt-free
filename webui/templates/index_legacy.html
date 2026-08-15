@@ -325,8 +325,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel, #proxyWarmupLogModalLegacy { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden), #proxyWarmupLogModalLegacy:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #twofaLogPanel, #qrPanel, #proxyWarmupLogModalLegacy { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #twofaLogPanel:not(.hidden), #qrPanel:not(.hidden), #proxyWarmupLogModalLegacy:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -334,9 +334,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #twofaLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #twofaLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #twofaLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #proxyWarmupLogModalLegacy:not(.hidden) {
       width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
       max-height: none; padding: 0; border-color: #24324a; border-radius: 10px;
@@ -668,6 +668,12 @@
           <button class="btn" id="btnCloseLiveLog" style="float:right;min-height:28px;">关闭</button>
         </h3>
         <div class="log" id="liveLogContent">加载中…</div>
+      </div>
+      <div class="body hidden" id="twofaLogPanel">
+        <h3>重设2FA日志：<span id="twofaLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+          <button class="btn" id="btnCloseTwofaLog" style="float:right;min-height:28px;">关闭</button>
+        </h3>
+        <div class="log" id="twofaLogContent">加载中…</div>
       </div>
     </section>
   </div>
@@ -1108,7 +1114,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#proxyWarmupLogModalLegacy').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#accountExportModal').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#proxyWarmupLogModalLegacy').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#twofaLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden') || !$('#accountExportModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1142,6 +1148,12 @@ function closeLiveLogModal() {
   liveLogEmail = null;
   clearInterval(liveLogTimer);
   $('#liveLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+function closeTwofaLogModal() {
+  twofaLogEmail = null;
+  clearInterval(twofaLogTimer);
+  $('#twofaLogPanel').classList.add('hidden');
   updateModalScrollLock();
 }
 function openQrModal(url) {
@@ -1817,7 +1829,7 @@ function renderAccounts() {
       <td class="actions actions-cell">
         <div class="account-row-actions">
           <div class="account-action-group"><button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
-          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-live-check="${esc(r.id)}" title="依次校验现有 AT、保存 Session、协议账号密码与 2FA；旧账号才使用邮箱验证码">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-live-check="${esc(r.id)}" title="依次校验现有 AT、保存 Session、协议账号密码与 2FA；旧账号才使用邮箱验证码">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> ${!r.totp_enabled ? `<button data-account-setup-twofa="${esc(r.id)}" title="刷新登录态并重新设置 TOTP">重新设置2FA</button>` : ''} <button data-account-twofa-log="${esc(r.email)}" title="查看该账号最近一次重设 2FA 日志">重设2FA日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
@@ -1951,6 +1963,35 @@ async function pollLiveLog() {
 }
 $('#btnCloseLiveLog').addEventListener('click', closeLiveLogModal);
 
+// ---------- 重设 2FA 日志面板 ----------
+let twofaLogEmail = null, twofaLogTimer = null;
+
+function openTwofaLog(email) {
+  twofaLogEmail = email;
+  $('#twofaLogEmail').textContent = email;
+  $('#twofaLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#twofaLogContent').textContent = '加载中…';
+  pollTwofaLog();
+  clearInterval(twofaLogTimer);
+  twofaLogTimer = setInterval(pollTwofaLog, 2000);
+}
+async function pollTwofaLog() {
+  if (!twofaLogEmail) return;
+  try {
+    const r = await api(`/api/accounts/twofa-log?email=${encodeURIComponent(twofaLogEmail)}`);
+    const content = $('#twofaLogContent');
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 30;
+    content.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    if (!r.running) {
+      clearInterval(twofaLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+$('#btnCloseTwofaLog').addEventListener('click', closeTwofaLogModal);
+
 // 老 UI 查活兜底：捕获阶段直接拦截，避免被表格/按钮组其它事件吞掉。
 document.addEventListener('click', async (e) => {
   const bulkBtn = e.target.closest('[data-live-check-selected]');
@@ -2001,6 +2042,12 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const twofaBtn = e.target.closest('[data-account-setup-twofa]');
   if (twofaBtn) {
     await retryAccountTwofa(Number(twofaBtn.dataset.accountSetupTwofa), twofaBtn);
+    return;
+  }
+
+  const twofaLogBtn = e.target.closest('[data-account-twofa-log]');
+  if (twofaLogBtn) {
+    openTwofaLog(twofaLogBtn.dataset.accountTwofaLog);
     return;
   }
 
@@ -2591,6 +2638,7 @@ async function retryAccountTwofa(id, btn) {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({}),
     });
     showToast(result.busy ? '该账号正在设置 2FA' : '2FA 重新设置任务已入队');
+    openTwofaLog(email);
     planStatusRevision = '';
     await pollAccountPlanStatuses();
   } catch (err) {

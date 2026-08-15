@@ -2517,6 +2517,27 @@ def create_app(auth_code: str | None = None) -> Flask:
             "running": live_check_service.is_checking(email),
         })
 
+    @app.get("/api/accounts/twofa-log")
+    def api_account_twofa_log():
+        """读取某邮箱最近一次 2FA 重设日志。?email=xxx"""
+        email = (request.args.get("email") or "").strip()
+        if not email:
+            return jsonify({"ok": False, "error": "email 为空"}), 400
+        path = twofa_setup_service.log_path(email)
+        if not path.exists():
+            return jsonify({"ok": True, "log": "", "running": twofa_setup_service.is_setting(email)})
+        max_bytes = 80_000
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+            content = handle.read().decode("utf-8", errors="replace")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": twofa_setup_service.is_setting(email),
+        })
+
     # ----------------------------------------------------------
     # 注册任务
     # ----------------------------------------------------------

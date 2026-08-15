@@ -202,8 +202,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel, #registrationTaskLogPanel, #proxyWarmupLogModal { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden), #proxyWarmupLogModal:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #twofaLogPanel, #qrPanel, #registrationTaskLogPanel, #proxyWarmupLogModal { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #twofaLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden), #proxyWarmupLogModal:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -211,9 +211,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #twofaLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #twofaLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #twofaLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     /* 注册任务单条日志：深色逐行视图，便于快速区分时间、级别与正文。 */
     #logPanel:not(.hidden) {
       width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
@@ -3018,6 +3018,12 @@ try {
       </h3>
       <div class="log" id="liveLogContent">加载中…</div>
     </div>
+    <div class="body hidden" id="twofaLogPanel">
+      <h3>重设2FA日志：<span id="twofaLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseTwofaLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="twofaLogContent">加载中…</div>
+    </div>
   </div>
 
   <!-- ============ Codex 授权 ============ -->
@@ -4032,6 +4038,7 @@ function updateModalScrollLock() {
     || !$('#registrationTaskLogPanel').classList.contains('hidden')
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#liveLogPanel').classList.contains('hidden')
+    || !$('#twofaLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
     || !$('#outlookImportModal').classList.contains('hidden')
     || !$('#accountsFilterModal').classList.contains('hidden')
@@ -4136,6 +4143,12 @@ function closeLiveLogModal() {
   liveLogEmail = null;
   clearInterval(liveLogTimer);
   $('#liveLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+function closeTwofaLogModal() {
+  twofaLogEmail = null;
+  clearInterval(twofaLogTimer);
+  $('#twofaLogPanel').classList.add('hidden');
   updateModalScrollLock();
 }
 function openQrModal(url) {
@@ -4994,6 +5007,8 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="依次校验现有 AT、保存 Session、协议账号密码与 2FA；旧账号才使用邮箱验证码">查活/刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
+    !r.totp_enabled ? `<button type="button" data-account-setup-twofa="${esc(r.id)}" title="刷新登录态并重新设置 TOTP">重新设置2FA</button>` : '',
+    `<button type="button" data-account-twofa-log="${esc(r.email)}" title="查看该账号最近一次重设 2FA 日志">重设2FA日志</button>`,
     _planAction(r),
     _extractLinkAction(r),
     _codexAction(r),
@@ -5241,6 +5256,35 @@ async function pollLiveLog() {
 }
 $('#btnCloseLiveLog').addEventListener('click', closeLiveLogModal);
 
+// ---------- 重设 2FA 日志面板 ----------
+let twofaLogEmail = null, twofaLogTimer = null;
+
+function openTwofaLog(email) {
+  twofaLogEmail = email;
+  $('#twofaLogEmail').textContent = email;
+  $('#twofaLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#twofaLogContent').textContent = '加载中…';
+  pollTwofaLog();
+  clearInterval(twofaLogTimer);
+  twofaLogTimer = setInterval(pollTwofaLog, 2000);
+}
+async function pollTwofaLog() {
+  if (!twofaLogEmail) return;
+  try {
+    const r = await api(`/api/accounts/twofa-log?email=${encodeURIComponent(twofaLogEmail)}`);
+    const content = $('#twofaLogContent');
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 30;
+    content.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    if (!r.running) {
+      clearInterval(twofaLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+$('#btnCloseTwofaLog').addEventListener('click', closeTwofaLogModal);
+
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
   const moreToggle = e.target.closest('[data-acc-more-toggle]');
@@ -5356,6 +5400,12 @@ async function onAccountsBodyClick(e) {
   const twofaBtn = e.target.closest('[data-account-setup-twofa]');
   if (twofaBtn) {
     await retryAccountTwofa(Number(twofaBtn.dataset.accountSetupTwofa), twofaBtn);
+    return;
+  }
+
+  const twofaLogBtn = e.target.closest('[data-account-twofa-log]');
+  if (twofaLogBtn) {
+    openTwofaLog(twofaLogBtn.dataset.accountTwofaLog);
     return;
   }
 
@@ -6205,6 +6255,7 @@ async function retryAccountTwofa(id, btn) {
       body: JSON.stringify({}),
     });
     showToast(result.busy ? '该账号正在设置 2FA' : '2FA 重新设置任务已入队');
+    openTwofaLog(email);
     planStatusRevision = '';
     await pollAccountPlanStatuses();
   } catch (err) {

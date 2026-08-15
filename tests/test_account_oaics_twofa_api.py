@@ -50,3 +50,18 @@ def test_twofa_retry_endpoint_rejects_missing_saved_password():
     assert response.status_code == 400
     assert "未保存注册密码" in response.get_json()["error"]
     enqueue.assert_not_called()
+
+
+def test_twofa_log_endpoint_returns_latest_log(tmp_path):
+    client = _client()
+    path = tmp_path / "twofa.log"
+    path.write_text("11:00:00 [INFO] [2FA重设] direct fallback\n", encoding="utf-8")
+    with patch("webui.app.twofa_setup_service.log_path", return_value=path), patch(
+        "webui.app.twofa_setup_service.is_setting", return_value=True
+    ):
+        response = client.get("/api/accounts/twofa-log?email=user@example.test")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert "direct fallback" in body["log"]
+    assert body["running"] is True
