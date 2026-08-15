@@ -236,6 +236,8 @@ EMAIL_SOURCE = "outlook,icloud,generic_api"
 
 「iCloud 邮箱」子页可设置单次 HTML 请求超时与 TLS 证书校验。
 
+如果不同 HTML 接码网站把验证码放在不同的元素中，可在「配置 → 邮箱 / OTP → 通用邮箱 / OTP」填写 `HTML_OTP_SELECTORS`，每行一个选择器。支持 `#otp`、`.verification-code`、`id=otp`、`class=verification-code`、`span#otp`、`div.code.highlight` 等写法；系统按顺序读取命中的元素文本，再回退到整页通用识别。该配置同时适用于 `icloud` 和返回 HTML 的 `generic_api` 邮箱来源。
+
 #### GPTMail 临时邮箱
 
 在 WebUI 的「配置 → 邮箱 / OTP」填写 `GPTMail API Key`，然后将邮箱来源设置为：

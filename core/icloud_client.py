@@ -9,7 +9,11 @@ from dataclasses import dataclass
 import requests
 
 from config import email as _email_cfg
-from core.generic_api_mail_client import _extract_code, _extract_yangyang_openai_code
+from core.generic_api_mail_client import (
+    _extract_code,
+    _extract_html_selector_code,
+    _extract_yangyang_openai_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +109,11 @@ def fetch_latest_otp(
             else:
                 body = response.text or ""
                 # iCloud API 返回 HTML；先用带 OpenAI 语义的抽取器，减少模板数字误判。
-                code = _extract_yangyang_openai_code("", body) or _extract_code(body)
+                code = (
+                    _extract_html_selector_code(body)
+                    or _extract_yangyang_openai_code("", body)
+                    or _extract_code(body)
+                )
                 if code:
                     # HTML 取码页只暴露“当前验证码”，没有邮件时间戳；2FA 重认证时
                     # 必须显式排除注册阶段已经使用过的验证码，等待页面更新为新码。

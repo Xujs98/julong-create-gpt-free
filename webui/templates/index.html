@@ -7460,7 +7460,7 @@ function configGroups() {
 }
 
 function emailConfigSectionForKey(key) {
-  if (['USE_EMAIL_SERVICE','REGISTER_EMAIL','REGISTER_NAME','OTP_MAX_WAIT','OTP_POLL_INTERVAL','EMAIL_SOURCE'].includes(key)) {
+  if (['USE_EMAIL_SERVICE','REGISTER_EMAIL','REGISTER_NAME','OTP_MAX_WAIT','OTP_POLL_INTERVAL','EMAIL_SOURCE','HTML_OTP_SELECTORS'].includes(key)) {
     return ['通用邮箱 / OTP', '邮箱来源选择、OTP 等待参数、手动邮箱等通用设置'];
   }
   if (key.startsWith('ICLOUD_')) return ['iCloud 邮箱', 'iCloud 邮箱池 HTML 取码请求的通用配置'];

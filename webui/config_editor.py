@@ -452,6 +452,10 @@ EDITABLE_FIELDS = [
         "label": "iCloud校验TLS证书", "help": "HTTPS 取码地址默认开启证书校验；自签名的内网地址可关闭",
     },
     {
+        "key": "HTML_OTP_SELECTORS", "file": "email.py", "type": "list_str_multiline", "group": "邮箱 / OTP",
+        "label": "HTML验证码选择器", "help": "每行一个 CSS 选择器，按顺序尝试：#otp、.verification-code、id=otp、class=verification-code 或 tag#id/tag.class；命中元素后优先提取其文本",
+    },
+    {
         "key": "GPTMAIL_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "GPTMail API Key", "help": "选择 gptmail 邮箱来源时必填；保存在 .env，不会写入 config 源码",
         "storage": "env", "secret": True,

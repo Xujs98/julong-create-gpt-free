@@ -14,6 +14,7 @@ import re
 import time
 import base64
 import html as html_lib
+from html.parser import HTMLParser
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,6 +90,178 @@ def _decode_data_uri(text: str) -> str:
         return unquote_to_bytes(payload).decode("utf-8", errors="replace")
     except Exception:
         return text
+
+
+def _normalise_html_otp_selectors(selectors=None) -> list[str]:
+    """把配置中的多行/逗号分隔选择器规范化为有序去重列表。"""
+    if selectors is None:
+        selectors = getattr(_email_cfg, "HTML_OTP_SELECTORS", [])
+    if isinstance(selectors, str):
+        raw_items = re.split(r"[\r\n,;]+", selectors)
+    else:
+        raw_items = selectors if isinstance(selectors, (list, tuple, set)) else [selectors]
+    out: list[str] = []
+    for raw in raw_items:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        # 便于直接填写属性名，统一转换为 CSS 选择器。
+        lowered = value.lower()
+        if lowered.startswith("id=") or lowered.startswith("id:"):
+            value = "#" + value[3:].strip().strip("\"'")
+        elif lowered.startswith("class=") or lowered.startswith("class:"):
+            value = "." + value[6:].strip().strip("\"'")
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def _parse_html_otp_selector(selector: str) -> dict:
+    """解析常用的 id/class CSS 选择器；不引入第三方 HTML 解析依赖。"""
+    value = str(selector or "").strip()
+    result = {"tag": "", "id": "", "classes": [], "bare": ""}
+    if not value:
+        return result
+
+    lowered = value.lower()
+    if lowered.startswith("id=") or lowered.startswith("id:"):
+        value = "#" + value[3:].strip().strip("\"'")
+    elif lowered.startswith("class=") or lowered.startswith("class:"):
+        value = "." + value[6:].strip().strip("\"'")
+
+    # 属性选择器的常见写法：[id="otp"] / [class~="code"]。
+    attr = re.fullmatch(r"\[\s*(id|class)\s*(?:~=|=)\s*['\"]?([^'\"\]]+)['\"]?\s*\]", value, re.IGNORECASE)
+    if attr:
+        if attr.group(1).lower() == "id":
+            result["id"] = attr.group(2).strip()
+        else:
+            result["classes"] = attr.group(2).strip().split()
+        return result
+
+    # 只处理单个元素选择器（tag、#id、.class 的组合），足够覆盖接码页配置。
+    # 裸值同时按 tag/id/class 尝试，方便直接填写网页检查器里看到的名称。
+    if "." not in value and "#" not in value and re.fullmatch(r"[A-Za-z][A-Za-z0-9:_-]*", value):
+        result["bare"] = value
+        return result
+    m = re.match(r"^(?P<tag>[A-Za-z][A-Za-z0-9:_-]*|\*)?", value)
+    pos = m.end() if m else 0
+    result["tag"] = (m.group("tag") or "").lower() if m else ""
+    rest = value[pos:]
+    for kind, name in re.findall(r"([.#])([A-Za-z0-9_:\-]+)", rest):
+        if kind == ".":
+            result["classes"].append(name)
+        else:
+            result["id"] = name
+    consumed = re.sub(r"[.#][A-Za-z0-9_:\-]+", "", rest)
+    if not result["tag"] and not result["id"] and not result["classes"] and consumed.strip():
+        # 裸值同时按 id 和 class 尝试，兼容用户直接填写元素 id/class 名称。
+        result["bare"] = value
+    return result
+
+
+def _html_selector_matches(tag: str, attrs: dict[str, str], parsed: dict) -> bool:
+    tag_name = str(tag or "").lower()
+    wanted_tag = parsed.get("tag") or ""
+    if wanted_tag and wanted_tag != "*" and wanted_tag != tag_name:
+        return False
+    element_id = str(attrs.get("id") or "")
+    classes = set(str(attrs.get("class") or "").split())
+    wanted_id = parsed.get("id") or ""
+    wanted_classes = set(parsed.get("classes") or [])
+    if wanted_id and element_id != wanted_id:
+        return False
+    if wanted_classes and not wanted_classes.issubset(classes):
+        return False
+    bare = parsed.get("bare") or ""
+    if bare and bare not in {tag_name, element_id, *classes}:
+        return False
+    return bool(wanted_tag or wanted_id or wanted_classes or bare)
+
+
+class _HtmlOtpSelectorParser(HTMLParser):
+    """收集命中元素的可见文本，支持嵌套标签和多个选择器。"""
+
+    def __init__(self, selectors: list[str]):
+        super().__init__(convert_charrefs=True)
+        self._selectors = [_parse_html_otp_selector(item) for item in selectors]
+        self._stack: list[dict] = []
+        self.values: list[str] = []
+
+    def _push(self, tag: str, attrs_list):
+        attrs = {str(key).lower(): str(value or "") for key, value in attrs_list if key}
+        matched = any(_html_selector_matches(tag, attrs, selector) for selector in self._selectors)
+        self._stack.append({"tag": str(tag).lower(), "matched": matched, "parts": []})
+
+    def handle_starttag(self, tag, attrs):
+        self._push(tag, attrs)
+
+    def handle_startendtag(self, tag, attrs):
+        self._push(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data):
+        if not data or any(item["tag"] in {"script", "style", "noscript"} for item in self._stack):
+            return
+        for item in self._stack:
+            if item["matched"]:
+                item["parts"].append(data)
+
+    def handle_endtag(self, tag):
+        wanted = str(tag or "").lower()
+        index = next((idx for idx in range(len(self._stack) - 1, -1, -1) if self._stack[idx]["tag"] == wanted), None)
+        if index is None:
+            return
+        closing = self._stack[index:]
+        del self._stack[index:]
+        for item in reversed(closing):
+            if item["matched"]:
+                text = html_lib.unescape(" ".join(item["parts"]))
+                text = re.sub(r"\s+", " ", text).strip()
+                if text and text not in self.values:
+                    self.values.append(text)
+
+    def close(self):
+        super().close()
+        # 兼容接码页省略结束标签的容错 HTML。
+        if self._stack:
+            remaining = self._stack
+            self._stack = []
+            for item in reversed(remaining):
+                if item["matched"]:
+                    text = html_lib.unescape(" ".join(item["parts"]))
+                    text = re.sub(r"\s+", " ", text).strip()
+                    if text and text not in self.values:
+                        self.values.append(text)
+
+
+def _extract_html_selector_values(text: str, selectors=None) -> list[str]:
+    """返回 HTML 中命中配置选择器的文本片段。"""
+    body = _decode_data_uri(text or "")
+    selector_list = _normalise_html_otp_selectors(selectors)
+    if not body or not selector_list or "<" not in body:
+        return []
+    parser = _HtmlOtpSelectorParser(selector_list)
+    try:
+        parser.feed(body)
+        parser.close()
+    except Exception as exc:
+        logger.debug("[HTML OTP] 选择器解析失败: %s: %s", type(exc).__name__, exc)
+    return parser.values
+
+
+def _extract_html_selector_code(text: str, selectors=None) -> str | None:
+    """按 HTML 选择器优先提取 OTP；未命中时返回 None 交给通用识别器。"""
+    for fragment in _extract_html_selector_values(text, selectors):
+        code = _extract_code(fragment)
+        if not code:
+            # 兼容验证码被多个内嵌标签/空白拆开的情况。
+            compact = re.sub(r"\s+", "", fragment)
+            if compact != fragment:
+                code = _extract_code(compact)
+        if code:
+            logger.debug("[HTML OTP] 选择器命中验证码: selector_text=%r", fragment[:120])
+            return code
+    return None
 
 
 def _extract_code(text: str) -> str | None:
@@ -377,7 +550,10 @@ def _fetch_yangyang_otp(
             str(detail.get("receivedAt") or item.get("received_at") or ""),
             body,
         ])
-        code = _extract_yangyang_openai_code(subject, body)
+        code = (
+            _extract_html_selector_code(body)
+            or _extract_yangyang_openai_code(subject, body)
+        )
         if code:
             logger.info(
                 f"[GenericAPI] yangyang 页面提取到 OTP={code}, "
@@ -442,7 +618,8 @@ def _fetch_inline_messages_page_otp(
         subject = _strip_html_fragment(subject_m.group(1) if subject_m else "")
         received_at = _strip_html_fragment(date_m.group(1) if date_m else "")
         from_addr = _strip_html_fragment(from_m.group(1) if from_m else "")
-        body = _strip_html_fragment(body_m.group(1) if body_m else card)
+        body_html = body_m.group(1) if body_m else card
+        body = _strip_html_fragment(body_html)
         msg_ts = _parse_yangyang_ts(received_at)
         items.append({
             "mail_id": f"inline-{idx}",
@@ -450,6 +627,7 @@ def _fetch_inline_messages_page_otp(
             "received_at": received_at,
             "from": from_addr,
             "body": body,
+            "body_html": body_html,
             "msg_ts": msg_ts or 0.0,
         })
 
@@ -464,7 +642,11 @@ def _fetch_inline_messages_page_otp(
                 item.get("subject") or "",
             )
             continue
-        code = _extract_yangyang_openai_code(str(item.get("subject") or ""), str(item.get("body") or ""))
+        body_html = str(item.get("body_html") or "")
+        code = (
+            _extract_html_selector_code(body_html)
+            or _extract_yangyang_openai_code(str(item.get("subject") or ""), str(item.get("body") or ""))
+        )
         if code:
             logger.info(
                 "[GenericAPI] inline messages 页面提取到 OTP=%s, mail_id=%s, ts=%s, subject=%r",
@@ -611,9 +793,11 @@ def fetch_latest_otp(
             if resp is None:
                 pass
             elif resp.status_code == 200:
+                # 配置了 HTML 选择器时，先从指定元素读取，避免页面其它数字/时间戳干扰。
+                selector_code = _extract_html_selector_code(text)
                 structured = _extract_structured_api_code(text, after_ts=after_ts)
                 structured_meta = structured[1] if structured else {}
-                code = structured[0] if structured else _extract_code(text)
+                code = selector_code or (structured[0] if structured else _extract_code(text))
                 if code:
                     now_seen = time.time()
                     if not best_otp:
