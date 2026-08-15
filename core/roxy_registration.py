@@ -1602,6 +1602,7 @@ def _wait_after_email_otp_submit(driver, timeout: int = 10) -> str:
         last = _email_otp_page_state(driver)
         invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
         if invalid or (last.get('errors') or []):
+            logger.warning("%s[OTP] 页面已明确提示验证码无效/过期 snapshot=%s", _log_prefix(driver), last)
             return 'invalid'
     if _is_email_verification_page(driver):
         last = _email_otp_page_state(driver)

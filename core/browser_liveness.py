@@ -339,6 +339,72 @@ def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") ->
     return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
 
 
+def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: int = 3) -> dict:
+    """邮箱 OTP 登录；旧码/过期码失败后重发并等待一个不同的新验证码。"""
+    from core.roxy_registration import (
+        _clear_otp_inputs,
+        _click_continue,
+        _click_resend_email_otp,
+        _fetch_chatgpt_session,
+        _type_otp,
+        _wait_after_email_otp_submit,
+    )
+
+    used_codes: set[str] = set()
+    current_after_ts = float(after_ts or time.time())
+    attempts = max(1, min(3, int(max_attempts or 3)))
+    last_outcome = ""
+    for attempt in range(1, attempts + 1):
+        logger.info("[查活][浏览器][OTP] 等待本次登录验证码（%s/%s）", attempt, attempts)
+        try:
+            code = wait_for_otp(
+                email,
+                after_ts=current_after_ts,
+                exclude_codes=used_codes,
+            )
+        except Exception as exc:
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "[查活][浏览器][OTP] 未取得新验证码，点击重发后继续：%s: %s",
+                type(exc).__name__,
+                str(exc)[:180],
+            )
+            current_after_ts = time.time()
+            resend = _click_resend_email_otp(driver, timeout=25)
+            if resend.get("reason") == "already_accepted":
+                return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+            continue
+
+        code = str(code or "").strip()
+        _clear_otp_inputs(driver)
+        _type_otp(driver, code, timeout=20)
+        try:
+            _click_continue(driver)
+        except Exception as exc:
+            logger.info("[查活][浏览器][OTP] 未找到显式提交按钮，继续观察页面：%s", str(exc)[:160])
+        last_outcome = _wait_after_email_otp_submit(driver, timeout=12)
+        if last_outcome == "accepted":
+            logger.info("[查活][浏览器][OTP] 邮箱验证码已通过")
+            return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+
+        used_codes.add(code)
+        if attempt >= attempts:
+            break
+        logger.warning(
+            "[查活][浏览器][OTP] 当前验证码无效/过期（outcome=%s），已排除该验证码并请求重发（下一次 %s/%s）",
+            last_outcome,
+            attempt + 1,
+            attempts,
+        )
+        current_after_ts = time.time()
+        resend = _click_resend_email_otp(driver, timeout=25)
+        if resend.get("reason") == "already_accepted":
+            return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+
+    raise RuntimeError(f"邮箱验证码连续未通过，已重试 {attempts} 次：last_outcome={last_outcome or 'unknown'}")
+
+
 def _browser_login(
     driver,
     account: dict,
@@ -436,8 +502,7 @@ def _browser_login(
         return _submit_code_and_fetch_session(driver, pyotp.TOTP(totp_secret).now(), code_kind="totp")
     if state == "otp" or state == "email_otp":
         logger.info("[查活][浏览器] 等待邮箱登录验证码")
-        code = wait_for_otp(email, after_ts=otp_after_ts)
-        return _submit_code_and_fetch_session(driver, code, code_kind="email_otp")
+        return _login_with_email_otp(driver, email, after_ts=otp_after_ts, max_attempts=3)
     if state == "logged_in":
         return _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
     if state == "password":

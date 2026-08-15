@@ -7,6 +7,7 @@ from core.browser_liveness import (
     _browser_login,
     _clear_browser_auth_state,
     _fill_login_password,
+    _login_with_email_otp,
     _password_error_message,
     _wait_after_password,
     check_account_liveness_browser,
@@ -167,3 +168,51 @@ def test_browser_liveness_forces_fresh_login_without_saved_session_reuse():
         restore_saved_session=False,
     )
     closer.assert_called_once()
+
+
+def test_email_otp_retries_with_resend_and_excludes_rejected_icloud_code():
+    driver = MagicMock()
+    observed_exclusions = []
+
+    def next_code(*_args, **kwargs):
+        observed_exclusions.append(set(kwargs.get("exclude_codes") or set()))
+        return "381908" if len(observed_exclusions) == 1 else "492617"
+
+    with patch("core.browser_liveness.wait_for_otp", side_effect=next_code) as wait_otp, patch(
+        "core.roxy_registration._clear_otp_inputs"
+    ) as clear_inputs, patch(
+        "core.roxy_registration._type_otp"
+    ) as type_otp, patch(
+        "core.roxy_registration._click_continue"
+    ), patch(
+        "core.roxy_registration._wait_after_email_otp_submit", side_effect=["invalid", "accepted"]
+    ), patch(
+        "core.roxy_registration._click_resend_email_otp", return_value={"ok": True}
+    ) as resend, patch(
+        "core.roxy_registration._fetch_chatgpt_session", return_value={"accessToken": "NEW_TOKEN"}
+    ):
+        result = _login_with_email_otp(driver, "user@example.com", after_ts=123.0)
+
+    assert result["accessToken"] == "NEW_TOKEN"
+    assert wait_otp.call_count == 2
+    assert observed_exclusions == [set(), {"381908"}]
+    assert clear_inputs.call_count == 2
+    assert [call.args[1] for call in type_otp.call_args_list] == ["381908", "492617"]
+    resend.assert_called_once()
+
+
+def test_email_otp_stops_after_three_distinct_rejected_codes():
+    driver = MagicMock()
+    with patch(
+        "core.browser_liveness.wait_for_otp", side_effect=["111111", "222222", "333333"]
+    ), patch("core.roxy_registration._clear_otp_inputs"), patch(
+        "core.roxy_registration._type_otp"
+    ), patch("core.roxy_registration._click_continue"), patch(
+        "core.roxy_registration._wait_after_email_otp_submit", return_value="invalid"
+    ), patch(
+        "core.roxy_registration._click_resend_email_otp", return_value={"ok": True}
+    ) as resend:
+        with pytest.raises(RuntimeError, match="已重试 3 次"):
+            _login_with_email_otp(driver, "user@example.com", after_ts=123.0)
+
+    assert resend.call_count == 2
