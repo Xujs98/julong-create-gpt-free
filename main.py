@@ -643,6 +643,7 @@ def run_registration(
                 "session": build_saved_session(session_info, capture_http_cookies(session)),
                 "device_id": session.device_id,
                 "sentinel_sid": getattr(session, "sentinel_sid", None),
+                "proxy_geo": getattr(session, "exit_geo", None),
                 "browser_profile": getattr(session, "browser_profile", None),
                 "registration_password": openai_password,
                 "twofa": twofa_result,

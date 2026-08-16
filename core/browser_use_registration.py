@@ -1971,6 +1971,9 @@ def run_browser_use_registration(
                     "session": saved_session,
                     provider_prefix: {
                         "proxy_country_code": session_info_open.proxy_country_code,
+                        "proxy_geo": {
+                            "country_code": str(session_info_open.proxy_country_code or "").upper(),
+                        } if session_info_open.proxy_country_code else {},
                         "profile_id": session_info_open.profile_id,
                         "session_id": getattr(session_info_open, "session_id", ""),
                         "connect": session_info_open.raw,

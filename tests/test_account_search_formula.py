@@ -60,6 +60,25 @@ def test_oaics_status_alias_is_searchable():
     assert _account_matches_query(_row(oaics_eligible=False), "[无oaics]")
 
 
+def test_proxy_geo_alias_supports_brackets_and_and():
+    row = _row(
+        twofa=True,
+        proxy_geo={
+            "ip": "203.0.113.9",
+            "country_code": "JP",
+            "country": "Japan",
+            "region": "Tokyo",
+            "city": "Tokyo",
+            "timezone": "Asia/Tokyo",
+        }
+    )
+    assert _account_matches_query(row, "[jp]")
+    assert _account_matches_query(row, "[jp]&&[2FA]")
+    assert _account_matches_query(row, "[tokyo]&&free")
+    assert _account_matches_query(row, "[203.0.113.9]")
+    assert not _account_matches_query(row, "[us]")
+
+
 def test_account_search_inputs_explain_formula_syntax():
     root = Path(__file__).parents[1]
     for relative in ("webui/templates/index.html", "webui/templates/index_legacy.html"):

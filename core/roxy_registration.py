@@ -2715,8 +2715,16 @@ def _check_manual_stop() -> None:
 
 def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
+    if proxy is None:
+        # 与纯协议/任务服务保持一致：未显式传入时从项目代理池取一个出口；
+        # 传入空字符串仍表示明确禁用代理。
+        try:
+            from config.proxy import pick_proxy
+            proxy = pick_proxy()
+        except Exception:
+            proxy = None
     client = RoxyBrowserClient()
-    opened = client.open_profile()
+    opened = client.open_profile(proxy=proxy)
     driver = None
     create_acknowledged = False
     openai_password: str | None = None
@@ -2929,7 +2937,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
-            proxy_used=proxy or None,
+            proxy_used=proxy or client.last_proxy_url or None,
             batch_dir=batch_dir,
             registration_method="roxy",
             extra={
@@ -2937,7 +2945,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                 "account": session_info.get("account"),
                 "expires": session_info.get("expires"),
                 "session": saved_session,
-                "roxybrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
+                "roxybrowser": {
+                    "profile_id": opened.profile_id,
+                    "open_result": opened.raw,
+                    "proxy_used": client.last_proxy_url or proxy or "",
+                },
                 "registration_password": openai_password,
                 "twofa": twofa_result,
                 "codex": codex_result,

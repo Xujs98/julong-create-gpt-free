@@ -57,6 +57,51 @@ def _account_copy_line(material_line: str, access_token: str, totp_secret: str |
     return f"{material_line}----{access_token}" if access_token else material_line
 
 
+def _capture_proxy_geo(extra: dict, proxy_used: str | None) -> dict:
+    """统一保存注册出口 GeoIP，兼容各注册驱动的元数据格式。
+
+    纯协议会话已经在初始化时探测过出口；Roxy/Cloak/远端浏览器则可能只
+    返回国家码或启动参数，因此这里先复用已有嵌套结果，缺失时再用真实
+    代理地址做一次短 GeoIP 查询。查询失败不影响账号保存。
+    """
+    from core import db
+
+    try:
+        encoded = json.dumps(extra or {}, ensure_ascii=False)
+        geo = db._account_proxy_geo({"extra_json": encoded})
+    except Exception:
+        encoded = "{}"
+        geo = {}
+    if geo:
+        return geo
+
+    proxy_text = str(proxy_used or "").strip()
+    # 脱敏地址、provider:country 标记和空代理都没有可请求的出口 URL。
+    if not proxy_text or "***" in proxy_text or "://" not in proxy_text:
+        code = db._account_proxy_country_code({
+            "proxy_used": proxy_text,
+            "extra_json": encoded,
+        })
+        return {"country_code": code} if code else {}
+
+    try:
+        from core.proxy_test import test_proxy
+
+        result = test_proxy(proxy_text)
+        geo = {
+            "ip": str(result.get("ip") or "").strip(),
+            "country": str(result.get("country") or "").strip(),
+            "country_code": str(result.get("country_code") or "").strip().upper(),
+            "region": str(result.get("region") or "").strip(),
+            "city": str(result.get("city") or "").strip(),
+            "timezone": str(result.get("timezone") or "").strip(),
+        }
+        return {key: value for key, value in geo.items() if value}
+    except Exception as exc:
+        logger.debug("[Save] 注册代理 GeoIP 记录失败：%s: %s", type(exc).__name__, str(exc)[:180])
+        return {}
+
+
 def create_batch_archive_dir(count: int, workers: int = 1) -> Path:
     """为一次运行创建批次归档目录，例如 accounts/20260509-10个-3线程。"""
     day = datetime.now().strftime("%Y%m%d")
@@ -1158,7 +1203,11 @@ def save_account_data(
     返回新插入/更新的 row id。
     """
     from core.db import insert_account
-    extra = extra or {}
+    extra = dict(extra or {})
+    proxy_geo = _capture_proxy_geo(extra, proxy_used)
+    if proxy_geo:
+        # 顶层字段便于列表接口/搜索直接使用；extra 中仍保留完整驱动元数据。
+        extra["proxy_geo"] = proxy_geo
     if not registration_method:
         # 兼容旧调用方：从驱动专属 extra 节点推断注册方式；没有浏览器节点的
         # 历史账号按纯协议处理，后续仍可由数据库字段覆盖。

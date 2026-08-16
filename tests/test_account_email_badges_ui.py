@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 from unittest.mock import patch
 
+from core import account_export
 from core import db
 from webui.app import _account_secret_value, create_app
 
@@ -36,6 +37,32 @@ def test_proxy_country_code_accepts_geo_and_proxy_pool_formats():
     assert db._country_code_from_value("socks5h://***:***@jp.proxy.example:3000") == "JP"
     assert db._country_code_from_value("uk.proxy.example:3000") == "GB"
     assert db._country_code_from_value("ab.proxy.example:3000") == ""
+
+
+def test_registration_proxy_geo_is_reused_or_probed_for_account_persistence():
+    saved = {
+        "proxy_geo": {
+            "ip": "203.0.113.9",
+            "country_code": "JP",
+            "country": "Japan",
+            "region": "Tokyo",
+            "city": "Tokyo",
+        }
+    }
+    assert account_export._capture_proxy_geo(saved, "http://proxy.example:8080")["city"] == "Tokyo"
+
+    with patch("core.proxy_test.test_proxy", return_value={
+        "ip": "198.51.100.4",
+        "country": "United States",
+        "country_code": "US",
+        "region": "California",
+        "city": "Los Angeles",
+        "timezone": "America/Los_Angeles",
+    }) as probe:
+        geo = account_export._capture_proxy_geo({}, "http://proxy.example:8080")
+    probe.assert_called_once_with("http://proxy.example:8080")
+    assert geo["country_code"] == "US"
+    assert geo["city"] == "Los Angeles"
 
 
 def test_icloud_url_secret_is_scoped_to_icloud_accounts():

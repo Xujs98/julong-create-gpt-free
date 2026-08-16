@@ -31,6 +31,8 @@ def _resolve_cloak_launch_identity() -> tuple[str, str]:
 class CloakOpenResult:
     profile_id: str = "cloakbrowser"
     raw: dict | None = None
+    # 未脱敏的本次启动代理，仅在进程内传给账号保存逻辑做 GeoIP 查询。
+    proxy_url: str | None = None
 
 
 class CloakElement:
@@ -690,7 +692,7 @@ def build_cloak_driver(
     # 避免 Cloak 注册流程里出现 `[Roxy注册]`。
     driver._registration_log_prefix = "[Cloak注册]"
     driver.set_page_load_timeout(int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90))
-    return driver, CloakOpenResult(raw={
+    return driver, CloakOpenResult(proxy_url=proxy_url, raw={
         "driver": "cloakbrowser",
         "proxy": masked_proxy_url(proxy_url),
         "proxy_bridge": bool(proxy_bridge),

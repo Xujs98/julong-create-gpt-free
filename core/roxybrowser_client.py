@@ -143,6 +143,8 @@ class RoxyBrowserClient:
     def __init__(self, api_base: str | None = None, token: str | None = None):
         self.api_base = (api_base or _cfg.ROXY_API_BASE).strip()
         self.token = (token if token is not None else _cfg.ROXY_API_TOKEN).strip()
+        # 记录本次创建环境实际写入的代理，供注册完成后的账号 GeoIP 落库使用。
+        self.last_proxy_url: str | None = None
         self.http = requests.Session()
         if self.token:
             # 官方文档要求所有接口请求头必须加 token。这里同时兼容 token / Authorization。
@@ -370,8 +372,9 @@ class RoxyBrowserClient:
 
         return {"ok": False, "items": [], "errors": errors}
 
-    def create_profile(self, payload: dict | None = None) -> str:
+    def create_profile(self, payload: dict | None = None, proxy: str | None = None) -> str:
         body = dict(getattr(_cfg, "ROXY_PROFILE_CREATE_PAYLOAD", {}) or {})
+        self.last_proxy_url = None
         random_name_enabled = bool(getattr(_cfg, "ROXY_RANDOM_PROFILE_NAME_ON_CREATE", True))
         if random_name_enabled:
             # 覆盖 ROXY_PROFILE_CREATE_PAYLOAD 里的固定 name，避免所有 Roxy 窗口同名。
@@ -397,13 +400,27 @@ class RoxyBrowserClient:
         project_id = _project_id_value()
         if project_id:
             body.setdefault("projectId", project_id)
-        if bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)) and not body.get("proxyInfo"):
+        selected_proxy = str(proxy or "").strip()
+        if selected_proxy and not body.get("proxyInfo"):
+            selected_proxy = normalize_proxy_url(selected_proxy, default_scheme="auto") or selected_proxy
+            body["proxyInfo"] = _proxy_url_to_roxy_info(selected_proxy)
+            self.last_proxy_url = selected_proxy
+            logger.info(
+                "[Roxy] 创建环境使用本次注册代理：proxy=%s type=%s host=%s port=%s",
+                _mask_proxy(selected_proxy),
+                body["proxyInfo"].get("protocol") or body["proxyInfo"].get("proxyCategory"),
+                body["proxyInfo"].get("host"),
+                body["proxyInfo"].get("port"),
+            )
+        elif bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)) and not body.get("proxyInfo"):
             from config import proxy as _proxy_cfg
 
             proxy_url = _proxy_cfg.pick_proxy()
             if proxy_url:
+                selected_proxy = normalize_proxy_url(proxy_url, default_scheme="auto") or str(proxy_url).strip()
                 proxy_info = _proxy_url_to_roxy_info(proxy_url)
                 body["proxyInfo"] = proxy_info
+                self.last_proxy_url = selected_proxy
                 logger.info(
                     "[Roxy] 创建环境启用代理池：proxy=%s type=%s host=%s port=%s",
                     _mask_proxy(proxy_url),
@@ -448,7 +465,13 @@ class RoxyBrowserClient:
             return ""
         return text
 
-    def open_profile(self, profile_id: str | None = None, *, headless: bool | None = None) -> RoxyOpenResult:
+    def open_profile(
+        self,
+        profile_id: str | None = None,
+        *,
+        headless: bool | None = None,
+        proxy: str | None = None,
+    ) -> RoxyOpenResult:
         """打开 Roxy 环境；headless 显式传值时仅覆盖本次调用。"""
         one_profile = bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
         configured_pid = self._normalize_profile_id(profile_id if profile_id is not None else getattr(_cfg, "ROXY_PROFILE_ID", ""))
@@ -461,9 +484,13 @@ class RoxyBrowserClient:
         pid = configured_pid
         created_by_run = False
         if not pid:
-            pid = self.create_profile()
+            pid = self.create_profile(proxy=proxy)
             created_by_run = True
             logger.info("[Roxy] 已创建临时环境：%s", pid)
+        elif proxy:
+            # 固定环境由 Roxy 自身保存代理配置；这里保留地址用于 GeoIP 记录，
+            # 不在 open 接口中强行覆盖既有环境设置。
+            self.last_proxy_url = normalize_proxy_url(proxy, default_scheme="auto") or str(proxy).strip()
 
         path = str(_cfg.ROXY_OPEN_PATH).format(profile_id=pid)
         params = dict(getattr(_cfg, "ROXY_OPEN_EXTRA_PARAMS", {}) or {})

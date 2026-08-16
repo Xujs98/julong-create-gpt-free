@@ -753,7 +753,7 @@ def _run_cloak_registration_impl(
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
-            proxy_used=((opened.raw or {}).get("proxy") if opened else None) or proxy or None,
+            proxy_used=(getattr(opened, "proxy_url", None) if opened else None) or proxy or None,
             batch_dir=batch_dir,
             registration_method="cloak",
             extra={
@@ -761,7 +761,11 @@ def _run_cloak_registration_impl(
                 "account": session_info.get("account"),
                 "expires": session_info.get("expires"),
                 "session": saved_session,
-                "cloakbrowser": {"profile_id": opened.profile_id, "open_result": opened.raw},
+                "cloakbrowser": {
+                    "profile_id": opened.profile_id,
+                    "open_result": opened.raw,
+                    "proxy_used": getattr(opened, "proxy_url", None) or proxy or "",
+                },
                 "registration_password": openai_password,
                 "twofa": twofa_result,
                 "codex": codex_result,

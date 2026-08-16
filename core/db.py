@@ -1245,6 +1245,11 @@ def insert_account(
             "expires_at": expires_at if expires_at is not None else row.get("expires_at"),
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
+            "proxy_geo": (
+                dict((extra or {}).get("proxy_geo"))
+                if isinstance((extra or {}).get("proxy_geo"), dict)
+                else row.get("proxy_geo")
+            ),
             "email_source": email_source if email_source is not None else row.get("email_source"),
             "registration_method": (
                 str(registration_method or row.get("registration_method") or "protocol").strip().lower()
@@ -1873,6 +1878,17 @@ def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
         status_aliases.extend(["oaics", "[oaics]"])
     elif row.get("oaics_eligible") is False:
         status_aliases.extend(["无oaics", "[无oaics]"])
+
+    # 代理出口 GeoIP 也作为可组合的搜索别名：例如 ``[jp]``、``[tokyo]``
+    # 可与 ``&&``/``!`` 一起使用，且兼容旧账号的嵌套 extra_json 记录。
+    geo = _account_proxy_geo(row)
+    for value in (
+        geo.get("country_code"), geo.get("country"), geo.get("region"),
+        geo.get("city"), geo.get("ip"), geo.get("timezone"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            status_aliases.extend([text, f"[{text}]"])
     return plan_aliases, status_aliases
 
 
