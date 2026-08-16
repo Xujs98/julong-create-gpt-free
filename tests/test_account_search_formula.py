@@ -79,6 +79,12 @@ def test_proxy_geo_alias_supports_brackets_and_and():
     assert not _account_matches_query(row, "[us]")
 
 
+def test_proxy_country_search_backfills_legacy_proxy_label():
+    row = _row(proxy_used="socks5h://***:***@jp.proxy.example:3000")
+    assert _account_matches_query(row, "[jp]")
+    assert _account_matches_query(row, "[jp]&&free")
+
+
 def test_account_search_inputs_explain_formula_syntax():
     root = Path(__file__).parents[1]
     for relative in ("webui/templates/index.html", "webui/templates/index_legacy.html"):

@@ -1882,6 +1882,9 @@ def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
     # 代理出口 GeoIP 也作为可组合的搜索别名：例如 ``[jp]``、``[tokyo]``
     # 可与 ``&&``/``!`` 一起使用，且兼容旧账号的嵌套 extra_json 记录。
     geo = _account_proxy_geo(row)
+    legacy_country_code = _account_proxy_country_code(row)
+    if legacy_country_code and not geo.get("country_code"):
+        geo = {**geo, "country_code": legacy_country_code}
     for value in (
         geo.get("country_code"), geo.get("country"), geo.get("region"),
         geo.get("city"), geo.get("ip"), geo.get("timezone"),
