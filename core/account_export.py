@@ -21,6 +21,7 @@ import pyotp
 
 from core.session import BrowserSession
 from core.humanize import delay as human_delay
+from core.proxy_utils import normalize_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,21 @@ def _capture_proxy_geo(extra: dict, proxy_used: str | None) -> dict:
 
     proxy_text = str(proxy_used or "").strip()
     # 脱敏地址、provider:country 标记和空代理都没有可请求的出口 URL。
-    if not proxy_text or "***" in proxy_text or "://" not in proxy_text:
+    if not proxy_text or "***" in proxy_text:
+        code = db._account_proxy_country_code({
+            "proxy_used": proxy_text,
+            "extra_json": encoded,
+        })
+        return {"country_code": code} if code else {}
+
+    # 代理池允许 ``host:port:user:password`` 四段格式。Roxy 会在创建环境时
+    # 将它标准化，但旧调用路径可能仍把原始值传到这里；先标准化后再探测，
+    # 否则新供应商的出口只能保存主机名，页面就没有 jp/us 地区标记。
+    try:
+        probe_proxy = normalize_proxy_url(proxy_text, default_scheme="auto") or proxy_text
+    except (TypeError, ValueError):
+        probe_proxy = proxy_text
+    if "://" not in probe_proxy:
         code = db._account_proxy_country_code({
             "proxy_used": proxy_text,
             "extra_json": encoded,
@@ -87,7 +102,7 @@ def _capture_proxy_geo(extra: dict, proxy_used: str | None) -> dict:
     try:
         from core.proxy_test import test_proxy
 
-        result = test_proxy(proxy_text)
+        result = test_proxy(probe_proxy)
         geo = {
             "ip": str(result.get("ip") or "").strip(),
             "country": str(result.get("country") or "").strip(),

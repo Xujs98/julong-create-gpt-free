@@ -933,7 +933,10 @@ def _country_code_from_value(value: Any) -> str:
     if re.fullmatch(r"[A-Za-z]{2}", raw):
         return _normalize_country_code(raw)
     match = re.search(
-        r"(?:region|country|location)[-_:=/ ]*([A-Za-z]{2})(?=[-_.:/]|$)",
+        # 住宅代理供应商常用 ``country-jp``、``region-us``、
+        # ``area-jp`` 或 ``zone-jp`` 表示出口国家。只识别带明确位置标记的两位码，
+        # 继续避免把用户名/session 中的任意两字母片段当成国家。
+        r"(?<![A-Za-z0-9])(?:region|country|location|area|zone)[-_:=/ ]*([A-Za-z]{2})(?=[-_.:/]|$)",
         raw,
         flags=re.IGNORECASE,
     )

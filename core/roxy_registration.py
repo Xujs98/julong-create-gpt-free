@@ -2937,7 +2937,9 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
-            proxy_used=proxy or client.last_proxy_url or None,
+            # 优先保存 Roxy 实际使用的标准代理 URL；原始代理池值可能是
+            # host:port:user:password，缺少 scheme 时会跳过 GeoIP 探测。
+            proxy_used=client.last_proxy_url or proxy or None,
             batch_dir=batch_dir,
             registration_method="roxy",
             extra={

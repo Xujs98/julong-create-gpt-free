@@ -9,6 +9,7 @@ from webui.app import _account_secret_value, create_app
 
 ROOT = Path(__file__).parents[1]
 TEMPLATE = ROOT / "webui" / "templates" / "index.html"
+ROXY_REGISTRATION = ROOT / "core" / "roxy_registration.py"
 
 
 def test_account_email_row_has_proxy_badge_and_icloud_url_action():
@@ -34,6 +35,11 @@ def test_proxy_country_code_accepts_geo_and_proxy_pool_formats():
     assert db._account_proxy_country_code(nested) == "DE"
     assert db._account_proxy_geo(nested)["city"] == "Frankfurt"
     assert db._country_code_from_value("region-US-sid-abc-t-5") == "US"
+    assert db._country_code_from_value("customer-demo_zone-jp_session-example") == "JP"
+    assert db._country_code_from_value("customer-demo_area-jp_session-example") == "JP"
+    assert db._account_proxy_country_code({
+        "proxy_used": "proxy.example:9000:customer-demo_area-jp_session-example:password",
+    }) == "JP"
     assert db._country_code_from_value("socks5h://***:***@jp.proxy.example:3000") == "JP"
     assert db._country_code_from_value("uk.proxy.example:3000") == "GB"
     assert db._country_code_from_value("ab.proxy.example:3000") == ""
@@ -63,6 +69,27 @@ def test_registration_proxy_geo_is_reused_or_probed_for_account_persistence():
     probe.assert_called_once_with("http://proxy.example:8080")
     assert geo["country_code"] == "US"
     assert geo["city"] == "Los Angeles"
+
+    normalized = "socks5h://customer-demo_zone-jp:password@proxy.example:9000"
+    with patch("core.account_export.normalize_proxy_url", return_value=normalized) as normalize, patch(
+        "core.proxy_test.test_proxy",
+        return_value={"country_code": "JP", "country": "Japan", "city": "Tokyo"},
+    ) as probe:
+        geo = account_export._capture_proxy_geo(
+            {},
+            "proxy.example:9000:customer-demo_zone-jp:password",
+        )
+    normalize.assert_called_once_with(
+        "proxy.example:9000:customer-demo_zone-jp:password",
+        default_scheme="auto",
+    )
+    probe.assert_called_once_with(normalized)
+    assert geo["country_code"] == "JP"
+
+
+def test_roxy_account_save_prefers_the_normalized_proxy_url():
+    source = ROXY_REGISTRATION.read_text(encoding="utf-8")
+    assert "proxy_used=client.last_proxy_url or proxy or None" in source
 
 
 def test_icloud_url_secret_is_scoped_to_icloud_accounts():
