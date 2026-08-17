@@ -176,7 +176,11 @@ from config.email import (
 from config.twofa import ENABLE_2FA
 
 # ---------- WebUI ----------
-from config.webui import WEBUI_JOB_LOG_AUTO_REFRESH, WEBUI_JOB_LOG_REFRESH_INTERVAL
+from config.webui import (
+    WEBUI_JOB_LOG_AUTO_REFRESH,
+    WEBUI_JOB_LOG_REFRESH_INTERVAL,
+    WEBUI_REGISTRATION_JOB_RETENTION_COUNT,
+)
 
 # ---------- 账号查活 ----------
 from config.live_check import LIVE_CHECK_DRIVER, LIVE_CHECK_HEADLESS
@@ -297,6 +301,7 @@ __all__ = [
     "ENABLE_2FA",
     # webui
     "WEBUI_JOB_LOG_AUTO_REFRESH", "WEBUI_JOB_LOG_REFRESH_INTERVAL",
+    "WEBUI_REGISTRATION_JOB_RETENTION_COUNT",
     # live check
     "LIVE_CHECK_DRIVER", "LIVE_CHECK_HEADLESS",
 ]

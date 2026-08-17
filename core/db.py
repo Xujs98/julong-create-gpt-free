@@ -3364,6 +3364,95 @@ def get_registration_batch(batch_id: int) -> dict | None:
     return next((item for item in list_registration_batches(limit=1_000_000) if int(item.get("id") or 0) == int(batch_id)), None)
 
 
+def get_latest_registration_batch() -> dict | None:
+    """读取最新注册批次，并只加载该批次关联任务生成实时统计。
+
+    注册页每几秒刷新一次；这里避免为了 ``current_batch`` 再读取全部历史任务，
+    使任务分页查询的收益不会被批次摘要抵消。
+    """
+    with _LOCK:
+        if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
+            store = _sqlite_store()
+            with store._connection() as conn:
+                batch_row = conn.execute(
+                    """
+                    SELECT payload_json
+                    FROM records
+                    WHERE entity=?
+                    ORDER BY record_id DESC, position DESC
+                    LIMIT 1
+                    """,
+                    ("registration_batches",),
+                ).fetchone()
+            batch = json.loads(batch_row["payload_json"]) if batch_row is not None else None
+        else:
+            batches = sorted(
+                _load_registration_batches(),
+                key=lambda row: int(row.get("id") or 0),
+                reverse=True,
+            )
+            batch = dict(batches[0]) if batches else None
+        if batch is None:
+            return None
+
+        # 已固化的终态批次无需再查任务，保持删除历史任务后的统计不变。
+        if str(batch.get("status") or "") == "completed" and batch.get("completed_at"):
+            return _registration_batch_snapshot(batch, [])
+
+        batch_id = int(batch.get("id") or 0)
+        configured_ids = {
+            int(item)
+            for item in (batch.get("job_ids") or [])
+            if str(item).strip().lstrip("-").isdigit()
+        }
+        if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
+            store = _sqlite_store()
+            payloads: dict[str, str] = {}
+            try:
+                with store._connection() as conn:
+                    job_rows = conn.execute(
+                        """
+                        SELECT payload_json
+                        FROM records
+                        WHERE entity=?
+                          AND CAST(json_extract(payload_json, '$.batch_id') AS INTEGER)=?
+                        """,
+                        ["registration_jobs", batch_id],
+                    ).fetchall()
+                for row in job_rows:
+                    payload = str(row["payload_json"])
+                    payloads[payload] = payload
+                configured = sorted(configured_ids)
+                for start in range(0, len(configured), 400):
+                    chunk = configured[start:start + 400]
+                    if not chunk:
+                        continue
+                    placeholders = ",".join("?" for _ in chunk)
+                    with store._connection() as conn:
+                        job_rows = conn.execute(
+                            f"SELECT payload_json FROM records WHERE entity=? AND record_id IN ({placeholders})",
+                            ["registration_jobs", *chunk],
+                        ).fetchall()
+                    for row in job_rows:
+                        payload = str(row["payload_json"])
+                        payloads[payload] = payload
+            except sqlite3.OperationalError:
+                with store._connection() as conn:
+                    job_rows = conn.execute(
+                        "SELECT payload_json FROM records WHERE entity=?",
+                        ("registration_jobs",),
+                    ).fetchall()
+                payloads = {str(row["payload_json"]): str(row["payload_json"]) for row in job_rows}
+            jobs = [json.loads(payload) for payload in payloads.values()]
+        else:
+            jobs = [
+                row for row in _load_jobs()
+                if int(row.get("batch_id") or 0) == batch_id
+                or (configured_ids and int(row.get("id") or 0) in configured_ids)
+            ]
+        return _registration_batch_snapshot(batch, jobs)
+
+
 def clear_registration_batches(*, keep_active: bool = True) -> dict:
     """清空批次历史；默认保留仍有任务执行或排队的批次。"""
     with _LOCK:
@@ -3508,14 +3597,298 @@ def update_job(
         _save_jobs(rows)
 
 
-def list_jobs(limit: int = 100) -> list[dict]:
+def _job_status_counts(rows: list[dict]) -> dict[str, int]:
+    """统计任务状态；active 与 WebUI 现有聚合字段保持一致。"""
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    counts["active"] = sum(int(counts.get(status, 0) or 0) for status in ("pending", "running", "stopping"))
+    return counts
+
+
+def list_jobs_page(limit: int = 100, offset: int = 0) -> dict:
+    """数据库级分页读取注册任务，并在同一次连接中返回总数和状态统计。
+
+    SQLite 主存储只反序列化当前页，避免 WebUI 为展示几十条记录而加载全部
+    ``registration_jobs``。JSON 回滚后端仍保留原来的内存分页语义。
+    """
+    page_limit = max(1, int(limit or 100))
+    page_offset = max(0, int(offset or 0))
     with _LOCK:
-        rows = sorted(_load_jobs(), key=lambda x: int(x.get("id") or 0), reverse=True)
-        return [dict(r) for r in rows[:limit]]
+        if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
+            store = _sqlite_store()
+            # SQLiteStore 的 records 表已经为 entity/status/record_id 建好索引；
+            # 在持久层尚未拆成专用任务表前，直接做 LIMIT/OFFSET 是最低风险的
+            # 增量优化，同时继续复用 SQLiteStore 的连接和初始化配置。
+            with store._connection() as conn:
+                total_row = conn.execute(
+                    "SELECT COUNT(*) AS total FROM records WHERE entity=?",
+                    ("registration_jobs",),
+                ).fetchone()
+                status_rows = conn.execute(
+                    """
+                    SELECT COALESCE(NULLIF(status, ''), 'unknown') AS job_status,
+                           COUNT(*) AS count
+                    FROM records
+                    WHERE entity=?
+                    GROUP BY COALESCE(NULLIF(status, ''), 'unknown')
+                    """,
+                    ("registration_jobs",),
+                ).fetchall()
+                payload_rows = conn.execute(
+                    """
+                    SELECT payload_json
+                    FROM records
+                    WHERE entity=?
+                    ORDER BY record_id DESC, position DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    ("registration_jobs", page_limit, page_offset),
+                ).fetchall()
+
+            items = [json.loads(row["payload_json"]) for row in payload_rows]
+            total = int(total_row["total"] if total_row is not None else 0)
+            status_counts = {
+                str(row["job_status"]): int(row["count"] or 0)
+                for row in status_rows
+            }
+            status_counts["active"] = sum(
+                int(status_counts.get(status, 0) or 0)
+                for status in ("pending", "running", "stopping")
+            )
+        else:
+            all_rows = sorted(_load_jobs(), key=lambda row: int(row.get("id") or 0), reverse=True)
+            total = len(all_rows)
+            items = [dict(row) for row in all_rows[page_offset:page_offset + page_limit]]
+            status_counts = _job_status_counts(all_rows)
+
+        return {
+            "items": [dict(row) for row in items],
+            "total": total,
+            "offset": page_offset,
+            "limit": page_limit,
+            "status_counts": status_counts,
+        }
+
+
+def list_jobs(limit: int = 100) -> list[dict]:
+    """返回最新任务；SQLite 后端只读取请求数量，不再反序列化全表。"""
+    requested = int(limit or 0)
+    if requested <= 0:
+        return []
+    return list_jobs_page(limit=requested, offset=0)["items"]
+
+
+def _accounts_for_job_retry(rows: list[dict]) -> tuple[dict[int, dict], dict[str, dict]]:
+    """一次读取当前任务页所关联的账号，供批量重试能力判断使用。"""
+    account_ids = {
+        int(row["account_id"])
+        for row in rows
+        if row.get("account_id") is not None and str(row.get("account_id")).strip().lstrip("-").isdigit()
+    }
+    emails = {
+        str(row.get("email") or "").strip().casefold()
+        for row in rows
+        if str(row.get("email") or "").strip()
+    }
+    if not account_ids and not emails:
+        return {}, {}
+
+    if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
+        store = _sqlite_store()
+        payloads: dict[str, str] = {}
+
+        def _read_account_chunk(column: str, values: list[Any]) -> None:
+            if not values:
+                return
+            placeholders = ",".join("?" for _ in values)
+            with store._connection() as conn:
+                rows_found = conn.execute(
+                    f"SELECT payload_json FROM records WHERE entity=? AND {column} IN ({placeholders})",
+                    ["registered_accounts", *values],
+                ).fetchall()
+            for row in rows_found:
+                payload = str(row["payload_json"])
+                payloads[payload] = payload
+
+        # Keep each IN list below SQLite's conservative 999-variable limit;
+        # account pages can contain both id and email predicates.
+        values = sorted(account_ids)
+        for start in range(0, len(values), 400):
+            _read_account_chunk("record_id", values[start:start + 400])
+        values = sorted(emails)
+        for start in range(0, len(values), 400):
+            _read_account_chunk("email COLLATE NOCASE", values[start:start + 400])
+        accounts = [json.loads(payload) for payload in payloads]
+    else:
+        accounts = _load_accounts()
+
+    by_id = {
+        int(account.get("id") or 0): account
+        for account in accounts
+        if str(account.get("id") or "").strip().lstrip("-").isdigit()
+    }
+    by_email = {
+        str(account.get("email") or "").strip().casefold(): account
+        for account in accounts
+        if str(account.get("email") or "").strip()
+    }
+    return by_id, by_email
+
+
+def _successful_retries_for_jobs(rows: list[dict]) -> dict[int, dict]:
+    """一次查出当前任务页各任务链中最近成功的重试任务。"""
+    root_ids = {
+        int(row.get("root_job_id") or row.get("id") or 0)
+        for row in rows
+        if str(row.get("root_job_id") or row.get("id") or "").strip().lstrip("-").isdigit()
+    }
+    if not root_ids:
+        return {}
+
+    if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
+        store = _sqlite_store()
+        payloads: dict[str, str] = {}
+        roots = sorted(root_ids)
+        try:
+            for start in range(0, len(roots), 400):
+                chunk = roots[start:start + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                with store._connection() as conn:
+                    payload_rows = conn.execute(
+                        f"""
+                        SELECT payload_json
+                        FROM records
+                        WHERE entity=? AND status='success'
+                          AND CAST(json_extract(payload_json, '$.root_job_id') AS INTEGER)
+                              IN ({placeholders})
+                        """,
+                        ["registration_jobs", *chunk],
+                    ).fetchall()
+                for row in payload_rows:
+                    payload = str(row["payload_json"])
+                    payloads[payload] = payload
+        except sqlite3.OperationalError:
+            # 极旧 SQLite 构建可能未启用 JSON1；仍只读取 success 子集，
+            # 不退回每个任务一次全表扫描。
+            with store._connection() as conn:
+                payload_rows = conn.execute(
+                    "SELECT payload_json FROM records WHERE entity=? AND status='success'",
+                    ("registration_jobs",),
+                ).fetchall()
+            payloads = {str(row["payload_json"]): str(row["payload_json"]) for row in payload_rows}
+        candidates = [json.loads(payload) for payload in payloads.values()]
+    else:
+        candidates = [row for row in _load_jobs() if row.get("status") == "success"]
+
+    latest_by_root: dict[int, dict] = {}
+    for candidate in candidates:
+        try:
+            root_id = int(candidate.get("root_job_id") or 0)
+            candidate_id = int(candidate.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if root_id not in root_ids:
+            continue
+        current = latest_by_root.get(root_id)
+        if current is None or candidate_id > int(current.get("id") or 0):
+            latest_by_root[root_id] = candidate
+    return latest_by_root
+
+
+def get_job_retry_info_batch(rows: list[dict]) -> dict[int, dict]:
+    """批量返回任务重试能力，语义与 registration_service.get_retry_info 一致。
+
+    任务链和账号关联各查询一次，避免 ``/api/jobs`` 对当前页每一行分别调用
+    ``get_successful_retry_for_job``、``get_account`` 所形成的 N+1 全量读取。
+    """
+    job_rows = [dict(row) for row in rows]
+    terminal_rows = [
+        row for row in job_rows
+        if str(row.get("status") or "") in ("failed", "stopped", "cancelled")
+    ]
+    with _LOCK:
+        successful_by_root = _successful_retries_for_jobs(terminal_rows)
+        accounts_by_id, accounts_by_email = _accounts_for_job_retry(terminal_rows)
+
+    result: dict[int, dict] = {}
+    for job in job_rows:
+        try:
+            job_id = int(job.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        status = str(job.get("status") or "")
+        info = {
+            "retryable": False,
+            "retry_action": None,
+            "retry_label": None,
+            "retry_reason": None,
+            "display_status": status,
+        }
+        if status not in ("failed", "stopped", "cancelled"):
+            result[job_id] = info
+            continue
+
+        root_id = int(job.get("root_job_id") or job_id)
+        successful_retry = successful_by_root.get(root_id)
+        if successful_retry is not None and int(successful_retry.get("id") or 0) != job_id:
+            info["retry_reason"] = f"后续重试任务 #{successful_retry.get('id')} 已成功"
+            info["successful_retry_job_id"] = successful_retry.get("id")
+            result[job_id] = info
+            continue
+
+        account = None
+        account_id = job.get("account_id")
+        if account_id is not None:
+            try:
+                account = accounts_by_id.get(int(account_id))
+            except (TypeError, ValueError):
+                account = None
+        if account is None:
+            account = accounts_by_email.get(str(job.get("email") or "").strip().casefold())
+
+        if account and account_id is not None and status in ("failed", "stopped"):
+            info["display_status"] = "success" if str(account.get("codex_status") or "") == "success" else "partial_success"
+
+        if account:
+            codex_status = str(account.get("codex_status") or "")
+            if codex_status == "deactivated":
+                info["retry_reason"] = "账号已废号，不能补跑 Codex"
+            elif codex_status == "success":
+                info["retry_reason"] = "账号和 Codex 授权均已完成"
+            else:
+                info.update({
+                    "retryable": True,
+                    "retry_action": "codex",
+                    "retry_label": "补跑 Codex",
+                })
+        else:
+            info.update({
+                "retryable": True,
+                "retry_action": "registration",
+                "retry_label": "重试",
+            })
+        result[job_id] = info
+    return result
 
 
 def get_job(job_id: int) -> dict | None:
     with _LOCK:
+        if _uses_sqlite(_JOBS_JSON, _DEFAULT_JOBS_JSON):
+            store = _sqlite_store()
+            with store._connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT payload_json
+                    FROM records
+                    WHERE entity=? AND record_id=?
+                    ORDER BY position DESC
+                    LIMIT 1
+                    """,
+                    ("registration_jobs", int(job_id)),
+                ).fetchone()
+            return json.loads(row["payload_json"]) if row is not None else None
         row = next((r for r in _load_jobs() if int(r.get("id") or 0) == int(job_id)), None)
         return dict(row) if row else None
 
@@ -3555,13 +3928,250 @@ def delete_job(job_id: int, *, delete_log: bool = True, allow_running: bool = Fa
         _save_jobs(rows)
 
     if delete_log:
-        log_file = row.get("log_file")
-        if log_file:
+        log_path = _registration_job_log_path(row)
+        if log_path is not None:
             try:
-                Path(log_file).unlink(missing_ok=True)
-            except Exception:
+                log_path.unlink(missing_ok=True)
+            except OSError:
                 pass
     return True
+
+
+def _registration_job_log_path(row: dict) -> Path | None:
+    """校验任务日志路径，兼容项目迁移前的绝对路径并限制删除边界。"""
+    raw_path = str(row.get("log_file") or "").strip()
+    if not raw_path:
+        return None
+    candidate = Path(raw_path).expanduser()
+    if candidate.suffix.lower() != ".log":
+        return None
+    try:
+        filename_uuid = uuid.UUID(candidate.stem)
+    except (ValueError, AttributeError):
+        return None
+    job_uuid = str(row.get("job_uuid") or "").strip()
+    if job_uuid:
+        try:
+            row_uuid = uuid.UUID(job_uuid)
+        except (ValueError, AttributeError):
+            return None
+        if filename_uuid != row_uuid:
+            return None
+    # 极早期记录若缺 job_uuid，也只接受 UUID.log，避免误删同目录内
+    # 查活、2FA 等其他用途的日志文件。
+
+    try:
+        current_log_dir = Path(_LOG_DIR).expanduser().resolve(strict=False)
+        candidate_parent = candidate.parent.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if candidate_parent == current_log_dir:
+        return candidate_parent / candidate.name
+
+    # 项目换目录后，历史记录会保留旧绝对路径。只兼容“同项目目录名 /
+    # 同日志目录名 / UUID.log”这一种旧布局，避免任意外部路径被删除。
+    if (
+        candidate_parent.name == Path(_LOG_DIR).name
+        and candidate_parent.parent.name == _PROJECT_ROOT.name
+    ):
+        return candidate_parent / candidate.name
+    return None
+
+
+def _registration_job_retention_default() -> int:
+    """读取注册任务历史保留条数；配置异常时回退到安全默认值。"""
+    default = 50
+    try:
+        from config import webui as webui_config
+
+        value = getattr(webui_config, "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", default)
+    except Exception:
+        value = default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _registration_job_recency_key(row: dict) -> tuple[int, int, float]:
+    """返回任务新旧排序键；优先与注册页一致按 ID，再回退时间。"""
+    valid_id = 0
+    row_id = 0
+    try:
+        row_id = int(row.get("id") or 0)
+        valid_id = 1 if row_id > 0 else 0
+    except (TypeError, ValueError):
+        pass
+    timestamp = 0.0
+    for field in ("created_at", "completed_at", "started_at"):
+        parsed = _parse_local_datetime(row.get(field))
+        if parsed is None:
+            continue
+        try:
+            timestamp = parsed.timestamp()
+        except (OverflowError, OSError, ValueError):
+            timestamp = 0.0
+        break
+    return valid_id, row_id, timestamp
+
+
+def prune_registration_jobs(
+    retention_count: int | None = None,
+    *,
+    delete_logs: bool = True,
+) -> dict:
+    """保留最近的终态注册任务，并清理超出的任务记录及其日志文件。
+
+    ``retention_count`` 只计算终态任务（success/failed/stopped/cancelled）。
+    排队、运行中、停止中及其他未知状态始终保留；含活动任务的重试链和
+    未完成批次中的任务也受保护，避免清理过程中破坏重试或批次统计。
+    记录持久化成功后才删除日志文件，日志删除失败不会回滚任务记录。
+    """
+    limit = _registration_job_retention_default() if retention_count is None else retention_count
+    try:
+        limit = max(0, int(limit))
+    except (TypeError, ValueError):
+        limit = _registration_job_retention_default()
+
+    with _LOCK:
+        rows = _load_jobs()
+        if not rows:
+            return {
+                "removed": 0,
+                "retained": 0,
+                "active": 0,
+                "retention_count": limit,
+                "deleted_log_files": 0,
+                "failed_log_files": 0,
+                "removed_job_ids": [],
+            }
+
+        active_statuses = {"pending", "running", "stopping"}
+        active_root_ids: set[int] = set()
+        protected_ids: set[int] = set()
+        for row in rows:
+            status = str(row.get("status") or "").strip().lower()
+            if status in active_statuses or status not in _REGISTRATION_TERMINAL_STATUSES:
+                try:
+                    protected_ids.add(int(row.get("id") or 0))
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    root_id = int(row.get("root_job_id") or row.get("id") or 0)
+                    if root_id:
+                        active_root_ids.add(root_id)
+                except (TypeError, ValueError):
+                    pass
+
+        # 保留活动重试链的全部历史行，避免源任务被删后重试状态无法展示。
+        for row in rows:
+            try:
+                row_id = int(row.get("id") or 0)
+                root_id = int(row.get("root_job_id") or row.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if root_id in active_root_ids:
+                protected_ids.add(row_id)
+
+        # 未完成批次中的终态任务也保留，确保批次实时统计不会因清理而缺行。
+        # 批次原始行可能尚未固化 completed，因此必须基于当前任务实时推导。
+        active_batch_ids: set[int] = set()
+        batches = _load_registration_batches()
+        batches_changed = False
+        for batch in batches:
+            if not isinstance(batch, dict):
+                continue
+            try:
+                batch_id = int(batch.get("id") or 0)
+                snapshot = _registration_batch_snapshot(batch, rows)
+                snapshot_status = str(snapshot.get("status") or "").strip().lower()
+                if batch_id and snapshot_status != "completed":
+                    active_batch_ids.add(batch_id)
+                elif snapshot_status == "completed" and any(
+                    batch.get(key) != snapshot.get(key)
+                    for key in (
+                        "submitted_count", "success_count", "failed_count", "running_count",
+                        "pending_count", "completed_count", "status", "completed_at", "elapsed_seconds",
+                    )
+                ):
+                    # 先固化终态批次统计，再删除其旧任务行；否则后续只剩最近 N
+                    # 条任务时，缺失行会被误计为失败并污染历史批次摘要。
+                    batch.update(snapshot)
+                    batches_changed = True
+            except (TypeError, ValueError):
+                # 单条历史批次格式异常时跳过，不影响其他批次和任务状态保护。
+                continue
+        if batches_changed:
+            _save_registration_batches(batches)
+
+        candidates: list[dict] = []
+        for row in rows:
+            status = str(row.get("status") or "").strip().lower()
+            try:
+                row_id = int(row.get("id") or 0)
+                batch_id = int(row.get("batch_id") or 0)
+            except (TypeError, ValueError):
+                row_id, batch_id = 0, 0
+            if status not in _REGISTRATION_TERMINAL_STATUSES:
+                continue
+            if row_id in protected_ids or batch_id in active_batch_ids:
+                continue
+            candidates.append(row)
+
+        candidates.sort(key=_registration_job_recency_key, reverse=True)
+        remove_rows = candidates[limit:]
+        remove_ids = {
+            int(row.get("id") or 0)
+            for row in remove_rows
+            if str(row.get("id") or "").strip().lstrip("-").isdigit()
+        }
+        if not remove_rows:
+            return {
+                "removed": 0,
+                "retained": len(rows),
+                "active": len(protected_ids),
+                "retention_count": limit,
+                "deleted_log_files": 0,
+                "failed_log_files": 0,
+                "removed_job_ids": [],
+            }
+
+        remove_object_ids = {id(row) for row in remove_rows}
+        kept_rows = [row for row in rows if id(row) not in remove_object_ids]
+        _save_jobs(kept_rows)
+
+    deleted_logs = 0
+    failed_logs = 0
+    if delete_logs:
+        seen_paths: set[Path] = set()
+        for row in remove_rows:
+            raw_path = str(row.get("log_file") or "").strip()
+            if not raw_path:
+                continue
+            log_path = _registration_job_log_path(row)
+            if log_path is None:
+                failed_logs += 1
+                continue
+            if log_path in seen_paths:
+                continue
+            seen_paths.add(log_path)
+            try:
+                log_path.unlink()
+                deleted_logs += 1
+            except FileNotFoundError:
+                continue
+            except OSError:
+                failed_logs += 1
+
+    return {
+        "removed": len(remove_rows),
+        "retained": len(kept_rows),
+        "active": len(protected_ids),
+        "retention_count": limit,
+        "deleted_log_files": deleted_logs,
+        "failed_log_files": failed_logs,
+        "removed_job_ids": sorted(remove_ids),
+    }
 
 
 # ============================================================

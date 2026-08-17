@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.local.*
+*.key
+*.log
+*.pem
+*_test.go
+/control-plane

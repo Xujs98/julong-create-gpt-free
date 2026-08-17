@@ -345,6 +345,17 @@ def _registration_batch_for_jobs(jobs: list[dict]) -> dict | None:
 def create_app(auth_code: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
     _prepared_downloads: dict[str, dict] = {}
+    _job_retention_lock = threading.Lock()
+    _job_retention_scheduled = False
+
+    def _schedule_job_retention_once() -> None:
+        """首次打开任务列表时异步清理历史记录，避免轮询重复触发。"""
+        nonlocal _job_retention_scheduled
+        with _job_retention_lock:
+            if _job_retention_scheduled:
+                return
+            _job_retention_scheduled = True
+        svc.schedule_registration_job_retention()
 
     def _put_prepared_download(content: bytes, filename: str, mimetype: str = "application/zip") -> str:
         now = time.time()
@@ -2547,23 +2558,45 @@ def create_app(auth_code: str | None = None) -> Flask:
         paged = str(request.args.get("paged", default="") or "").lower() in {"1", "true", "yes"}
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
-        fetch_limit = 1_000_000 if (paged or page_arg is not None or page_size_arg is not None) else limit
         from config import email as _email_cfg
         manual_otp_required = not bool(getattr(_email_cfg, "USE_EMAIL_SERVICE", True))
-        rows = db.list_jobs(limit=fetch_limit)
+        is_paged = paged or page_arg is not None or page_size_arg is not None
+        page = max(1, int(page_arg or 1))
+        page_size = max(1, min(500, int(page_size_arg or limit or 50)))
+        if is_paged:
+            page_data = db.list_jobs_page(
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+            rows = page_data.get("items") or []
+        else:
+            page_data = None
+            rows = db.list_jobs(limit=max(0, int(limit or 0)))
+
+        retry_info = db.get_job_retry_info_batch(rows)
         for row in rows:
             row["manual_otp_required"] = manual_otp_required
-            row.update(svc.get_retry_info(row))
-        if paged or page_arg is not None or page_size_arg is not None:
-            page = max(1, int(page_arg or 1))
-            page_size = max(1, min(500, int(page_size_arg or limit or 50)))
-            result = _paginate_items(rows, page=page, page_size=page_size)
-            result["items"] = [_compact_job_for_list(r) for r in (result.get("items") or [])]
-            result["status_counts"] = _job_status_counts(rows)
-            batches = db.list_registration_batches(limit=1)
-            result["current_batch"] = batches[0] if batches else None
+            try:
+                row.update(retry_info.get(int(row.get("id") or 0), {}))
+            except (TypeError, ValueError):
+                pass
+        if is_paged:
+            assert page_data is not None
+            result = {
+                "ok": True,
+                "items": [_compact_job_for_list(row) for row in rows],
+                "total": int(page_data.get("total") or 0),
+                "page": page,
+                "page_size": page_size,
+                "offset": int(page_data.get("offset") or 0),
+                "limit": page_size,
+                "status_counts": page_data.get("status_counts") or _job_status_counts(rows),
+            }
+            result["current_batch"] = db.get_latest_registration_batch()
             result["compact"] = True
+            _schedule_job_retention_once()
             return jsonify(result)
+        _schedule_job_retention_once()
         return jsonify(rows)
 
     @app.get("/api/registration-batches")
@@ -2929,10 +2962,18 @@ def create_app(auth_code: str | None = None) -> Flask:
         job = db.get_job(job_id)
         if not job:
             return jsonify({"ok": False, "error": "任务不存在"}), 404
+        offset = max(0, request.args.get("offset", default=0, type=int) or 0)
+        log_delta = svc.read_job_log_delta(job_id, offset=offset, job=job)
         return jsonify({
             "ok": True,
             "job": job,
-            "log": svc.read_job_log(job_id),
+            # 保留 log 字段兼容旧页面；新页面使用 offset/log_delta 增量追加。
+            "log": log_delta.get("content") or "",
+            "log_delta": log_delta,
+            "offset": int(log_delta.get("offset") or 0),
+            "size": int(log_delta.get("size") or 0),
+            "reset": bool(log_delta.get("reset")),
+            "log_changed": bool(log_delta.get("changed")),
         })
 
     # ----------------------------------------------------------

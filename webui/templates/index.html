@@ -3398,6 +3398,7 @@ let REGISTRATION_BATCHES = [];
 let REGISTRATION_BATCH_WARNING = '';
 const JOB_SELECTED = new Set();
 let activeLogJob = null, logTimer = null, jobsTimer = null, durationTimer = null, registrationTaskLogTimer = null, proxyWarmupTimer = null, activeProxyWarmupTask = null;
+let activeLogOffset = 0, activeLogText = '', activeLogGeneration = 0, activeLogPollToken = null;
 const finalizedProxyWarmupTasks = new Set();
 
 // ---------- 分页状态 ----------
@@ -4063,6 +4064,9 @@ function closeProxyWarmupLogModal() {
 }
 function closeLogModal() {
   activeLogJob = null;
+  activeLogGeneration += 1;
+  activeLogOffset = 0;
+  activeLogText = '';
   clearInterval(logTimer);
   logTimer = null;
   $('#logPanel').classList.add('hidden');
@@ -4370,6 +4374,10 @@ function renderJobLogMeta(job) {
 }
 async function openLog(jobId) {
   activeLogJob = jobId;
+  activeLogGeneration += 1;
+  const generation = activeLogGeneration;
+  activeLogOffset = 0;
+  activeLogText = '';
   clearInterval(logTimer);
   logTimer = null;
   $('#logJobId').textContent = jobId;
@@ -4378,28 +4386,55 @@ async function openLog(jobId) {
   $('#logJobMeta').textContent = '正在读取任务日志...';
   $('#logContent').innerHTML = '<div class="job-log-empty">加载中...</div>';
   await ensureJobLogConfig();
-  if (activeLogJob !== jobId) return;
+  if (activeLogJob !== jobId || activeLogGeneration !== generation) return;
   const first = await pollLog();
-  if (activeLogJob !== jobId) return;
+  if (activeLogJob !== jobId || activeLogGeneration !== generation) return;
   const settings = getJobLogRefreshSettings();
   const terminal = first?.job && ['success','failed','stopped','cancelled'].includes(first.job.status);
   if (settings.enabled && !terminal) logTimer = setInterval(pollLog, settings.interval * 1000);
 }
 async function pollLog() {
-  if (activeLogJob == null) return null;
+  const jobId = activeLogJob;
+  const generation = activeLogGeneration;
+  if (jobId == null) return null;
+  const pollToken = `${generation}:${jobId}`;
+  if (activeLogPollToken === pollToken) return null;
+  activeLogPollToken = pollToken;
   try {
-    const r = await api(`/api/jobs/${activeLogJob}/log`);
+    const offset = Math.max(0, Number(activeLogOffset || 0));
+    const r = await api(`/api/jobs/${jobId}/log?offset=${encodeURIComponent(offset)}`);
+    // 用户可能在请求期间关闭弹窗或切换任务；旧响应不得覆盖新任务状态。
+    if (activeLogJob !== jobId || activeLogGeneration !== generation) return null;
     const c = $('#logContent');
     const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
-    c.innerHTML = renderJobLogContent(r.log || '');
+    let logChanged = true;
+    if (r.log_delta && typeof r.log_delta === 'object') {
+      const delta = String(r.log_delta.content || '');
+      if (r.log_delta.reset || offset === 0) activeLogText = delta;
+      else activeLogText += delta;
+      activeLogOffset = Math.max(0, Number(r.log_delta.offset || 0));
+      if (typeof r.log_changed === 'boolean') logChanged = r.log_changed;
+      else if (typeof r.log_delta.changed === 'boolean') logChanged = r.log_delta.changed;
+      else logChanged = Boolean(r.log_delta.reset || delta.length || offset === 0);
+    } else {
+      // 兼容旧服务端：升级期间仍可显示完整日志。
+      activeLogText = String(r.log || '');
+    }
+    if (logChanged) {
+      if (activeLogText.length > 120000) activeLogText = activeLogText.slice(-120000);
+      c.innerHTML = renderJobLogContent(activeLogText);
+    }
     renderJobLogMeta(r.job || {});
-    if (atBottom) c.scrollTop = c.scrollHeight;
+    if (logChanged && atBottom) c.scrollTop = c.scrollHeight;
     if (r.job && ['success','failed','stopped','cancelled'].includes(r.job.status)) {
       clearInterval(logTimer);
       logTimer = null;
     }
     return r;
   } catch(e) { return null; }
+  finally {
+    if (activeLogPollToken === pollToken) activeLogPollToken = null;
+  }
 }
 
 // ---------- 账号 ----------

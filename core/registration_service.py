@@ -38,10 +38,52 @@ _THREAD_CTX = threading.local()
 _JOB_LOG_LEVEL_LOCK = threading.RLock()
 _JOB_LOG_LEVEL_DEPTH = 0
 _JOB_LOG_PREVIOUS_LEVEL: int | None = None
+_RETENTION_TRIGGER_LOCK = threading.Lock()
+_RETENTION_TRIGGER_PENDING = False
+_RETENTION_TRIGGER_RERUN = False
 
 
 class StopRequested(RuntimeError):
     """用户手动停止注册任务。"""
+
+
+def schedule_registration_job_retention() -> bool:
+    """异步触发历史任务清理，并合并短时间内的重复触发。"""
+    global _RETENTION_TRIGGER_PENDING, _RETENTION_TRIGGER_RERUN
+    with _RETENTION_TRIGGER_LOCK:
+        if _RETENTION_TRIGGER_PENDING:
+            # 当前清理可能在本任务进入终态前已读取状态。记录一次 dirty，
+            # 让同一后台线程结束前再跑一轮，避免最后一个任务的触发丢失。
+            _RETENTION_TRIGGER_RERUN = True
+            return False
+        _RETENTION_TRIGGER_PENDING = True
+        _RETENTION_TRIGGER_RERUN = False
+
+    def _run() -> None:
+        global _RETENTION_TRIGGER_PENDING, _RETENTION_TRIGGER_RERUN
+        while True:
+            try:
+                result = db.prune_registration_jobs()
+                if int(result.get("failed_log_files") or 0) > 0:
+                    logger.warning(
+                        "[Service] 注册任务历史已清理，但有 %s 个日志文件未删除",
+                        result.get("failed_log_files"),
+                    )
+            except Exception:
+                logger.exception("[Service] 注册任务历史清理失败")
+            with _RETENTION_TRIGGER_LOCK:
+                if _RETENTION_TRIGGER_RERUN:
+                    _RETENTION_TRIGGER_RERUN = False
+                    continue
+                _RETENTION_TRIGGER_PENDING = False
+                return
+
+    threading.Thread(
+        target=_run,
+        name="registration-job-retention",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _activate_job(job_id: int) -> None:
@@ -468,10 +510,12 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     if not current:
         log_logger.info(f"[Job {job_id}] 任务记录已删除，跳过执行")
         _deactivate_job(job_id)
+        schedule_registration_job_retention()
         return
     if current.get("status") == "cancelled":
         log_logger.info(f"[Job {job_id}] 已被用户取消，跳过执行")
         _deactivate_job(job_id)
+        schedule_registration_job_retention()
         return
 
     db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
@@ -628,6 +672,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         )
     finally:
         _deactivate_job(job_id)
+        schedule_registration_job_retention()
 
 
 def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int) -> None:
@@ -637,6 +682,7 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
     if not current or current.get("status") == "cancelled":
         codex_retry_service.release(email)
         _deactivate_job(job_id)
+        schedule_registration_job_retention()
         return
 
     db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
@@ -677,6 +723,7 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         logger.exception("[Job %s] Codex 补跑异常", job_id)
     finally:
         _deactivate_job(job_id)
+        schedule_registration_job_retention()
 
 
 # ============================================================
@@ -723,6 +770,9 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
         finally:
             # 封口后批次统计才能区分“仍在创建任务”和“任务创建缺失”。
             db.seal_registration_batch(int(batch["id"]), [int(job["id"]) for job in jobs])
+            # Worker 可能在批次封口前已快速结束；封口后再触发一次，保证
+            # 全终态批次能够立即固化统计并按保留数收敛。
+            schedule_registration_job_retention()
     logger.info(f"[Service] 已提交 {count} 个注册任务，源={email_source}，workers={effective_workers}")
     return jobs
 
@@ -859,6 +909,7 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
         logger.exception("[Service] 重试任务 #%s 提交线程池失败", job["id"])
+        schedule_registration_job_retention()
         return {"ok": False, "error": "重试任务创建成功，但提交执行失败", "status": 500, "job": db.get_job(int(job["id"]))}
 
     return {
@@ -893,6 +944,8 @@ def cancel_pending_jobs() -> int:
             )
             cancelled += 1
     logger.info(f"[Service] 已取消 {cancelled} 个排队任务")
+    if cancelled:
+        schedule_registration_job_retention()
     return cancelled
 
 
@@ -906,6 +959,7 @@ def request_stop_job(job_id: int) -> dict:
     if status == "pending":
         db.update_job(job_id, status="cancelled", completed_at=now_iso, error="用户手动停止/取消排队")
         _append_job_log(job_id, "用户手动停止：任务尚未运行，已取消排队。")
+        schedule_registration_job_retention()
         return {"ok": True, "message": "排队任务已取消", "job_id": job_id, "state": "cancelled"}
     if status in ("success", "failed", "cancelled", "stopped"):
         return {"ok": True, "message": f"任务已结束：{status}", "job_id": job_id, "state": status}
@@ -933,6 +987,7 @@ def request_stop_job(job_id: int) -> dict:
             )
             _append_job_log(job_id, "用户手动停止：未找到运行中的任务实例，已直接标记为已停止。")
             logger.warning("[Service] 用户停止任务 #%s：任务实例不存在，已直接标记 stopped", job_id)
+            schedule_registration_job_retention()
             return {"ok": True, "message": "任务实例不存在，已直接标记为已停止", "job_id": job_id, "state": "stopped"}
         db.update_job(job_id, status="stopping", error="用户手动停止中")
         _append_job_log(job_id, "用户手动停止：已发送停止信号，任务会在当前步骤检查点退出。")
@@ -955,3 +1010,76 @@ def read_job_log(job_id: int, max_bytes: int = 50_000) -> str:
             f.seek(size - max_bytes)
         data = f.read()
     return data.decode("utf-8", errors="replace")
+
+
+def read_job_log_delta(
+    job_id: int,
+    offset: int = 0,
+    max_bytes: int = 50_000,
+    *,
+    job: dict | None = None,
+) -> dict[str, Any]:
+    """读取任务日志相对 ``offset`` 的新增内容。
+
+    ``read_job_log`` 保留给旧调用方；WebUI 实时日志使用此接口时只读取
+    文件增长部分，避免每次轮询都重新传输和解析完整日志尾部。首次读取、
+    文件被截断或单次增长超过 ``max_bytes`` 时返回 ``reset=True``，调用方
+    应用返回内容替换当前视图。
+    """
+    current_job = job if job is not None else db.get_job(job_id)
+    result: dict[str, Any] = {
+        "content": "",
+        "offset": 0,
+        "size": 0,
+        "mtime_ns": 0,
+        "reset": False,
+        "changed": False,
+        "exists": False,
+    }
+    if not current_job or not current_job.get("log_file"):
+        return result
+
+    path = Path(str(current_job["log_file"]))
+    try:
+        stat = path.stat()
+    except OSError:
+        return result
+
+    size = int(stat.st_size)
+    result.update({
+        "size": size,
+        "offset": size,
+        "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+        "exists": True,
+    })
+    try:
+        requested = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        requested = 0
+
+    # 新任务或日志文件被重新创建/截断时，从尾部建立一个新的窗口。
+    reset = requested == 0 or requested > size
+    start = requested
+    if reset:
+        start = max(0, size - max(1, int(max_bytes)))
+    elif size - start > max(1, int(max_bytes)):
+        # 防止长时间未轮询时一次响应过大；跳到最新窗口并告知前端替换内容。
+        start = max(0, size - max(1, int(max_bytes)))
+        reset = True
+
+    # 只读取 stat 快照中确认存在的字节。若日志在 stat 后继续增长，新增部分
+    # 留到下一轮读取，避免本轮提前读到后仍返回旧 offset 而造成重复日志。
+    read_size = max(0, min(max(1, int(max_bytes)), size - start))
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start)
+            data = handle.read(read_size)
+    except OSError:
+        # 任务保留清理可能恰好在 stat 与 open 之间删除终态日志。
+        result.update({"offset": 0, "size": 0, "exists": False, "reset": requested > 0})
+        return result
+    result["content"] = data.decode("utf-8", errors="replace")
+    result["offset"] = start + len(data)
+    result["reset"] = reset
+    result["changed"] = reset or bool(data)
+    return result

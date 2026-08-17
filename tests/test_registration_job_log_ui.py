@@ -22,7 +22,13 @@ def test_registration_job_log_uses_structured_colored_rows():
     assert "job-log-level--error" in source
     assert "job-log-level--warn" in source
     assert "job-log-level--debug" in source
-    assert "c.innerHTML = renderJobLogContent(r.log || '')" in source
+    assert "activeLogOffset" in source
+    assert "activeLogGeneration" in source
+    assert "activeLogPollToken" in source
+    assert "r.log_delta.content" in source
+    assert "activeLogJob !== jobId || activeLogGeneration !== generation" in source
+    assert "if (logChanged)" in source
+    assert "c.innerHTML = renderJobLogContent(activeLogText)" in source
     assert "logTimer = setInterval(pollLog, settings.interval * 1000)" in source
     assert "每 ${refreshSettings.interval} 秒同步日志" in source
     assert "任务已结束，日志已停止刷新" in source
@@ -47,9 +53,13 @@ def test_registration_job_log_refresh_settings_are_editable():
     # 本地环境变量可以覆盖运行值，因此默认值直接从配置源文件验证。
     assert "WEBUI_JOB_LOG_AUTO_REFRESH: bool = True" in config_source
     assert "WEBUI_JOB_LOG_REFRESH_INTERVAL: int = 2" in config_source
+    assert "WEBUI_REGISTRATION_JOB_RETENTION_COUNT: int = 50" in config_source
     assert isinstance(webui_config.WEBUI_JOB_LOG_AUTO_REFRESH, bool)
     assert isinstance(webui_config.WEBUI_JOB_LOG_REFRESH_INTERVAL, int)
+    assert isinstance(webui_config.WEBUI_REGISTRATION_JOB_RETENTION_COUNT, int)
     assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["type"] == "bool"
     assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["group"] == "WebUI"
     assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["type"] == "int"
     assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["group"] == "WebUI"
+    assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["type"] == "int"
+    assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["group"] == "WebUI"
