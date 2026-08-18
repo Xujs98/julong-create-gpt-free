@@ -615,6 +615,18 @@
     .jobs-toolbar-v2 .jobs-tb-btn--good:disabled {
       color: #a3c4ad; background: #f5faf7; border-color: #dce8e0;
     }
+    .codex-export-dropdown { position: relative; display: inline-flex; }
+    .codex-export-menu {
+      display: none; position: fixed; z-index: 1200; min-width: 170px; padding: 5px;
+      border: 1px solid #dcdfe6; border-radius: 7px; background: #fff;
+      box-shadow: 0 8px 24px rgba(0,0,0,.14);
+    }
+    .codex-export-menu.open { display: block; }
+    .codex-export-menu button {
+      display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 5px;
+      background: transparent; color: #303133; text-align: left; cursor: pointer;
+    }
+    .codex-export-menu button:hover { background: #ecf5ff; color: #409eff; }
     .jobs-toolbar-v2 .jobs-tb-field {
       display: inline-flex; align-items: center; gap: 8px;
       color: #606266; font-size: 14px; white-space: nowrap;
@@ -2947,7 +2959,14 @@ try {
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Codex</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnRetrySelectedCodexV2" disabled title="给选中的账号批量补跑 Codex 授权">补跑</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedCpaV2" disabled title="从 CPA auth-files 下载选中账号的 Codex JSON，并打包 ZIP">下载CPA</button>
+          <div class="codex-export-dropdown" id="codexExportDropdownV2">
+            <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedCpaV2" disabled aria-haspopup="menu" aria-expanded="false" title="选择格式导出选中账号的 Codex 凭证">导出 ▾</button>
+            <div class="codex-export-menu" id="codexExportMenuV2" role="menu">
+              <button type="button" role="menuitem" data-codex-export-format="cockpit">Cockpit Tools</button>
+              <button type="button" role="menuitem" data-codex-export-format="sub2api">sub2api 格式</button>
+              <button type="button" role="menuitem" data-codex-export-format="cap">CAP 格式</button>
+            </div>
+          </div>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnStopSelectedCodexV2" disabled title="停止选中账号中正在补跑的 Codex 授权">停止</button>
         </div>
         <div class="acc-v2-btn-group">
@@ -5997,25 +6016,44 @@ async function downloadSelectedAccountTxt() {
   });
 }
 
-async function downloadSelectedCpa() {
+function toggleCodexExportMenu() {
+  const btn = $('#btnDownloadSelectedCpaV2');
+  const menu = $('#codexExportMenuV2');
+  if (!btn || !menu || btn.disabled) return;
+  const opening = !menu.classList.contains('open');
+  menu.classList.toggle('open', opening);
+  btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  if (opening) {
+    const rect = btn.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, rect.right - menu.offsetWidth)}px`;
+    menu.style.top = `${Math.min(window.innerHeight - menu.offsetHeight - 8, rect.bottom + 4)}px`;
+  }
+}
+
+function closeCodexExportMenu() {
+  const menu = $('#codexExportMenuV2');
+  const btn = $('#btnDownloadSelectedCpaV2');
+  menu?.classList.remove('open');
+  btn?.setAttribute('aria-expanded', 'false');
+}
+
+async function downloadSelectedCodexExport(exportFormat) {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
-  const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const missingCodex = selectedAccounts.filter(a => (a.codex_status || '') !== 'success').length;
-  let msg = `确定从 CPA 下载选中的 ${ids.length} 个账号的 CPA/Codex JSON 吗？\n\n会按账号邮箱匹配 CPA auth-files，成功的文件会打包成 ZIP。`;
-  if (missingCodex) msg += `\n\n其中 ${missingCodex} 个账号本地 Codex 状态不是 success，若 CPA 端没有文件会写入 manifest 错误清单。`;
+  const labels = {cockpit: 'Cockpit Tools', sub2api: 'sub2api', cap: 'CAP'};
+  const label = labels[exportFormat] || exportFormat;
+  const msg = `确定以 ${label} 格式导出选中的 ${ids.length} 个账号吗？\n\n服务端会按账号邮箱匹配 CPA auth-files；无匹配账号会列入错误清单。`;
   if (!await appConfirm(msg)) return;
   const btn = $('#btnDownloadSelectedCpaV2');
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '下载中…';
+  closeCodexExportMenu();
+  btn.textContent = '导出中…';
   try {
-    // 先由服务端准备 ZIP，再用同源 GET 顶层下载。
-    // 这样比隐藏 iframe / blob URL 更像普通用户点击下载，Chrome 不容易挂起或标记“不安全下载”。
-    const r = await api('/api/accounts/download-cpa-bulk', {
+    const r = await api('/api/accounts/export-codex', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids, prepare: true}),
+      body: JSON.stringify({account_ids: ids, format: exportFormat, prepare: true}),
     });
     if (!r.download_url) throw new Error('服务端未返回下载地址');
     const a = document.createElement('a');
@@ -6025,10 +6063,10 @@ async function downloadSelectedCpa() {
     document.body.appendChild(a);
     a.click();
     setTimeout(() => a.remove(), 1000);
-    showToast(`已生成 ZIP，开始下载${r.error_count ? `（${r.error_count} 个失败见 manifest）` : ''}`);
+    showToast(`已生成 ${label} 文件，开始下载${r.error_count ? `（${r.error_count} 个失败）` : ''}`);
     setTimeout(loadCodex, 1200);
   } catch(err) {
-    showToast('下载 CPA 失败: ' + err.message);
+    showToast('导出失败: ' + err.message);
   } finally {
     setTimeout(() => {
       btn.textContent = old;
@@ -6036,6 +6074,23 @@ async function downloadSelectedCpa() {
     }, 1200);
   }
 }
+
+async function downloadSelectedCpa() {
+  return downloadSelectedCodexExport('cap');
+}
+
+(function bindCodexExportMenu() {
+  const menu = $('#codexExportMenuV2');
+  menu?.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-codex-export-format]');
+    if (!option) return;
+    downloadSelectedCodexExport(option.dataset.codexExportFormat);
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('#codexExportDropdownV2')) closeCodexExportMenu();
+  });
+  window.addEventListener('resize', closeCodexExportMenu);
+})();
 
 async function checkOnePlan(id, btn) {
   btn.disabled = true;
@@ -6643,7 +6698,7 @@ async function copySelectedAccountTokens() {
   bind('btnDownloadSelectedAgentV2', downloadSelectedCodexAgents);
   bind('btnUploadSelectedAgentSub2V2', uploadSelectedCodexAgentSub2);
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
-  bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
+  bind('btnDownloadSelectedCpaV2', toggleCodexExportMenu);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
   bind('btnNoteSelectedAccountsV2', noteSelectedAccounts);
   bind('btnInjectSelectedSessionsV2', injectSelectedSessions);

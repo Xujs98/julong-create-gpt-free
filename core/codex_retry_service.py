@@ -201,22 +201,38 @@ def run_worker(
             import config as config_pkg
             config_pkg.reload_all()
             from config import codex as codex_cfg
+            from config import live_check as live_cfg
             from config import roxybrowser as roxy_cfg
+            follow_live = bool(getattr(codex_cfg, "CODEX_RETRY_FOLLOW_LIVE_CHECK", True))
+            retry_driver = str(getattr(codex_cfg, "CODEX_RETRY_DRIVER", "same_as_live_check") or "same_as_live_check").strip().lower()
+            if follow_live or retry_driver == "same_as_live_check":
+                retry_driver = str(getattr(live_cfg, "LIVE_CHECK_DRIVER", "protocol") or "protocol").strip().lower()
+            retry_headless = bool(getattr(codex_cfg, "CODEX_RETRY_HEADLESS", False))
             logger.info(
-                "[Codex 补跑] 已热加载配置：CODEX_OAUTH_DRIVER=%s ROXY_OPEN_HEADLESS=%s ROXY_KEEP_BROWSER_OPEN=%s",
+                "[Codex 补跑] 已热加载配置：driver=%s follow_live=%s headless=%s CODEX_OAUTH_DRIVER=%s ROXY_OPEN_HEADLESS=%s ROXY_KEEP_BROWSER_OPEN=%s",
+                retry_driver,
+                follow_live,
+                retry_headless,
                 getattr(codex_cfg, "CODEX_OAUTH_DRIVER", ""),
                 getattr(roxy_cfg, "ROXY_OPEN_HEADLESS", ""),
                 getattr(roxy_cfg, "ROXY_KEEP_BROWSER_OPEN", ""),
             )
         except Exception as exc:
             logger.warning("[Codex 补跑] 配置热加载失败，将继续使用当前内存配置：%s: %s", type(exc).__name__, exc)
+            retry_driver = None
+            retry_headless = None
 
         if batch_label:
             logger.info("[Codex 补跑] 批量任务：%s", batch_label)
         logger.info("[Codex 补跑] 开始：%s", email)
         logger.info("[Codex 补跑] 阶段说明：获取授权地址 → 登录邮箱 → 邮箱 OTP → 手机验证 → 捕获 callback → 提交/保存凭证")
         check_stop_requested(email)
-        result = run_codex_oauth(email, force=True)
+        result = run_codex_oauth(
+            email,
+            force=True,
+            driver_override=retry_driver,
+            headless_override=retry_headless,
+        )
         check_stop_requested(email)
         logger.info(
             "[Codex 补跑] 结果：status=%s ok=%s file=%s callback=%s",

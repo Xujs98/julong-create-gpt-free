@@ -1761,6 +1761,162 @@ def create_app(auth_code: str | None = None) -> Flask:
             },
         )
 
+    @app.post("/api/accounts/export-codex")
+    def api_accounts_export_codex():
+        """Export selected account Codex OAuth credentials in a target format.
+
+        Body: {"account_ids": [1, 2], "format": "cockpit|sub2api|cap", "prepare": true}
+        Cockpit Tools and sub2api produce one JSON document. CAP produces one
+        JSON object for a single account and a ZIP of CAP objects for multiple
+        accounts, preserving the sample's single-object CAP shape.
+        """
+        import io
+        import json as _json
+        import zipfile
+        from datetime import datetime as _dt
+
+        from core.codex_export import (
+            build_cap_records,
+            build_cockpit_tools_records,
+            build_sub2api_payload,
+            json_bytes,
+        )
+        from core.codex_oauth import download_cpa_codex_auth_text, list_cpa_codex_auth_files
+
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        export_format = str(data.get("format") or "").strip().lower().replace("-", "_")
+        aliases = {"cockpit": "cockpit", "cockpit_tools": "cockpit", "sub2": "sub2api", "sub2api": "sub2api", "cap": "cap"}
+        export_format = aliases.get(export_format, export_format)
+        if export_format not in {"cockpit", "sub2api", "cap"}:
+            return jsonify({"ok": False, "error": "format 必须是 cockpit、sub2api 或 cap"}), 400
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 1000:
+            return jsonify({"ok": False, "error": "单次最多导出 1000 个账号"}), 400
+
+        try:
+            cpa_files = list_cpa_codex_auth_files()
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"读取 CPA auth-files 失败: {type(exc).__name__}: {exc}"}), 502
+
+        def _match(email: str, local_filename: str = "") -> dict | None:
+            email_l = str(email or "").strip().lower()
+            local_l = str(local_filename or "").strip().lower()
+            stem_l = local_l[:-5] if local_l.endswith(".json") else local_l
+
+            def score(item: dict) -> int:
+                name_l = str(item.get("name") or "").lower()
+                item_email_l = str(item.get("email") or "").lower()
+                value = 0
+                if local_l and name_l == local_l:
+                    value = max(value, 100)
+                if stem_l and name_l.startswith(stem_l):
+                    value = max(value, 80)
+                if email_l and item_email_l == email_l:
+                    value = max(value, 70)
+                if email_l and email_l in name_l:
+                    value = max(value, 60)
+                if stem_l.endswith("-cpa-callback"):
+                    base = stem_l[:-len("-cpa-callback")]
+                    if base and name_l.startswith(base + "-"):
+                        value = max(value, 75)
+                return value
+
+            ranked = sorted(((score(item), item) for item in cpa_files), key=lambda pair: pair[0], reverse=True)
+            return ranked[0][1] if ranked and ranked[0][0] > 0 else None
+
+        local_by_email: dict[str, str] = {}
+        try:
+            for item in db.list_codex_accounts():
+                email_key = str(item.get("email") or "").strip().lower()
+                filename = str(item.get("filename") or "").strip()
+                if email_key and filename and email_key not in local_by_email:
+                    local_by_email[email_key] = filename
+        except Exception:
+            local_by_email = {}
+
+        credentials: list[dict] = []
+        added: list[dict] = []
+        errors: list[dict] = []
+        seen_ids: set[int] = set()
+        for raw_id in ids:
+            try:
+                account_id = int(raw_id)
+            except (TypeError, ValueError):
+                errors.append({"id": raw_id, "error": "ID 非法"})
+                continue
+            if account_id in seen_ids:
+                continue
+            seen_ids.add(account_id)
+            account = db.get_account(account_id)
+            if not account:
+                errors.append({"id": account_id, "error": "账号不存在"})
+                continue
+            email = str(account.get("email") or "").strip()
+            if not email:
+                errors.append({"id": account_id, "error": "账号缺少 email"})
+                continue
+            local_filename = local_by_email.get(email.lower(), "")
+            try:
+                meta = _match(email, local_filename)
+                cpa_name = str((meta or {}).get("name") or "").strip()
+                if not cpa_name:
+                    raise RuntimeError(f"未找到匹配的 Codex 凭证: {email}")
+                content, real_name, _meta = download_cpa_codex_auth_text(cpa_name=cpa_name)
+                parsed = _json.loads(content)
+                if not isinstance(parsed, dict):
+                    raise ValueError("CPA 凭证不是 JSON 对象")
+                credentials.append(parsed)
+                added.append({"id": account_id, "email": email, "filename": real_name})
+                if local_filename:
+                    try:
+                        db.mark_codex_exported(local_filename)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                errors.append({"id": account_id, "email": email, "error": f"{type(exc).__name__}: {exc}"})
+
+        if not credentials:
+            return jsonify({"ok": False, "error": "没有成功导出的 Codex 凭证", "errors": errors}), 502
+
+        now = _dt.now()
+        stamp = now.strftime("%Y%m%d-%H%M%S")
+        if export_format == "cockpit":
+            output = json_bytes(build_cockpit_tools_records(credentials))
+            filename = f"codex-cockpit-tools-{stamp}.json"
+            mimetype = "application/json"
+        elif export_format == "sub2api":
+            output = json_bytes(build_sub2api_payload(credentials))
+            filename = f"codex-sub2api-{stamp}.json"
+            mimetype = "application/json"
+        elif len(credentials) == 1:
+            output = json_bytes(build_cap_records(credentials)[0])
+            filename = f"codex-cap-{stamp}.json"
+            mimetype = "application/json"
+        else:
+            output_buf = io.BytesIO()
+            with zipfile.ZipFile(output_buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for item, record in zip(added, build_cap_records(credentials)):
+                    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(item.get("email") or item.get("id") or "account"))
+                    archive.writestr(f"cap-{safe_name}.json", json_bytes(record))
+                archive.writestr("manifest.json", _json.dumps({"exported_at": now.isoformat(timespec="seconds"), "format": "cap", "files": added, "errors": errors}, ensure_ascii=False, indent=2) + "\n")
+            output = output_buf.getvalue()
+            filename = f"codex-cap-{stamp}.zip"
+            mimetype = "application/zip"
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, max-age=0",
+            "X-Export-Format": export_format,
+            "X-Export-Count": str(len(added)),
+            "X-Export-Error-Count": str(len(errors)),
+        }
+        if data.get("prepare"):
+            download_id = _put_prepared_download(output, filename, mimetype)
+            return jsonify({"ok": True, "prepared": True, "download_id": download_id, "download_url": f"/api/downloads/{download_id}", "filename": filename, "format": export_format, "added_count": len(added), "error_count": len(errors)})
+        return Response(output, mimetype=mimetype, headers=headers)
+
     # ----------------------------------------------------------
     # 邮箱池
     # ----------------------------------------------------------

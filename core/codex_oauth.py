@@ -1294,6 +1294,8 @@ def run_codex_oauth(
     proxy: str | None = None,
     force: bool = False,
     _cpa_reauth_round: int = 1,
+    driver_override: str | None = None,
+    headless_override: bool | None = None,
 ) -> dict:
     """
     注册成功后的 Codex OAuth 授权入口（全新 session + 接码方案）。
@@ -1320,12 +1322,12 @@ def run_codex_oauth(
     try:
         from config import codex as _codex_cfg
         from config import roxybrowser as _roxy_cfg
-        oauth_driver = str(getattr(_codex_cfg, "CODEX_OAUTH_DRIVER", "protocol") or "protocol").strip().lower()
+        oauth_driver = str(driver_override or getattr(_codex_cfg, "CODEX_OAUTH_DRIVER", "protocol") or "protocol").strip().lower()
         if oauth_driver == "same_as_registration":
             oauth_driver = str(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol") or "protocol").strip().lower()
         if oauth_driver in ("roxy", "roxybrowser", "fingerprint", "browser"):
             from core.roxy_codex_oauth import run_roxy_codex_oauth
-            return run_roxy_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True)
+            return run_roxy_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True, headless_override=headless_override)
         if oauth_driver in ("browser_use", "browseruse", "browser-use", "bu"):
             from core.browser_use_codex_oauth import run_browser_use_codex_oauth
             return run_browser_use_codex_oauth(email, otp_provider=otp_provider, proxy=proxy, force=True)
@@ -1342,7 +1344,7 @@ def run_codex_oauth(
                 # Keep the CloakBrowser object and every Playwright call on the
                 # same thread; returning only the final dict avoids cross-thread
                 # use of Playwright greenlets.
-                driver, opened = build_cloak_driver(proxy=proxy)
+                driver, opened = build_cloak_driver(proxy=proxy, headless=headless_override)
                 try:
                     return run_roxy_codex_oauth(
                         email,
@@ -1353,6 +1355,7 @@ def run_codex_oauth(
                         existing_opened=opened,
                         reuse_existing_profile=True,
                         clear_existing_state=True,
+                        headless_override=headless_override,
                     )
                 finally:
                     if not bool(getattr(_cloak_cfg, "CLOAK_KEEP_BROWSER_OPEN", False)):

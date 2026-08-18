@@ -624,7 +624,12 @@
           <div class="btn-group">
             <span class="btn-group-title">Codex</span>
             <button class="btn primary" id="btnRetrySelectedCodex" disabled title="给选中的账号批量补跑 Codex 授权">补跑</button>
-            <button class="btn good" id="btnDownloadSelectedCpa" disabled title="从 CPA auth-files 下载选中账号的 Codex JSON，并打包 ZIP">下载CPA</button>
+            <select class="btn good" id="codexExportFormatLegacy" disabled title="选择 Codex 导出格式">
+              <option value="cap">导出：CAP</option>
+              <option value="cockpit">导出：Cockpit Tools</option>
+              <option value="sub2api">导出：sub2api</option>
+            </select>
+            <button class="btn good" id="btnDownloadSelectedCpa" disabled title="按所选格式导出选中账号的 Codex 凭证">导出</button>
             <button class="btn danger" id="btnStopSelectedCodex" disabled title="停止选中账号中正在补跑的 Codex 授权">停止</button>
           </div>
           <div class="btn-group">
@@ -1852,6 +1857,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const retryBulkBtn = $('#btnRetrySelectedCodex');
   const stopCodexBulkBtn = $('#btnStopSelectedCodex');
   const downloadCpaBtn = $('#btnDownloadSelectedCpa');
+  const exportFormat = $('#codexExportFormatLegacy');
   const extractLinksBtn = $('#btnExtractSelectedLinks');
   const generateAgentBtn = $('#btnGenerateSelectedAgent');
   const downloadAgentBtn = $('#btnDownloadSelectedAgent');
@@ -1869,6 +1875,7 @@ function updateAccountSelectionUi(pageRows = null) {
   if (retryBulkBtn) retryBulkBtn.disabled = none;
   if (stopCodexBulkBtn) stopCodexBulkBtn.disabled = none;
   if (downloadCpaBtn) downloadCpaBtn.disabled = none;
+  if (exportFormat) exportFormat.disabled = none;
   if (extractLinksBtn) extractLinksBtn.disabled = none;
   if (generateAgentBtn) generateAgentBtn.disabled = none;
   if (downloadAgentBtn) downloadAgentBtn.disabled = none;
@@ -2350,6 +2357,7 @@ async function downloadSelectedAccountTxt() {
 async function downloadSelectedCpa() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const exportFormat = $('#codexExportFormatLegacy')?.value || 'cap';
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const missingCodex = selectedAccounts.filter(a => (a.codex_status || '') !== 'success').length;
   let msg = `确定从 CPA 下载选中的 ${ids.length} 个账号的 CPA/Codex JSON 吗？\n\n会按账号邮箱匹配 CPA auth-files，成功的文件会打包成 ZIP。`;
@@ -2362,10 +2370,10 @@ async function downloadSelectedCpa() {
   try {
     // 先由服务端准备 ZIP，再用同源 GET 顶层下载。
     // 这样比隐藏 iframe / blob URL 更像普通用户点击下载，Chrome 不容易挂起或标记“不安全下载”。
-    const r = await api('/api/accounts/download-cpa-bulk', {
+    const r = await api('/api/accounts/export-codex', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({account_ids: ids, prepare: true}),
+      body: JSON.stringify({account_ids: ids, format: exportFormat, prepare: true}),
     });
     if (!r.download_url) throw new Error('服务端未返回下载地址');
     const a = document.createElement('a');
