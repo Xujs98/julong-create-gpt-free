@@ -50,11 +50,10 @@ def test_codex_export_adapters_match_requested_shapes():
 def test_codex_export_endpoint_prepares_selected_format_without_listing_tokens():
     client = create_app(auth_code="codex-export-test").test_client()
     client.environ_base["HTTP_X_AUTH_CODE"] = "codex-export-test"
-    credential_text = json.dumps(_credential())
-    with patch("webui.app.db.get_account", return_value={"id": 7, "email": "user@example.test"}), patch(
+    with patch("webui.app.db.get_account", return_value={"id": 7, "email": "user@example.test", "access_token": "local-access-token"}), patch(
         "webui.app.db.list_codex_accounts", return_value=[]
-    ), patch("core.codex_oauth.list_cpa_codex_auth_files", return_value=[{"name": "codex-user.json", "email": "user@example.test", "type": "codex"}]), patch(
-        "core.codex_oauth.download_cpa_codex_auth_text", return_value=(credential_text, "codex-user.json", {"name": "codex-user.json"})
+    ), patch("core.codex_oauth.list_cpa_codex_auth_files", side_effect=AssertionError("sub2api export must not read CPA auth-files")), patch(
+        "core.codex_oauth.download_cpa_codex_auth_text", side_effect=AssertionError("sub2api export must not download CPA files")
     ):
         response = client.post("/api/accounts/export-codex", json={"account_ids": [7], "format": "sub2api", "prepare": True})
     assert response.status_code == 200

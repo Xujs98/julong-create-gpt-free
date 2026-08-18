@@ -2358,10 +2358,11 @@ async function downloadSelectedCpa() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const exportFormat = $('#codexExportFormatLegacy')?.value || 'cap';
-  const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const missingCodex = selectedAccounts.filter(a => (a.codex_status || '') !== 'success').length;
-  let msg = `确定从 CPA 下载选中的 ${ids.length} 个账号的 CPA/Codex JSON 吗？\n\n会按账号邮箱匹配 CPA auth-files，成功的文件会打包成 ZIP。`;
-  if (missingCodex) msg += `\n\n其中 ${missingCodex} 个账号本地 Codex 状态不是 success，若 CPA 端没有文件会写入 manifest 错误清单。`;
+  const labels = {cockpit: 'Cockpit Tools', sub2api: 'sub2api', cap: 'CAP'};
+  const sourceNote = exportFormat === 'sub2api'
+    ? '直接从本地账号或 Codex 凭证转换，不访问 CPA auth-files。'
+    : '优先读取本地 Codex 凭证；本地缺失时再从 CPA 获取。';
+  const msg = `确定以 ${labels[exportFormat] || exportFormat} 格式导出选中的 ${ids.length} 个账号吗？\n\n${sourceNote}`;
   if (!await appConfirm(msg)) return;
   const btn = $('#btnDownloadSelectedCpa');
   const old = btn.textContent;

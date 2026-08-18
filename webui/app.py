@@ -1795,10 +1795,15 @@ def create_app(auth_code: str | None = None) -> Flask:
         if len(ids) > 1000:
             return jsonify({"ok": False, "error": "单次最多导出 1000 个账号"}), 400
 
-        try:
-            cpa_files = list_cpa_codex_auth_files()
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"读取 CPA auth-files 失败: {type(exc).__name__}: {exc}"}), 502
+        # sub2api 是纯格式转换，直接读取本地账号/本地 Codex 凭证。
+        # Cockpit/CAP 也优先本地；本地无完整凭证时才按需读取 CPA。
+        cpa_files: list[dict] | None = None
+
+        def _load_cpa_files() -> list[dict]:
+            nonlocal cpa_files
+            if cpa_files is None:
+                cpa_files = list_cpa_codex_auth_files()
+            return cpa_files
 
         def _match(email: str, local_filename: str = "") -> dict | None:
             email_l = str(email or "").strip().lower()
@@ -1823,7 +1828,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                         value = max(value, 75)
                 return value
 
-            ranked = sorted(((score(item), item) for item in cpa_files), key=lambda pair: pair[0], reverse=True)
+            ranked = sorted(((score(item), item) for item in _load_cpa_files()), key=lambda pair: pair[0], reverse=True)
             return ranked[0][1] if ranked and ranked[0][0] > 0 else None
 
         local_by_email: dict[str, str] = {}
@@ -1859,16 +1864,53 @@ def create_app(auth_code: str | None = None) -> Flask:
                 continue
             local_filename = local_by_email.get(email.lower(), "")
             try:
-                meta = _match(email, local_filename)
-                cpa_name = str((meta or {}).get("name") or "").strip()
-                if not cpa_name:
-                    raise RuntimeError(f"未找到匹配的 Codex 凭证: {email}")
-                content, real_name, _meta = download_cpa_codex_auth_text(cpa_name=cpa_name)
-                parsed = _json.loads(content)
-                if not isinstance(parsed, dict):
-                    raise ValueError("CPA 凭证不是 JSON 对象")
+                parsed = None
+                source = "local"
+                if local_filename:
+                    try:
+                        local_content, _local_name = db.read_codex_credential(local_filename)
+                        local_parsed = _json.loads(local_content)
+                        if isinstance(local_parsed, dict) and any(
+                            str(local_parsed.get(key) or "").strip()
+                            for key in ("access_token", "id_token", "refresh_token")
+                        ):
+                            parsed = local_parsed
+                    except Exception:
+                        parsed = None
+
+                # 注册账号记录本身通常已保存 access_token；作为第二级本地来源，
+                # 允许 sub2api 等格式在尚未生成 codex_accounts 文件时直接导出。
+                if parsed is None:
+                    account_candidate = {
+                        "access_token": account.get("access_token") or "",
+                        "refresh_token": account.get("refresh_token") or "",
+                        "id_token": account.get("id_token") or "",
+                        "account_id": account.get("account_id") or account.get("chatgpt_account_id") or "",
+                        "email": email,
+                        "type": "codex",
+                        "expired": account.get("expired") or account.get("token_expires_at") or "",
+                        "plan_type": account.get("plan_type") or "",
+                    }
+                    if any(str(account_candidate.get(key) or "").strip() for key in ("access_token", "id_token", "refresh_token")):
+                        parsed = account_candidate
+
+                if parsed is None and export_format == "sub2api":
+                    raise RuntimeError("本地账号没有可用的 Codex OAuth 凭证")
+
+                if parsed is None:
+                    source = "cpa"
+                    meta = _match(email, local_filename)
+                    cpa_name = str((meta or {}).get("name") or "").strip()
+                    if not cpa_name:
+                        raise RuntimeError(f"未找到匹配的 Codex 凭证: {email}")
+                    content, real_name, _meta = download_cpa_codex_auth_text(cpa_name=cpa_name)
+                    parsed = _json.loads(content)
+                    if not isinstance(parsed, dict):
+                        raise ValueError("CPA 凭证不是 JSON 对象")
+                else:
+                    real_name = local_filename
                 credentials.append(parsed)
-                added.append({"id": account_id, "email": email, "filename": real_name})
+                added.append({"id": account_id, "email": email, "filename": real_name, "source": source})
                 if local_filename:
                     try:
                         db.mark_codex_exported(local_filename)
