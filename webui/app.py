@@ -2751,6 +2751,32 @@ def create_app(auth_code: str | None = None) -> Flask:
             "running": twofa_setup_service.is_setting(email),
         })
 
+    @app.get("/api/accounts/<int:acc_id>/extract-link-log")
+    def api_account_extract_link_log(acc_id: int):
+        """读取账号最近一次通用提链日志。"""
+        account = db.get_account(acc_id)
+        if not account:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        email = str(account.get("email") or "").strip()
+        path = extract_link_service.log_path(email)
+        content = ""
+        if path.exists():
+            max_bytes = 80_000
+            size = path.stat().st_size
+            with path.open("rb") as handle:
+                if size > max_bytes:
+                    handle.seek(size - max_bytes)
+                content = handle.read().decode("utf-8", errors="replace")
+        status = str(account.get("extract_link_status") or "")
+        return jsonify({
+            "ok": True,
+            "log": content,
+            "running": status in {"queued", "running"},
+            "status": status,
+            "progress": int(account.get("extract_link_progress") or 0),
+            "service_name": account.get("extract_link_service_name") or "",
+        })
+
     # ----------------------------------------------------------
     # 注册任务
     # ----------------------------------------------------------

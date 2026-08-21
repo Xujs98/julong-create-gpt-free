@@ -160,7 +160,9 @@ def test_api_provider_job_stream_returns_copyable_result():
     ]
     with patch.object(extract_link_service, "_create_api_job", return_value={"job_id": "job-1", "cdk_remaining": 8}), patch.object(
         extract_link_service, "_iter_api_events", return_value=iter(events)
-    ), patch.object(extract_link_service.db, "update_account_extract") as update:
+    ), patch.object(extract_link_service, "_append_log"), patch.object(
+        extract_link_service.db, "update_account_extract"
+    ) as update:
         output = extract_link_service._run_api_once(access_token="token", service=service, account_id=7)
 
     assert output["job_id"] == "job-1"
@@ -173,6 +175,48 @@ def test_api_provider_job_stream_returns_copyable_result():
 def test_success_result_requires_link_or_qr():
     with pytest.raises(RuntimeError, match="没有可复制的链接或二维码"):
         extract_link_service._validate_extract_result({"status": "ok"})
+
+
+def test_extract_link_log_writer_redacts_credentials(tmp_path):
+    bearer_value = "abc" * 10
+    token_value = "secret" + "-token"
+    cdk_value = "secret" + "-cdk"
+    with patch.object(extract_link_service, "_LOG_DIR", tmp_path):
+        extract_link_service._append_log(
+            "user@example.test",
+            f"Bearer {bearer_value} access_token={token_value} cdk={cdk_value}",
+            clear=True,
+        )
+        content = extract_link_service.log_path("user@example.test").read_text(encoding="utf-8")
+
+    assert "Bearer ***" in content
+    assert "access_token=***" in content
+    assert "cdk=***" in content
+    assert token_value not in content
+    assert cdk_value not in content
+
+
+def test_extract_link_log_endpoint_returns_latest_account_log(auth_client, tmp_path):
+    path = tmp_path / "extract-link.log"
+    path.write_text("12:00:00 [INFO] 提链任务已入队\n", encoding="utf-8")
+    account = {
+        "id": 7,
+        "email": "user@example.test",
+        "extract_link_status": "running",
+        "extract_link_progress": 48,
+        "extract_link_service_name": "PP提链",
+    }
+    with patch("webui.app.db.get_account", return_value=account), patch(
+        "webui.app.extract_link_service.log_path", return_value=path
+    ):
+        response = auth_client.get("/api/accounts/7/extract-link-log")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["running"] is True
+    assert payload["progress"] == 48
+    assert payload["service_name"] == "PP提链"
+    assert "提链任务已入队" in payload["log"]
 
 
 def test_queue_limit_uses_runtime_setting():
@@ -197,6 +241,11 @@ def test_common_extract_link_ui_contains_requested_controls():
         assert f'id="{field_id}"' in html
     assert "flex-direction: column" in html
     assert "data-copy-extract-link" in html
+    assert 'data-account-extract-log="${esc(r.id)}"' in html
+    assert "提链日志" in html
+    assert 'id="extractLinkLogPanel"' in html
+    assert "/extract-link-log`" in html
+    assert "openExtractLinkLog" in html
 
 
 def test_common_extract_link_config_fields_and_defaults():

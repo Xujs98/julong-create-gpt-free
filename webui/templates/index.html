@@ -202,8 +202,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #twofaLogPanel, #qrPanel, #registrationTaskLogPanel, #proxyWarmupLogModal { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #twofaLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden), #proxyWarmupLogModal:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #twofaLogPanel, #extractLinkLogPanel, #qrPanel, #registrationTaskLogPanel, #proxyWarmupLogModal { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #twofaLogPanel:not(.hidden), #extractLinkLogPanel:not(.hidden), #qrPanel:not(.hidden), #registrationTaskLogPanel:not(.hidden), #proxyWarmupLogModal:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -211,9 +211,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #twofaLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #twofaLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #twofaLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #twofaLogPanel h3, #extractLinkLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #twofaLogPanel h3 .btn, #extractLinkLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #twofaLogPanel .log, #extractLinkLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     /* 注册任务单条日志：深色逐行视图，便于快速区分时间、级别与正文。 */
     #logPanel:not(.hidden) {
       width: min(1180px, calc(100vw - 48px)); height: min(760px, calc(100vh - 48px));
@@ -3061,6 +3061,12 @@ try {
       </h3>
       <div class="log" id="twofaLogContent">加载中…</div>
     </div>
+    <div class="body hidden" id="extractLinkLogPanel">
+      <h3>提链日志：<span id="extractLinkLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseExtractLinkLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="extractLinkLogContent">加载中…</div>
+    </div>
   </div>
 
   <!-- ============ Codex 授权 ============ -->
@@ -4096,6 +4102,7 @@ function updateModalScrollLock() {
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#liveLogPanel').classList.contains('hidden')
     || !$('#twofaLogPanel').classList.contains('hidden')
+    || !$('#extractLinkLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
     || !$('#outlookImportModal').classList.contains('hidden')
     || !$('#accountsFilterModal').classList.contains('hidden')
@@ -4209,6 +4216,13 @@ function closeTwofaLogModal() {
   twofaLogEmail = null;
   clearInterval(twofaLogTimer);
   $('#twofaLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+}
+function closeExtractLinkLogModal() {
+  extractLinkLogAccountId = null;
+  clearInterval(extractLinkLogTimer);
+  extractLinkLogTimer = null;
+  $('#extractLinkLogPanel').classList.add('hidden');
   updateModalScrollLock();
 }
 function openQrModal(url) {
@@ -5098,6 +5112,7 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="依次校验现有 AT、保存 Session、协议账号密码与 2FA；旧账号才使用邮箱验证码">查活/刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
+    `<button type="button" data-account-extract-log="${esc(r.id)}" data-account-extract-log-email="${esc(r.email)}" title="查看该账号最近一次提链任务日志">提链日志</button>`,
     !r.totp_enabled ? `<button type="button" data-account-setup-twofa="${esc(r.id)}" title="刷新登录态并重新设置 TOTP">重新设置2FA</button>` : '',
     `<button type="button" data-account-twofa-log="${esc(r.email)}" title="查看该账号最近一次重设 2FA 日志">重设2FA日志</button>`,
     _planAction(r),
@@ -5388,6 +5403,41 @@ async function pollTwofaLog() {
 }
 $('#btnCloseTwofaLog').addEventListener('click', closeTwofaLogModal);
 
+// ---------- 提链日志面板 ----------
+let extractLinkLogAccountId = null, extractLinkLogTimer = null;
+
+function openExtractLinkLog(accountId, email) {
+  extractLinkLogAccountId = Number(accountId);
+  $('#extractLinkLogEmail').textContent = email || `#${accountId}`;
+  $('#extractLinkLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#extractLinkLogContent').textContent = '加载中…';
+  pollExtractLinkLog();
+  clearInterval(extractLinkLogTimer);
+  extractLinkLogTimer = setInterval(pollExtractLinkLog, 2000);
+}
+async function pollExtractLinkLog() {
+  if (!extractLinkLogAccountId) return;
+  try {
+    const result = await api(`/api/accounts/${encodeURIComponent(extractLinkLogAccountId)}/extract-link-log`);
+    const content = $('#extractLinkLogContent');
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 30;
+    const header = [result.service_name, result.status ? `状态=${result.status}` : '', Number.isFinite(Number(result.progress)) ? `进度=${Number(result.progress)}%` : ''].filter(Boolean).join(' · ');
+    content.textContent = `${header ? header + '\n\n' : ''}${result.log || '(暂无提链日志)'}`;
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    if (!result.running) {
+      clearInterval(extractLinkLogTimer);
+      extractLinkLogTimer = null;
+      loadAccounts();
+    }
+  } catch (error) {
+    $('#extractLinkLogContent').textContent = `提链日志加载失败：${error.message}`;
+    clearInterval(extractLinkLogTimer);
+    extractLinkLogTimer = null;
+  }
+}
+$('#btnCloseExtractLinkLog').addEventListener('click', closeExtractLinkLogModal);
+
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
   const moreToggle = e.target.closest('[data-acc-more-toggle]');
@@ -5518,6 +5568,12 @@ async function onAccountsBodyClick(e) {
   const twofaLogBtn = e.target.closest('[data-account-twofa-log]');
   if (twofaLogBtn) {
     openTwofaLog(twofaLogBtn.dataset.accountTwofaLog);
+    return;
+  }
+
+  const extractLogBtn = e.target.closest('[data-account-extract-log]');
+  if (extractLogBtn) {
+    openExtractLinkLog(extractLogBtn.dataset.accountExtractLog, extractLogBtn.dataset.accountExtractLogEmail);
     return;
   }
 

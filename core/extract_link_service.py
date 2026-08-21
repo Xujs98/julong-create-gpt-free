@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -21,6 +23,38 @@ from config import extract_link as cfg
 from core import db, extract_link_registry, pp_extract_protocol
 
 logger = logging.getLogger(__name__)
+_LOG_DIR = Path(__file__).resolve().parent.parent / "注册日志"
+
+
+def log_path(email: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9@._+-]+", "_", str(email or "").strip())[:180] or "unknown"
+    return _LOG_DIR / f"extract-link-{safe}.log"
+
+
+def is_extracting(email: str) -> bool:
+    account = db.get_account_by_email(str(email or "").strip())
+    return bool(account and str(account.get("extract_link_status") or "") in {"queued", "running"})
+
+
+def _redact_log_text(value) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~-]+", "Bearer ***", text)
+    text = re.sub(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b", "***JWT***", text)
+    text = re.sub(
+        r"(?i)(access[_-]?token|authorization|cdk|password)(\s*[=:]\s*)([^\s,;&]+)",
+        lambda match: f"{match.group(1)}{match.group(2)}***",
+        text,
+    )
+    return text[:1000]
+
+
+def _append_log(email: str, message, *, level: str = "INFO", clear: bool = False) -> None:
+    path = log_path(email)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "w" if clear else "a"
+    stamp = datetime.now().strftime("%H:%M:%S")
+    with path.open(mode, encoding="utf-8") as handle:
+        handle.write(f"{stamp} [{str(level or 'INFO').upper()}] {_redact_log_text(message)}\n")
 
 
 def _runtime_setting(name: str, default=None):
@@ -268,7 +302,7 @@ def _extract_error_message(data) -> str:
     return json.dumps(data, ensure_ascii=False)[:500]
 
 
-def _run_api_once(*, access_token: str, service: dict, account_id: int) -> dict:
+def _run_api_once(*, access_token: str, service: dict, account_id: int, email: str = "") -> dict:
     logs: list[str] = []
     job = _create_api_job(token=access_token, service=service)
     job_id = str(job.get("job_id") or "")
@@ -281,6 +315,7 @@ def _run_api_once(*, access_token: str, service: dict, account_id: int) -> dict:
         "progress": 20,
         "cdk_remaining": job.get("cdk_remaining"),
     })
+    _append_log(email, f"API 任务已创建 job={job_id} type={service.get('link_type') or '-'}")
     last_event = None
     for event, data in _iter_api_events(job_id=job_id, service=service):
         last_event = {"event": event, "data": data}
@@ -288,6 +323,7 @@ def _run_api_once(*, access_token: str, service: dict, account_id: int) -> dict:
             message = str((data or {}).get("message") or "")[:300]
             if message:
                 logs.append(message)
+                _append_log(email, message)
                 progress = int((data or {}).get("progress") or min(90, 25 + len(logs) * 8))
                 db.update_account_extract(account_id, {
                     "ok": False, "status": "running", "job_id": job_id,
@@ -305,8 +341,9 @@ def _run_api_once(*, access_token: str, service: dict, account_id: int) -> dict:
     raise RuntimeError(f"提链事件流结束但未返回 result: {last_event}")
 
 
-def _run_protocol_once(*, access_token: str, service: dict, account_id: int) -> dict:
+def _run_protocol_once(*, access_token: str, service: dict, account_id: int, email: str = "") -> dict:
     def progress(message: str, percent: int) -> None:
+        _append_log(email, f"[{percent}%] {message}")
         db.update_account_extract(account_id, {
             "ok": False,
             "status": "running",
@@ -346,12 +383,14 @@ def _run_extract(*, account_id: int, email: str, access_token: str, service: dic
     _acquire_worker_slot(global_limit, service_key, service_limit)
     try:
         if not db.mark_account_extract_running(account_id):
+            _append_log(email, "账号已删除或提链状态已被重置", level="WARNING")
             return {"ok": False, "error": "账号已删除或提链状态已被重置"}
         retries = _int_setting("EXTRACT_LINK_RETRIES", 5, 0, 30)
         attempts = retries + 1
         last_exc: Exception | None = None
         for attempt in range(1, attempts + 1):
             try:
+                _append_log(email, f"{service.get('name')}：第 {attempt}/{attempts} 次尝试")
                 db.update_account_extract(account_id, {
                     "ok": False,
                     "status": "running",
@@ -362,9 +401,9 @@ def _run_extract(*, account_id: int, email: str, access_token: str, service: dic
                     "mode": service.get("mode"),
                 })
                 if service.get("mode") == "protocol":
-                    output = _run_protocol_once(access_token=access_token, service=service, account_id=account_id)
+                    output = _run_protocol_once(access_token=access_token, service=service, account_id=account_id, email=email)
                 else:
-                    output = _run_api_once(access_token=access_token, service=service, account_id=account_id)
+                    output = _run_api_once(access_token=access_token, service=service, account_id=account_id, email=email)
                 extract_result = _validate_extract_result(output.get("result"))
                 final = {
                     "ok": True,
@@ -380,6 +419,7 @@ def _run_extract(*, account_id: int, email: str, access_token: str, service: dic
                     "progress": 100,
                 }
                 db.update_account_extract(account_id, final)
+                _append_log(email, f"提链成功 service={service.get('name')} mode={service.get('mode')}")
                 logger.info("[提链] 成功: %s service=%s", email, service.get("name"))
                 return final
             except Exception as exc:
@@ -388,6 +428,7 @@ def _run_extract(*, account_id: int, email: str, access_token: str, service: dic
                 if attempt >= attempts or not retryable:
                     break
                 wait_seconds = min(10.0, 0.8 * attempt)
+                _append_log(email, f"第 {attempt} 次失败，{wait_seconds:.1f}s 后重试：{exc}", level="WARNING")
                 db.update_account_extract(account_id, {
                     "ok": False,
                     "status": "running",
@@ -408,6 +449,7 @@ def _run_extract(*, account_id: int, email: str, access_token: str, service: dic
             "mode": service.get("mode"),
         }
         db.update_account_extract(account_id, result)
+        _append_log(email, f"提链失败 service={service.get('name')}：{reason}", level="ERROR")
         logger.warning("[提链] 失败: %s service=%s error=%s", email, service.get("name"), reason[:240])
         return result
     finally:
@@ -447,6 +489,11 @@ def enqueue_account_extract(
             _release_queue_slot()
             return {"accepted": False, "busy": True, "error": "该账号正在提链中"}
         claimed = True
+        _append_log(
+            email,
+            f"提链任务已入队 service={service.get('name')} mode={service.get('mode')} trigger={trigger}",
+            clear=True,
+        )
         future = _EXECUTOR.submit(
             _run_extract,
             account_id=account_id,
@@ -466,6 +513,7 @@ def enqueue_account_extract(
         }
     except Exception as exc:
         if claimed:
+            _append_log(email, f"提链任务提交失败：{type(exc).__name__}: {exc}", level="ERROR")
             db.update_account_extract(account_id, {
                 "ok": False,
                 "status": "failed",
