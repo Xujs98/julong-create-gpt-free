@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, make_response, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, twofa_setup_service
+from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -206,7 +206,7 @@ def _compact_account_for_list(row: dict) -> dict:
     # 这些是列表固定列直接展示字段。
     for key in (
         "user_name", "email_source", "note", "archived", "created_at",
-        "link_completed", "sms_completed", "proxy_country_code",
+        "link_completed", "payment_completed", "sms_completed", "proxy_country_code",
         "proxy_country_name", "proxy_region", "proxy_city", "proxy_exit_ip",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "oaics_eligible", "oaics_check_status",
@@ -238,7 +238,9 @@ def _compact_account_for_list(row: dict) -> dict:
         # 提链成功/失败时才需要。
         "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
-        "extract_link_image_url_svg", "extract_link_expires_at",
+        "extract_link_image_url_svg", "extract_link_expires_at", "extract_link_progress",
+        "extract_link_service_id", "extract_link_service_name", "extract_link_mode",
+        "extract_link_paypal_authorize_url", "extract_link_hosted_checkout_url",
         # Codex / Agent 状态提示。
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
         "codex_agent_sub2api_url", "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
@@ -825,11 +827,11 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/accounts/<int:acc_id>/completion-status")
     def api_account_completion_status(acc_id: int):
-        """人工切换提链/接码完成状态。Body {status: link|sms, enabled: bool}。"""
+        """人工切换支付/接码完成状态。Body {status: payment|sms, enabled: bool}。"""
         data = request.get_json(silent=True) or {}
         status_name = str(data.get("status") or "").strip().lower()
-        if status_name not in {"link", "sms"}:
-            return jsonify({"ok": False, "error": "status 必须是 link 或 sms"}), 400
+        if status_name not in {"payment", "sms"}:
+            return jsonify({"ok": False, "error": "status 必须是 payment 或 sms"}), 400
         if not isinstance(data.get("enabled"), bool):
             return jsonify({"ok": False, "error": "enabled 必须是布尔值"}), 400
         updated = db.update_account_completion_status(
@@ -840,32 +842,6 @@ def create_app(auth_code: str | None = None) -> Flask:
         if updated is None:
             return jsonify({"ok": False, "error": "账号不存在"}), 404
         return jsonify({"ok": True, "updated": updated})
-
-    @app.post("/api/accounts/link-status/sync")
-    def api_accounts_link_status_sync():
-        """按每行一个邮箱批量点亮提链状态。Body {text: "..."} 或 {emails:[...]}。"""
-        data = request.get_json(silent=True) or {}
-        raw_emails = data.get("emails")
-        if raw_emails is None:
-            raw_emails = str(data.get("text") or "").splitlines()
-        if not isinstance(raw_emails, list):
-            return jsonify({"ok": False, "error": "emails 必须是数组，或通过 text 每行传一个邮箱"}), 400
-        emails = [str(value or "").strip() for value in raw_emails if str(value or "").strip()]
-        if not emails:
-            return jsonify({"ok": False, "error": "请至少输入一个邮箱"}), 400
-        if len(emails) > 5000:
-            return jsonify({"ok": False, "error": "单次最多同步 5000 个邮箱"}), 400
-        invalid = [email for email in emails if "@" not in email]
-        if invalid:
-            return jsonify({"ok": False, "error": f"邮箱格式错误：{invalid[0]}"}), 400
-        updated, missing = db.sync_account_link_status(emails)
-        return jsonify({
-            "ok": True,
-            "updated": updated,
-            "updated_count": len(updated),
-            "missing": missing,
-            "missing_count": len(missing),
-        })
 
     @app.post("/api/accounts/note-bulk")
     def api_accounts_note_bulk():
@@ -1154,10 +1130,34 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_extract_link_cdk():
         """查询当前配置或传入 CDK 的剩余次数。"""
         code = (request.args.get("code") or "").strip() or None
+        service_id = (request.args.get("service_id") or "").strip() or None
         try:
-            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code)})
+            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code, service_id=service_id)})
         except Exception as exc:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
+
+    @app.get("/api/extract-link/services")
+    def api_extract_link_services():
+        return jsonify({
+            "ok": True,
+            "items": extract_link_registry.list_services(mask_secrets=True),
+            "queue": extract_link_service.queue_settings(),
+        })
+
+    @app.post("/api/extract-link/services")
+    def api_extract_link_service_save():
+        data = request.get_json(silent=True) or {}
+        try:
+            service = extract_link_registry.save_api_service(data)
+            return jsonify({"ok": True, "service": service})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
+
+    @app.delete("/api/extract-link/services/<service_id>")
+    def api_extract_link_service_delete(service_id: str):
+        if not extract_link_registry.delete_api_service(service_id):
+            return jsonify({"ok": False, "error": "提链 API 服务不存在或属于兼容配置"}), 404
+        return jsonify({"ok": True, "deleted": service_id})
 
     def _is_extract_eligible(acc: dict) -> bool:
         plan = str(acc.get("current_plan_type") or acc.get("plan_type") or "").lower()
@@ -1187,6 +1187,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 trigger="manual",
                 link_type=data.get("link_type"),
                 cdk=data.get("cdk"),
+                mode=data.get("mode"),
+                provider=data.get("provider") or data.get("service_id"),
             )
         except Exception as exc:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
@@ -1240,6 +1242,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                     trigger="manual_bulk",
                     link_type=data.get("link_type"),
                     cdk=data.get("cdk"),
+                    mode=data.get("mode"),
+                    provider=data.get("provider") or data.get("service_id"),
                 )
             except Exception as exc:
                 failed.append({"id": acc_id, "email": email, "error": f"{type(exc).__name__}: {exc}"})

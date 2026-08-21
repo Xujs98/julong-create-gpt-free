@@ -89,18 +89,25 @@ def test_account_search_inputs_explain_formula_syntax():
     root = Path(__file__).parents[1]
     for relative in ("webui/templates/index.html", "webui/templates/index_legacy.html"):
         source = (root / relative).read_text(encoding="utf-8")
-        assert "free(可Plus试用)&&[2FA]" in source
-        assert "搜索邮箱、Token、来源；&& 联合，! 排除" in source
-        assert "free&&![2FA]" in source
-        assert "[提链]&&[2FA]" in source
-        for label in (
-            "[2FA]", "[无2FA]", "[提链]", "[未提链]", "[接码]", "[Token]",
-            "[Codex]", "[Agent]", "[归档]", "[查活正常]", "[查活失败]", "[套餐查询失败]",
-            "[oaics]",
-        ):
-            assert label in source
+        assert "[提链=true]" in source
+        assert "[提链=false]" in source
+        assert "![提链=true]" in source
+        assert "![提链=false]" in source
+        assert "&&" in source
         assert "!**free" in source
 
+
+
+def test_extract_result_formula_distinguishes_success_failure_and_pending():
+    success = _row(extract_link_status="success", link_completed=True)
+    failed = _row(extract_link_status="failed", link_completed=False)
+    pending = _row(extract_link_status="running", link_completed=False)
+    assert _account_matches_query(success, "[提链=true]")
+    assert not _account_matches_query(failed, "[提链=true]")
+    assert _account_matches_query(failed, "[提链=false]")
+    assert not _account_matches_query(pending, "[提链=false]")
+    assert _account_matches_query(failed, "![提链=true]&&[提链=false]")
+    assert _account_matches_query(success, "![提链=false]&&[提链=true]")
 
 def test_account_search_supports_all_documented_status_aliases():
     cases = [

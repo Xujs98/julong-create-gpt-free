@@ -40,7 +40,7 @@ class AccountCompletionStatusTests(unittest.TestCase):
             self.assertTrue(linked[0]["link_completed"])
             self.assertTrue(sms[0]["sms_completed"])
 
-    def test_manual_toggle_overrides_legacy_derived_status(self):
+    def test_payment_and_sms_statuses_remain_manual(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / "accounts.json").write_text(
@@ -48,30 +48,17 @@ class AccountCompletionStatusTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self._storage(root):
-                updated = db.update_account_completion_status(1, "link", False)
+                updated = db.update_account_completion_status(1, "payment", True)
                 account = db.get_account(1)
 
-            self.assertFalse(updated["link_completed"])
-            self.assertFalse(account["link_completed"])
-            self.assertEqual(account["link_status_source"], "manual")
-
-    def test_sync_link_status_deduplicates_and_reports_missing_accounts(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / "accounts.json").write_text(
-                '[{"id":1,"email":"match@example.com"}]',
-                encoding="utf-8",
-            )
-            with self._storage(root):
-                updated, missing = db.sync_account_link_status([
-                    "MATCH@example.com", "match@example.com", "missing@example.com"
-                ])
-                account = db.get_account(1)
-
-            self.assertEqual(updated, [{"id": 1, "email": "match@example.com"}])
-            self.assertEqual(missing, [{"email": "missing@example.com", "reason": "账号不存在"}])
+            self.assertTrue(updated["payment_completed"])
+            self.assertTrue(account["payment_completed"])
             self.assertTrue(account["link_completed"])
-            self.assertEqual(account["link_status_source"], "manual_sync")
+            self.assertEqual(account["payment_status_source"], "manual")
+
+    def test_link_status_rejects_manual_toggle(self):
+        with self.assertRaises(ValueError):
+            db.update_account_completion_status(1, "link", False)
 
     def test_successful_extract_and_codex_updates_light_the_statuses(self):
         with tempfile.TemporaryDirectory() as td:
@@ -90,6 +77,31 @@ class AccountCompletionStatusTests(unittest.TestCase):
             self.assertEqual(account["link_status_source"], "extract")
             self.assertEqual(account["sms_status_source"], "codex")
 
+    def test_new_extract_clears_stale_link_and_progress_changes_poll_revision(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "accounts.json").write_text(
+                """[{"id":1,"email":"retry@example.com","extract_link_status":"success",
+                "extract_link_long_url":"https://old.example.test/link","extract_link_progress":100,
+                "link_completed":true}]""",
+                encoding="utf-8",
+            )
+            with self._storage(root):
+                self.assertTrue(db.claim_account_extract(1, service_id="pp", service_name="PP提链", mode="protocol"))
+                queued = db.list_account_plan_check_statuses()
+                self.assertTrue(db.update_account_extract(1, {
+                    "ok": False, "status": "running", "progress": 48, "message": "创建 PayPal 支付方式",
+                }))
+                running = db.list_account_plan_check_statuses()
+
+            queued_item = queued["items"][0]
+            running_item = running["items"][0]
+            self.assertIsNone(queued_item["extract_link_long_url"])
+            self.assertFalse(queued_item["link_completed"])
+            self.assertEqual(queued_item["extract_link_progress"], 0)
+            self.assertEqual(running_item["extract_link_progress"], 48)
+            self.assertNotEqual(queued["revision"], running["revision"])
+
 
 class AccountCompletionStatusApiTests(unittest.TestCase):
     def setUp(self):
@@ -102,28 +114,25 @@ class AccountCompletionStatusApiTests(unittest.TestCase):
             "id": 7,
             "email": "sample@example.com",
             "link_completed": True,
+            "payment_completed": True,
             "sms_completed": False,
         }
         response = self.client.post(
             "/api/accounts/7/completion-status",
-            json={"status": "link", "enabled": True},
+            json={"status": "payment", "enabled": True},
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.get_json()["updated"]["link_completed"])
-        update_status.assert_called_once_with(acc_id=7, status_name="link", enabled=True)
+        self.assertTrue(response.get_json()["updated"]["payment_completed"])
+        update_status.assert_called_once_with(acc_id=7, status_name="payment", enabled=True)
 
-    @patch("webui.app.db.sync_account_link_status")
-    def test_manual_link_sync_endpoint(self, sync_status):
-        sync_status.return_value = ([{"id": 1, "email": "sample@example.com"}], [])
+    def test_manual_link_sync_endpoint_is_removed(self):
         response = self.client.post(
             "/api/accounts/link-status/sync",
-            json={"text": "sample@example.com\nsample@example.com"},
+            json={"text": "sample@example.com"},
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["updated_count"], 1)
-        sync_status.assert_called_once_with(["sample@example.com", "sample@example.com"])
+        self.assertEqual(response.status_code, 404)
 
     @patch("webui.app.db.list_accounts_page")
     def test_list_status_filter_is_forwarded(self, list_page):

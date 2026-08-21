@@ -1117,7 +1117,7 @@
       overflow: visible; text-overflow: clip; white-space: normal;
     }
     .accounts-table-v2 .acc-v2-completion-list {
-      display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+      display: inline-flex; flex-direction: column; align-items: stretch; gap: 5px; white-space: nowrap;
     }
     .accounts-table-v2 .acc-v2-completion-btn {
       min-width: 58px; height: 28px; padding: 0 9px;
@@ -1144,6 +1144,24 @@
       box-shadow: 0 2px 7px rgba(35, 133, 108, .12);
     }
     .accounts-table-v2 .acc-v2-completion-btn.is-link-on::before { background: #2f9e7c; }
+    .accounts-table-v2 .acc-v2-completion-btn.is-payment-on {
+      color: #7c5ce7; border-color: #cfc4f8; background: #f4f0ff;
+      box-shadow: 0 2px 7px rgba(124, 92, 231, .12);
+    }
+    .accounts-table-v2 .acc-v2-completion-btn.is-payment-on::before { background: #7c5ce7; }
+    .accounts-table-v2 .acc-v2-completion-btn.is-link-failed {
+      color: #e64545; border-color: #f4aaaa; background: #fff0f0;
+    }
+    .accounts-table-v2 .acc-v2-completion-btn.is-link-failed::before { background: #e64545; }
+    .accounts-table-v2 .acc-v2-completion-btn.is-link-progress {
+      position: relative; overflow: hidden; color: #8a6412; border-color: #f0c36d;
+      background: #fff8e8; cursor: wait;
+    }
+    .accounts-table-v2 .acc-v2-completion-btn.is-link-progress::after {
+      content: ""; position: absolute; inset: 0 auto 0 0; width: var(--extract-progress, 0%);
+      background: rgba(245, 166, 35, .22); transition: width .25s ease;
+    }
+    .accounts-table-v2 .acc-v2-completion-btn.is-link-progress > span { position: relative; z-index: 1; }
     .accounts-table-v2 .acc-v2-completion-btn.is-sms-on {
       color: #377DFF; border-color: #b8cffb; background: #eef4ff;
       box-shadow: 0 2px 7px rgba(55, 125, 255, .12);
@@ -2898,7 +2916,7 @@ try {
     <section class="accounts-panel-v2" id="accountsPanelV2" aria-label="账号列表">
       <div class="accounts-filter-v2" id="accountsFilterV2">
         <div class="acc-v2-btn-group acc-v2-search-wrap">
-          <input id="qAccountsV2" type="search" placeholder="搜索邮箱、Token、来源；&& 联合，! 排除；代理IP位置" autocomplete="off" title="联合搜索示例：!free；free(可Plus试用)&&[2FA]；free&&![2FA]；[提链]&&[2FA]；[jp]&&[2FA]；[tokyo]。位置可搜国家码、国家、地区、城市、IP、时区；状态：[oaics] [2FA] [无2FA] [提链] [未提链] [接码] [Token] [Codex] [Agent] [归档] [查活正常] [查活失败] [套餐查询失败]；!**free 兼容 Markdown 星号">
+          <input id="qAccountsV2" type="search" placeholder="搜索邮箱、Token、来源；支持 [提链=true]、![提链=false] 与 &&" autocomplete="off" title="提链搜索：[提链=true] 成功；[提链=false] 失败；![提链=true] 排除成功；![提链=false] 排除失败。可用 && 联合，例如 [提链=true]&&[2FA]。其他状态：[支付] [未支付] [接码] [Token] [Codex] [Agent] [归档] [查活正常] [查活失败] [套餐查询失败]；!**free 兼容 Markdown 星号">
         </div>
 
         <div class="acc-v2-btn-group">
@@ -2918,7 +2936,6 @@ try {
           <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通 Plus 的账号">已开通Plus</button>
           <button type="button" class="jobs-tb-btn" id="btnRefreshAccountsV2" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveTopV2" onclick="checkSelectedLive()" title="优先校验现有 AT；仅失效时重新登录并刷新">查活</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnManualLinkStatusV2" title="按邮箱批量点亮账号的提链状态">手动提链</button>
           <button type="button" class="jobs-tb-btn accounts-filter-trigger-v2" id="btnAccountsFilterV2" title="按注册日期和归档状态筛选账号">筛选</button>
           <div class="accounts-view-v2" id="accountsViewV2">
             <button type="button" class="jobs-tb-btn accounts-filter-trigger-v2" id="btnAccountsViewV2" aria-haspopup="true" aria-expanded="false" title="选择要显示的表格列">查看</button>
@@ -2948,7 +2965,7 @@ try {
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="优先校验现有 AT；仅失效时重新登录并刷新">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedOaicsV2" disabled title="查询选中账号的 OAICS 资格；会复用套餐查询的登录态和结账会话">查询OAICS</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="按通用提链配置给选中的 free(可Plus试用) 账号批量提链">提链</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Agent</span>
@@ -2986,6 +3003,7 @@ try {
           <span class="acc-v2-btn-group-title">状态</span>
           <button type="button" class="acc-v2-status-option is-active" data-account-status-filter="" aria-pressed="true">全部</button>
           <button type="button" class="acc-v2-status-option" data-account-status-filter="link" aria-pressed="false">提链</button>
+          <button type="button" class="acc-v2-status-option" data-account-status-filter="payment" aria-pressed="false">支付</button>
           <button type="button" class="acc-v2-status-option" data-account-status-filter="sms" aria-pressed="false">接码</button>
         </div>
         <div class="acc-v2-btn-group acc-v2-status-filter" role="group" aria-label="账号分组操作">
@@ -3385,6 +3403,24 @@ try {
   <a id="qrOpenLink" class="qr-link" href="#" target="_blank" rel="noopener noreferrer"></a>
 </div>
 
+<div id="extractLinkApiModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="extractLinkApiTitle" style="position:fixed;inset:0;z-index:1300;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.48);">
+  <div class="outlook-import-dialog" role="document" style="width:min(760px,100%);">
+    <div class="outlook-import-head">
+      <div class="outlook-import-head-main"><h3 id="extractLinkApiTitle">添加提链 API</h3><p>保存后会出现在“通用提链”的 API 提链列表中；CDK 仅写入本地 .env。</p></div>
+      <button type="button" class="outlook-import-close" id="btnCloseExtractLinkApi" aria-label="关闭">×</button>
+    </div>
+    <div class="outlook-import-body" style="grid-template-columns:repeat(2,minmax(0,1fr));">
+      <label class="outlook-import-field"><span>服务名称</span><input id="extractApiName" placeholder="例如：主提链 API"></label>
+      <label class="outlook-import-field"><span>提链服务地址</span><input id="extractApiBase" placeholder="https://HOST"></label>
+      <label class="outlook-import-field"><span>提链 CDK</span><input id="extractApiCdk" type="password" placeholder="保存在 .env"></label>
+      <label class="outlook-import-field"><span>提链类型</span><select id="extractApiType"><option value="pix">pix</option><option value="upi">upi</option><option value="kakao_pay">kakao_pay</option><option value="ideal">ideal</option></select></label>
+      <label class="outlook-import-field"><span>提链并发数</span><input id="extractApiWorkers" type="number" min="1" max="20" value="3"></label>
+      <div id="extractApiResult" class="outlook-import-result"></div>
+    </div>
+    <div class="outlook-import-foot"><button type="button" class="jobs-tb-btn" id="btnCancelExtractLinkApi">取消</button><button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSaveExtractLinkApi">保存服务</button></div>
+  </div>
+</div>
+
 {% include "_app_dialog.html" %}
 <script>
 const $ = (s) => document.querySelector(s);
@@ -3392,6 +3428,7 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 let copySeq = 0;
 const copyStore = new Map();
 let ACCOUNTS = [], OUTLOOK = [], CONFIG = [];
+let EXTRACT_LINK_SERVICES = [];
 let ACCOUNTS_TOTAL = 0;
 let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
@@ -5096,11 +5133,23 @@ function positionAccountsV2MoreMenu(wrap) {
 function _accountCompletionStatusCell(r) {
   const item = (kind, label, enabled) => {
     const on = Boolean(enabled);
-    const cls = on ? (kind === 'link' ? 'is-link-on' : 'is-sms-on') : '';
+    const cls = on ? (kind === 'payment' ? 'is-payment-on' : 'is-sms-on') : '';
     const nextLabel = on ? '未完成' : '已完成';
     return `<button type="button" class="acc-v2-completion-btn ${cls}" data-account-completion-status="${kind}" data-account-id="${esc(r.id)}" data-enabled="${on ? '1' : '0'}" aria-pressed="${on ? 'true' : 'false'}" title="点击将${label}状态改为${nextLabel}">${label}</button>`;
   };
-  return `<div class="acc-v2-completion-list">${item('link', '提链', r.link_completed)}${item('sms', '接码', r.sms_completed)}</div>`;
+  const status = String(r.extract_link_status || '').toLowerCase();
+  const message = r.extract_link_error || r.extract_link_message || r.extract_link_service_name || '点击开始提链';
+  const link = r.extract_link_long_url || r.extract_link_copy_paste || r.extract_link_paypal_authorize_url || '';
+  const progress = Math.max(0, Math.min(100, Number(r.extract_link_progress || (status === 'success' || status === 'failed' ? 100 : 0))));
+  let linkButton = `<button type="button" class="acc-v2-completion-btn is-link-idle" data-extract-link="${esc(r.id)}" title="${esc(message)}">提链</button>`;
+  if (status === 'queued' || status === 'running') {
+    linkButton = `<button type="button" class="acc-v2-completion-btn is-link-progress" disabled style="--extract-progress:${progress}%" title="${esc(message)}"><span>提链 ${progress}%</span></button>`;
+  } else if (status === 'success') {
+    linkButton = `<button type="button" class="acc-v2-completion-btn is-link-on" data-copy-extract-link="${attrEsc(link)}" title="${esc(message || '提链成功，点击复制提链地址')}">提链</button>`;
+  } else if (status === 'failed') {
+    linkButton = `<button type="button" class="acc-v2-completion-btn is-link-failed" data-extract-link="${esc(r.id)}" title="${esc(message)}">提链失败</button>`;
+  }
+  return `<div class="acc-v2-completion-list">${linkButton}${item('payment', '支付', r.payment_completed)}${item('sms', '接码', r.sms_completed)}</div>`;
 }
 function _accountProxyBadge(r) {
   const code = String(r.proxy_country_code || '').trim().toUpperCase();
@@ -5175,7 +5224,7 @@ function renderAccounts() {
       <td class="col-registration">${_accountRegistrationMethodCell(r)}</td>
       <td class="col-group" title="${esc(r.group_name || '默认分组')}"><span class="pill status-used">${esc(r.group_name || '默认分组')}</span></td>
       <td class="col-token">${_tokenCellV2(r)}</td>
-      <td class="col-plan"><div class="acc-v2-plan-line">${_planCell(r)}${_oaicsBadge(r)}</div><div class="acc-v2-sub">${_oaicsResultCell(r)}</div><div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
+      <td class="col-plan"><div class="acc-v2-plan-line">${_planCell(r)}${_oaicsBadge(r)}</div><div class="acc-v2-sub">${_oaicsResultCell(r)}</div></td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-completion acc-v2-completion-cell">${_accountCompletionStatusCell(r)}</td>
       <td class="col-small acc-v2-totp-cell">${_accountTotpCell(r, accountIcons)}</td>
@@ -5382,12 +5431,21 @@ async function onAccountsBodyClick(e) {
     return;
   }
 
+  const copyExtractBtn = e.target.closest('[data-copy-extract-link]');
+  if (copyExtractBtn) {
+    const link = String(copyExtractBtn.dataset.copyExtractLink || '').trim();
+    if (!link) { showToast('提链地址为空'); return; }
+    if (await copyText(link, false)) showToast('提链地址已复制');
+    else showToast('提链地址复制失败');
+    return;
+  }
+
   const completionBtn = e.target.closest('[data-account-completion-status]');
   if (completionBtn) {
     const id = Number(completionBtn.dataset.accountId);
     const status = completionBtn.dataset.accountCompletionStatus;
     const current = completionBtn.dataset.enabled === '1';
-    const label = status === 'link' ? '提链' : '接码';
+    const label = status === 'payment' ? '支付' : '接码';
     const account = ACCOUNTS.find(row => Number(row.id) === id);
     const email = account?.email || `#${id}`;
     if (!await appConfirm(
@@ -5758,7 +5816,7 @@ async function applyAccountsPlusFilter(on) {
   await pollAccountPlanStatuses();
 }
 async function applyAccountStatusFilter(value) {
-  const next = ['link', 'sms'].includes(String(value || '')) ? String(value) : '';
+  const next = ['link', 'payment', 'sms'].includes(String(value || '')) ? String(value) : '';
   ACCOUNT_STATUS_FILTER = next;
   document.querySelectorAll('[data-account-status-filter]').forEach(btn => {
     const active = String(btn.dataset.accountStatusFilter || '') === next;
@@ -5770,58 +5828,6 @@ async function applyAccountStatusFilter(value) {
   planStatusRevision = '';
   await loadAccounts();
   await pollAccountPlanStatuses();
-}
-async function openManualLinkStatus(btn) {
-  const text = await appPrompt(
-    '手动同步提链状态\n\n输入需要点亮提链状态的账号邮箱，每行一个。',
-    '',
-    {inputLabel: '账号邮箱', placeholder: 'name@example.com\nname2@example.com', confirmText: '同步'}
-  );
-  if (text === null) return;
-  if (!String(text).split(/\r?\n/).some(line => line.trim())) {
-    showToast('请输入至少一个邮箱');
-    return;
-  }
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '同步中…';
-  try {
-    const result = await api('/api/accounts/link-status/sync', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text}),
-    });
-    const missing = Number(result.missing_count || 0);
-    showToast(missing
-      ? `已点亮 ${result.updated_count || 0} 个，未找到 ${missing} 个`
-      : `已点亮 ${result.updated_count || 0} 个提链状态`);
-    planStatusRevision = '';
-    await loadAccounts();
-    await pollAccountPlanStatuses();
-  } catch(err) {
-    showToast('同步提链状态失败: ' + err.message);
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-  }
-}
-async function refreshAccountsList(btn) {
-  if (!btn) return;
-  const old = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '刷新中…';
-  try {
-    planStatusRevision = '';
-    await loadAccounts();
-    await pollAccountPlanStatuses();
-    loadSummary();
-    showToast('账号列表已刷新');
-  } catch(e) {
-    showToast('刷新账号失败: ' + e.message);
-  } finally {
-    btn.textContent = old;
-    btn.disabled = false;
-  }
 }
 (function bindAccountsFilterV2() {
   const qV2 = $('#qAccountsV2');
@@ -5844,8 +5850,6 @@ async function refreshAccountsList(btn) {
   document.querySelectorAll('[data-account-status-filter]').forEach(btn => {
     btn.addEventListener('click', () => applyAccountStatusFilter(btn.dataset.accountStatusFilter));
   });
-  const manualLinkV2 = $('#btnManualLinkStatusV2');
-  if (manualLinkV2) manualLinkV2.addEventListener('click', () => openManualLinkStatus(manualLinkV2));
   const filterBtn = $('#btnAccountsFilterV2');
   if (filterBtn) filterBtn.addEventListener('click', openAccountsFilterModal);
   const groupViewBtn = $('#btnViewAccountGroupsV2');
@@ -6123,7 +6127,7 @@ async function extractOneLink(id, btn) {
     showToast('仅支持 free(可Plus试用) 账号提链');
     return;
   }
-  if (!await appConfirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n提链类型按配置使用 PIX/UPI/KAKAO_PAY/IDEAL，成功会消耗 1 次 CDK。`)) return;
+  if (!await appConfirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n将使用配置中的通用提链服务；PP 协议提链无需 CDK。`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '提链中…';
@@ -6148,7 +6152,7 @@ async function extractSelectedLinks() {
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
   if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
-  if (!await appConfirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
+  if (!await appConfirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过；任务使用配置中的并发、重试和通用提链服务。`)) return;
   const btn = $('#btnExtractSelectedLinksV2');
   const old = btn.textContent;
   btn.disabled = true;
@@ -7890,6 +7894,114 @@ function syncRegionProfileControlV2() {
       : '当前使用自定义地区画像，可选 jp/cn/us/sg';
   });
 }
+function _extractConfigValue(key, fallback = '') {
+  if (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, key)) return CONFIG_PENDING_UPDATES[key];
+  const field = CONFIG.find(item => item.key === key);
+  return field ? field.value : fallback;
+}
+function renderExtractLinkSectionV2(fields) {
+  const mode = String(_extractConfigValue('EXTRACT_LINK_MODE', 'protocol') || 'protocol');
+  const provider = String(_extractConfigValue('EXTRACT_LINK_PROVIDER', 'pp') || 'pp');
+  const services = (EXTRACT_LINK_SERVICES || []).filter(item => item.mode === mode);
+  const cards = services.length ? services.map(item => {
+    const active = String(item.id) === provider;
+    const meta = item.mode === 'protocol' ? (item.description || '内置协议提链') : `${item.api_base || ''} · ${item.link_type || 'pix'} · 并发 ${item.workers || 1}`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid ${active ? '#377DFF' : '#e4e7ed'};border-radius:8px;background:${active ? '#f1f6ff' : '#fff'};">
+      <button type="button" data-extract-provider="${attrEsc(item.id)}" data-extract-provider-mode="${attrEsc(item.mode)}" style="flex:1;border:0;background:transparent;text-align:left;cursor:pointer;color:#303133;"><b>${esc(item.name)}</b><div class="hint">${esc(meta)}</div></button>
+      ${item.mode === 'api' && !item.legacy ? `<button type="button" class="btn" data-delete-extract-api="${attrEsc(item.id)}">删除</button>` : ''}
+    </div>`;
+  }).join('') : '<div class="muted" style="padding:12px 0;">还没有已保存的 API 提链服务，请点击“添加提链 API”。</div>';
+  const editable = fields.filter(f => !['EXTRACT_LINK_MODE','EXTRACT_LINK_PROVIDER'].includes(f.key));
+  const switches = editable.filter(f => f.type === 'bool');
+  const inputs = editable.filter(f => f.type !== 'bool');
+  return `<section class="config-section-v2" id="${esc(configGroupSlug('提链'))}" data-config-section="提链">
+    ${renderConfigSectionHead('提链', '通用提链可选择 API 提链或项目内置协议提链；PP提链无需 CDK 配额。')}
+    <div class="config-subtabs-v2"><button type="button" class="config-subtab-v2 is-active">通用提链</button></div>
+    <input type="hidden" data-key="EXTRACT_LINK_MODE" value="${attrEsc(mode)}"><input type="hidden" data-key="EXTRACT_LINK_PROVIDER" value="${attrEsc(provider)}">
+    <div class="config-ep-select" style="display:flex;gap:8px;margin:18px 0 12px;">
+      <button type="button" class="config-ep-select-item${mode === 'api' ? ' is-active' : ''}" data-extract-mode="api">API提链</button>
+      <button type="button" class="config-ep-select-item${mode === 'protocol' ? ' is-active' : ''}" data-extract-mode="protocol">协议提链</button>
+    </div>
+    <div style="display:grid;gap:8px;margin-bottom:14px;">${cards}</div>
+    ${mode === 'api' ? '<button type="button" class="btn" id="btnAddExtractLinkApiV2">添加提链 API</button>' : ''}
+    ${switches.length ? `<div class="config-switches-v2" style="margin-top:18px;">${switches.map(f => renderFeatureSwitchField(f, {withIcon:false})).join('')}</div>` : ''}
+    ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
+    <div class="config-section-v2-actions"><button type="button" class="btn primary" data-save-config-v2>保存</button></div>
+  </section>`;
+}
+function openExtractLinkApiModal() {
+  const modal = document.getElementById('extractLinkApiModal');
+  if (!modal) return;
+  ['extractApiName', 'extractApiBase', 'extractApiCdk'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) input.value = '';
+  });
+  const type = document.getElementById('extractApiType');
+  const workers = document.getElementById('extractApiWorkers');
+  const result = document.getElementById('extractApiResult');
+  if (type) type.value = 'pix';
+  if (workers) workers.value = '3';
+  if (result) result.innerHTML = '';
+  modal.classList.remove('hidden'); modal.style.display = 'flex'; updateModalScrollLock();
+  setTimeout(() => document.getElementById('extractApiName')?.focus(), 30);
+}
+function closeExtractLinkApiModal() {
+  const modal = document.getElementById('extractLinkApiModal');
+  if (!modal) return;
+  modal.classList.add('hidden'); modal.style.display = ''; updateModalScrollLock();
+}
+async function loadExtractLinkServices() {
+  try { const r = await api('/api/extract-link/services'); EXTRACT_LINK_SERVICES = r.items || []; }
+  catch (e) { EXTRACT_LINK_SERVICES = []; }
+}
+async function saveExtractLinkApiService() {
+  const btn = document.getElementById('btnSaveExtractLinkApi');
+  const result = document.getElementById('extractApiResult');
+  if (btn) btn.disabled = true;
+  try {
+    const payload = {
+      name: document.getElementById('extractApiName')?.value || '',
+      api_base: document.getElementById('extractApiBase')?.value || '',
+      cdk: document.getElementById('extractApiCdk')?.value || '',
+      link_type: document.getElementById('extractApiType')?.value || 'pix',
+      workers: Number(document.getElementById('extractApiWorkers')?.value || 3),
+    };
+    const r = await api('/api/extract-link/services', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    CONFIG_PENDING_UPDATES.EXTRACT_LINK_MODE = 'api';
+    CONFIG_PENDING_UPDATES.EXTRACT_LINK_PROVIDER = r.service.id;
+    await loadExtractLinkServices(); closeExtractLinkApiModal(); renderConfigLayoutV2();
+    showToast('提链 API 服务已保存，请点击配置区“保存”启用');
+  } catch (e) { if (result) result.innerHTML = `<div class="banner warn">${esc(e.message)}</div>`; }
+  finally { if (btn) btn.disabled = false; }
+}
+function bindExtractLinkToolsV2() {
+  document.getElementById('btnAddExtractLinkApiV2')?.addEventListener('click', openExtractLinkApiModal);
+  document.querySelectorAll('[data-extract-mode]').forEach(btn => btn.addEventListener('click', () => {
+    const mode = btn.dataset.extractMode;
+    CONFIG_PENDING_UPDATES.EXTRACT_LINK_MODE = mode;
+    const first = EXTRACT_LINK_SERVICES.find(item => item.mode === mode);
+    CONFIG_PENDING_UPDATES.EXTRACT_LINK_PROVIDER = first ? first.id : '';
+    renderConfigLayoutV2();
+  }));
+  document.querySelectorAll('[data-extract-provider]').forEach(btn => btn.addEventListener('click', () => {
+    CONFIG_PENDING_UPDATES.EXTRACT_LINK_MODE = btn.dataset.extractProviderMode;
+    CONFIG_PENDING_UPDATES.EXTRACT_LINK_PROVIDER = btn.dataset.extractProvider;
+    renderConfigLayoutV2();
+  }));
+  document.querySelectorAll('[data-delete-extract-api]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!await appConfirm('确定删除这个提链 API 服务吗？')) return;
+    const deleted = String(btn.dataset.deleteExtractApi || '');
+    await api(`/api/extract-link/services/${encodeURIComponent(deleted)}`, {method:'DELETE'});
+    await loadExtractLinkServices();
+    if (String(_extractConfigValue('EXTRACT_LINK_PROVIDER', '')) === deleted) {
+      const mode = String(_extractConfigValue('EXTRACT_LINK_MODE', 'api') || 'api');
+      const replacement = EXTRACT_LINK_SERVICES.find(item => item.mode === mode);
+      CONFIG_PENDING_UPDATES.EXTRACT_LINK_PROVIDER = replacement ? replacement.id : '';
+    }
+    renderConfigLayoutV2(); showToast('提链 API 服务已删除');
+  }));
+}
+
 function renderMixedConfigSectionV2(name, fields, intro) {
   const slug = configGroupSlug(name);
   const switches = fields.filter(f => f.type === 'bool');
@@ -8439,6 +8551,9 @@ function renderConfigSectionV2(name, fields) {
       </section>
     `;
   }
+  if (name === '提链') {
+    return renderExtractLinkSectionV2(fields);
+  }
   if (name === 'Codex') {
     return renderCodexSectionV2(fields);
   }
@@ -8489,6 +8604,7 @@ function renderConfigLayoutV2() {
   bindCloudMailToolsV2();
   bindProxyTestToolsV2();
   bindPageAgentToolsV2();
+  bindExtractLinkToolsV2();
   syncRegionProfileControlV2();
 }
 function scrollToConfigSection(slug) {
@@ -8583,6 +8699,7 @@ function bindConfigLayoutV2() {
 async function loadConfig() {
   try {
     CONFIG = await api('/api/config');
+    await loadExtractLinkServices();
     renderConfigLayoutV2();
     bindConfigLayoutV2();
   } catch(e) {
@@ -8736,6 +8853,13 @@ function setSidebarCollapsed(collapsed, persist = true) {
     collapsed = !document.body.classList.contains('sidebar-collapsed');
     setSidebarCollapsed(collapsed);
   });
+})();
+
+(function bindExtractLinkApiModalV2(){
+  document.getElementById('btnCloseExtractLinkApi')?.addEventListener('click', closeExtractLinkApiModal);
+  document.getElementById('btnCancelExtractLinkApi')?.addEventListener('click', closeExtractLinkApiModal);
+  document.getElementById('btnSaveExtractLinkApi')?.addEventListener('click', saveExtractLinkApiService);
+  document.getElementById('extractLinkApiModal')?.addEventListener('click', event => { if (event.target.id === 'extractLinkApiModal') closeExtractLinkApiModal(); });
 })();
 
 loadSummary();

@@ -1055,6 +1055,7 @@ def _decorate_account(row: dict) -> dict:
         if "sms_completed" in out
         else out.get("codex_status") == "success"
     )
+    out["payment_completed"] = bool(out.get("payment_completed"))
     out["proxy_country_code"] = _account_proxy_country_code(out)
     proxy_geo = _account_proxy_geo(out)
     if proxy_geo:
@@ -1099,12 +1100,14 @@ def _account_matches_plan_filter(row: dict, plan_filter: str | None = None) -> b
 
 
 def _account_matches_status_filter(row: dict, status_filter: str | None = None) -> bool:
-    """账号完成状态过滤；空值返回全部，link/sms 只返回对应已完成账号。"""
+    """账号完成状态过滤；空值返回全部，其余返回对应已完成账号。"""
     value = str(status_filter or "").strip().lower()
     if not value or value in {"all", "any"}:
         return True
     if value in {"link", "linked"}:
         return bool(row.get("link_completed"))
+    if value in {"payment", "paid"}:
+        return bool(row.get("payment_completed"))
     if value in {"sms", "phone"}:
         return bool(row.get("sms_completed"))
     return True
@@ -1709,7 +1712,14 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         return True
 
 
-def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str = "pix") -> bool:
+def claim_account_extract(
+    acc_id: int,
+    trigger: str = "manual",
+    link_type: str = "pix",
+    service_id: str = "",
+    service_name: str = "",
+    mode: str = "",
+) -> bool:
     """原子占用账号提链任务；已有未超时任务时返回 False。"""
     with _LOCK:
         accounts = _load_accounts()
@@ -1731,11 +1741,27 @@ def claim_account_extract(acc_id: int, trigger: str = "manual", link_type: str =
         row["extract_link_ok"] = False
         row["extract_link_trigger"] = str(trigger or "manual")
         row["extract_link_type"] = str(link_type or "pix").lower()
+        row["extract_link_service_id"] = str(service_id or "")
+        row["extract_link_service_name"] = str(service_name or "")
+        row["extract_link_mode"] = str(mode or "")
         row["extract_link_queued_at"] = now
         row["extract_link_started_at"] = None
         row["extract_link_completed_at"] = None
         row["extract_link_error"] = None
         row["extract_link_message"] = "已入队"
+        row["extract_link_progress"] = 0
+        row["link_completed"] = False
+        row["link_completed_at"] = None
+        for key in (
+            "extract_link_job_id", "extract_link_long_url", "extract_link_copy_paste",
+            "extract_link_image_url_png", "extract_link_image_url_svg",
+            "extract_link_payment_method", "extract_link_payment_link_type",
+            "extract_link_paypal_authorize_url", "extract_link_hosted_checkout_url",
+            "extract_link_billing_country", "extract_link_amount_due",
+            "extract_link_zero_verified", "extract_link_expires_at",
+            "extract_link_cdk_remaining",
+        ):
+            row[key] = None
         row["updated_at"] = now
         _save_accounts(accounts)
         return True
@@ -1752,6 +1778,7 @@ def mark_account_extract_running(acc_id: int) -> bool:
         row["extract_link_started_at"] = _now()
         row["extract_link_error"] = None
         row["extract_link_message"] = "任务运行中"
+        row["extract_link_progress"] = max(1, int(row.get("extract_link_progress") or 0))
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
@@ -1775,12 +1802,23 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
         row["extract_link_error"] = None if ok or status == "running" else result.get("error")
         if result.get("message") is not None:
             row["extract_link_message"] = result.get("message")
+        if result.get("progress") is not None:
+            try:
+                row["extract_link_progress"] = max(0, min(100, int(result.get("progress") or 0)))
+            except (TypeError, ValueError):
+                pass
         if result.get("job_id") is not None:
             row["extract_link_job_id"] = result.get("job_id")
         if result.get("link_type") is not None:
             row["extract_link_type"] = result.get("link_type")
         if result.get("cdk_remaining") is not None:
             row["extract_link_cdk_remaining"] = result.get("cdk_remaining")
+        if result.get("service_id") is not None:
+            row["extract_link_service_id"] = result.get("service_id")
+        if result.get("service_name") is not None:
+            row["extract_link_service_name"] = result.get("service_name")
+        if result.get("mode") is not None:
+            row["extract_link_mode"] = result.get("mode")
         payload = result.get("result") if isinstance(result.get("result"), dict) else {}
         if payload:
             row["extract_link_long_url"] = payload.get("long_url")
@@ -1789,6 +1827,11 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
             row["extract_link_image_url_svg"] = payload.get("image_url_svg")
             row["extract_link_payment_method"] = payload.get("payment_method")
             row["extract_link_payment_link_type"] = payload.get("payment_link_type")
+            row["extract_link_paypal_authorize_url"] = payload.get("paypal_authorize_url")
+            row["extract_link_hosted_checkout_url"] = payload.get("hosted_checkout_url")
+            row["extract_link_billing_country"] = payload.get("billing_country")
+            row["extract_link_amount_due"] = payload.get("amount_due")
+            row["extract_link_zero_verified"] = payload.get("zero_verified")
             row["extract_link_expires_at"] = payload.get("expires_at")
             if payload.get("cdk_remaining") is not None:
                 row["extract_link_cdk_remaining"] = payload.get("cdk_remaining")
@@ -1845,6 +1888,12 @@ def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
 
     add_flag(bool(row.get("totp_secret")), "2FA", "无2FA")
     add_flag(bool(row.get("link_completed")), "提链", "未提链")
+    extract_status = str(row.get("extract_link_status") or "").strip().lower()
+    if extract_status == "success":
+        status_aliases.extend(["提链=true", "[提链=true]"])
+    elif extract_status == "failed":
+        status_aliases.extend(["提链=false", "[提链=false]"])
+    add_flag(bool(row.get("payment_completed")), "支付", "未支付")
     add_flag(bool(row.get("sms_completed")), "接码", "未接码")
     add_flag(bool(str(row.get("access_token") or "").strip()), "Token", "无Token")
     add_flag(bool(row.get("archived")), "归档", "未归档")
@@ -2021,7 +2070,7 @@ def list_account_plan_check_statuses(
 ) -> dict:
     """返回不含 Token/邮箱密码的套餐查询轻量状态快照。"""
     fields = (
-        "id", "email", "archived", "link_completed", "sms_completed",
+        "id", "email", "archived", "link_completed", "payment_completed", "sms_completed",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_checked_at",
         "oaics_session_kind", "oaics_processor_entity",
@@ -2042,7 +2091,10 @@ def list_account_plan_check_statuses(
         "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste",
         "extract_link_image_url_png", "extract_link_image_url_svg",
-        "extract_link_expires_at",
+        "extract_link_expires_at", "extract_link_progress",
+        "extract_link_service_id", "extract_link_service_name", "extract_link_mode",
+        "extract_link_paypal_authorize_url", "extract_link_hosted_checkout_url",
+        "extract_link_billing_country", "extract_link_amount_due", "extract_link_zero_verified",
         "codex_status", "codex_error",
         "codex_agent_status", "codex_agent_message",
         "codex_agent_runtime_id", "codex_agent_sub2api_url",
@@ -2071,7 +2123,7 @@ def list_account_plan_check_statuses(
                     continue
                 # 查活/套餐状态需要把 null 一并传给前端，用于清除上一轮失败原因和时间；
                 # 否则轻量轮询 Object.assign 会把旧 plan_check_error 永久留在表格里。
-                if key.startswith(("live_check_", "plan_check_", "twofa_")) or (value is not None and value != ""):
+                if key.startswith(("live_check_", "plan_check_", "twofa_", "extract_link_")) or (value is not None and value != ""):
                     item[key] = value
             plan = str(row.get("current_plan_type") or row.get("plan_type") or "").lower()
             if not any(x in plan for x in ("plus", "pro", "team", "go")):
@@ -2133,7 +2185,18 @@ def list_account_plan_check_statuses(
                     "live_check_started_at": row.get("live_check_started_at"),
                     "live_checked_at": row.get("live_checked_at"),
                     "extract_link_status": row.get("extract_link_status"),
+                    "extract_link_progress": row.get("extract_link_progress"),
+                    "extract_link_message": row.get("extract_link_message"),
+                    "extract_link_error": row.get("extract_link_error"),
+                    "extract_link_service_id": row.get("extract_link_service_id"),
+                    "extract_link_service_name": row.get("extract_link_service_name"),
+                    "extract_link_mode": row.get("extract_link_mode"),
+                    "extract_link_long_url": row.get("extract_link_long_url"),
+                    "extract_link_copy_paste": row.get("extract_link_copy_paste"),
+                    "extract_link_paypal_authorize_url": row.get("extract_link_paypal_authorize_url"),
+                    "extract_link_hosted_checkout_url": row.get("extract_link_hosted_checkout_url"),
                     "link_completed": row.get("link_completed"),
+                    "payment_completed": row.get("payment_completed"),
                     "sms_completed": row.get("sms_completed"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
@@ -2234,10 +2297,10 @@ def update_account_completion_status(
     enabled: bool,
     source: str = "manual",
 ) -> dict | None:
-    """人工更新账号提链/接码完成状态，返回更新后的轻量状态。"""
+    """人工更新账号支付/接码完成状态，返回更新后的轻量状态。"""
     name = str(status_name or "").strip().lower()
-    if name not in {"link", "sms"}:
-        raise ValueError("status_name 必须是 link 或 sms")
+    if name not in {"payment", "sms"}:
+        raise ValueError("status_name 必须是 payment 或 sms")
     with _LOCK:
         rows = _load_accounts()
         row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
@@ -2255,6 +2318,7 @@ def update_account_completion_status(
             "id": int(row.get("id") or 0),
             "email": row.get("email"),
             "link_completed": _decorate_account(row)["link_completed"],
+            "payment_completed": _decorate_account(row)["payment_completed"],
             "sms_completed": _decorate_account(row)["sms_completed"],
         }
 

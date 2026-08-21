@@ -709,21 +709,41 @@ EDITABLE_FIELDS = [
     },
     # ---- 提链 ----
     {
-        "key": "EXTRACT_LINK_API_BASE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务地址", "help": "填写提链服务 API 地址",
+        "key": "EXTRACT_LINK_MODE", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "提链方式", "help": "API提链=使用已保存的第三方提链服务；协议提链=使用项目内置协议实现",
+        "choices": ["api", "protocol"],
+        "choice_labels": {"api": "API提链", "protocol": "协议提链"},
     },
     {
-        "key": "EXTRACT_LINK_CDK", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链 CDK", "help": "创建提链任务和监听任务事件使用；成功提链扣 1 次",
-        "storage": "env", "secret": True,
+        "key": "EXTRACT_LINK_PROVIDER", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "提链服务", "help": "通用提链列表中当前选中的 API 或协议服务标识",
     },
     {
-        "key": "EXTRACT_LINK_TYPE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链类型", "help": "支持 pix / upi / kakao_pay / ideal",
+        "key": "EXTRACT_LINK_BILLING_COUNTRY", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "账单国家", "help": "PP 协议创建 Checkout 和账单地址所用国家",
+        "choices": ["GB", "US", "DE", "FR", "JP", "IE", "NL", "IT", "ES", "PT", "AT", "BE", "DK", "SE", "NO", "FI", "LU", "CH", "CA", "AU"],
+        "choice_labels": {"GB": "英国 (GB)", "US": "美国 (US)", "DE": "德国 (DE)", "FR": "法国 (FR)", "JP": "日本 (JP)", "IE": "爱尔兰 (IE)", "NL": "荷兰 (NL)", "IT": "意大利 (IT)", "ES": "西班牙 (ES)", "PT": "葡萄牙 (PT)", "AT": "奥地利 (AT)", "BE": "比利时 (BE)", "DK": "丹麦 (DK)", "SE": "瑞典 (SE)", "NO": "挪威 (NO)", "FI": "芬兰 (FI)", "LU": "卢森堡 (LU)", "CH": "瑞士 (CH)", "CA": "加拿大 (CA)", "AU": "澳大利亚 (AU)"},
+    },
+    {
+        "key": "EXTRACT_LINK_PAYMENT_METHOD", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "支付方式", "help": "PP 协议当前支持 PayPal",
+        "choices": ["paypal"], "choice_labels": {"paypal": "PayPal"},
+    },
+    {
+        "key": "EXTRACT_LINK_AUTO_ENTER_PAYPAL", "file": "extract_link.py", "type": "bool", "group": "提链",
+        "label": "提链成功后自动进入 PAYPAL", "help": "开启后复制/返回 PayPal authorize 直达地址；关闭时优先返回 Hosted Checkout 地址",
+    },
+    {
+        "key": "EXTRACT_LINK_CHECKOUT_UPDATE", "file": "extract_link.py", "type": "bool", "group": "提链",
+        "label": "执行 Checkout Update", "help": "Stripe confirm 要求人工批准时调用 Checkout Update/approve 后继续等待 PayPal 地址",
     },
     {
         "key": "EXTRACT_LINK_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
-        "label": "提链并发数", "help": "批量提链后台线程数，建议 1-4",
+        "label": "当前用户并发", "help": "批量提链同时运行的账号任务数，范围 1-20",
+    },
+    {
+        "key": "EXTRACT_LINK_RETRIES", "file": "extract_link.py", "type": "int", "group": "提链",
+        "label": "提链重试次数", "help": "单账号失败后切换链路重新尝试的次数，范围 0-30",
     },
     # ---- Codex 配置 ----
     {
