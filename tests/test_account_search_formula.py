@@ -54,6 +54,26 @@ def test_plain_search_remains_case_insensitive():
     assert _account_matches_query(_row(), "ICLOUD")
 
 
+def test_email_bracket_search_supports_exact_email_and_domain():
+    target = _row(email="comical.bowmen_2n@icloud.com")
+    same_domain = _row(email="another.account@icloud.com")
+    other_domain = _row(email="another.account@gmail.com")
+
+    assert _account_matches_query(target, "[@comical.bowmen_2n@icloud.com]")
+    assert not _account_matches_query(same_domain, "[@comical.bowmen_2n@icloud.com]")
+    assert _account_matches_query(target, "[@icloud.com]")
+    assert _account_matches_query(same_domain, "[@icloud.com]")
+    assert not _account_matches_query(other_domain, "[@icloud.com]")
+
+
+def test_email_bracket_search_supports_negation_and_and():
+    row = _row(email="comical.bowmen_2n@icloud.com", codex_status="success")
+
+    assert _account_matches_query(row, "[@icloud.com]&&[Codex]")
+    assert not _account_matches_query(row, "[@icloud.com]&&[Codex:failed]")
+    assert not _account_matches_query(row, "![@icloud.com]")
+
+
 def test_oaics_status_alias_is_searchable():
     assert _account_matches_query(_row(oaics_eligible=True), "[oaics]")
     assert not _account_matches_query(_row(oaics_eligible=False), "[oaics]")
@@ -93,6 +113,8 @@ def test_account_search_inputs_explain_formula_syntax():
         assert "[提链=false]" in source
         assert "![提链=true]" in source
         assert "![提链=false]" in source
+        assert "[@邮箱]" in source
+        assert "[@icloud.com]" in source
         assert "&&" in source
         assert "!**free" in source
 

@@ -1977,6 +1977,14 @@ def _account_query_term_matches(row: dict, term: str) -> bool:
     }
     if normalized in plan_terms or normalized.startswith("套餐:") or normalized.startswith("[套餐:"):
         return normalized in plans.replace("（", "(").replace("）", ")")
+    if normalized.startswith("[@") and normalized.endswith("]"):
+        email_selector = normalized[2:-1].strip()
+        email = str(row.get("email") or "").strip().lower()
+        if not email_selector or not email:
+            return False
+        if "@" in email_selector:
+            return email == email_selector
+        return email.endswith(f"@{email_selector}")
     if normalized.startswith("[") and normalized.endswith("]"):
         return normalized in statuses.replace("（", "(").replace("）", ")") or normalized in plans.replace("（", "(").replace("）", ")")
     return normalized in general.replace("（", "(").replace("）", ")")
