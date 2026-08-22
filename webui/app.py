@@ -813,6 +813,16 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
         })
 
+    @app.post("/api/accounts/delete-deactivated")
+    def api_accounts_delete_deactivated():
+        """清理全部已标记为废号的本地账号/token 记录。"""
+        deleted = db.delete_deactivated_accounts()
+        return jsonify({
+            "ok": True,
+            "deleted": deleted,
+            "deleted_count": len(deleted),
+        })
+
     @app.post("/api/accounts/<int:acc_id>/note")
     def api_account_note(acc_id: int):
         """更新单个已注册账号备注。Body {note: "..."}，空字符串表示清空。"""

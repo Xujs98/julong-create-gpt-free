@@ -1575,6 +1575,13 @@
     .accounts-filter-v2 .jobs-tb-btn--good:hover:not(:disabled) {
       color: #fff; border-color: #2f9e7c; background: #2f9e7c;
     }
+    .accounts-filter-v2 .jobs-tb-btn--danger {
+      color: #e64545; background: #fff0f0; border-color: #fbc4c4;
+      font-weight: 600;
+    }
+    .accounts-filter-v2 .jobs-tb-btn--danger:hover:not(:disabled) {
+      color: #fff; border-color: #f56c6c; background: #f56c6c;
+    }
     .accounts-filter-v2 .jobs-tb-btn:disabled {
       opacity: 1; cursor: not-allowed; color: #c0c4cc; background: #fff; border-color: #e4e7ed;
     }
@@ -2957,6 +2964,7 @@ try {
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="actions" role="menuitemcheckbox" aria-checked="true"><span>操作</span><span class="accounts-view-check">✓</span></button>
             </div>
           </div>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteDeadAccountsV2" title="删除全部已标记为废号的本地账号/token记录">清理全部废号</button>
         </div>
       </div>
       <div class="jobs-toolbar-v2" id="accountsToolbarV2">
@@ -6597,6 +6605,30 @@ async function deleteSelectedAccounts() {
   }
 }
 
+async function deleteAllDeadAccounts() {
+  if (!await appConfirm('确定清理全部废号吗？\n\n会删除所有已标记为废号的本地账号、注册成功邮箱和 token 记录。')) return;
+  const btn = $('#btnDeleteDeadAccountsV2');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '清理中…';
+  try {
+    const r = await api('/api/accounts/delete-deactivated', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: '{}',
+    });
+    (r.deleted || []).forEach(item => ACCOUNT_SELECTED.delete(Number(item.id)));
+    await Promise.all([loadAccounts(), loadSummary()]);
+    await appAlert(`已清理全部废号，一共有 ${r.deleted_count || 0} 个废号`, { title: '清理完成' });
+  } catch(err) {
+    showToast('清理废号失败: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    updateAccountSelectionUi();
+  }
+}
+
 async function editAccountNote(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
@@ -6770,6 +6802,7 @@ async function copySelectedAccountTokens() {
   bind('btnDownloadSelectedTxtV2', downloadSelectedAccountTxt);
   bind('btnArchiveSelectedAccountsV2', archiveSelectedAccounts);
   bind('btnDeleteSelectedAccountsV2', deleteSelectedAccounts);
+  bind('btnDeleteDeadAccountsV2', deleteAllDeadAccounts);
   bind('btnClearSelectedAccountsV2', clearSelectedAccountsV2);
 })();
 

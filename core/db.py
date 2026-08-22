@@ -2606,6 +2606,22 @@ def delete_accounts(account_ids: list[int] | None = None, emails: list[str] | No
     return deleted, skipped
 
 
+def delete_deactivated_accounts() -> list[dict]:
+    """删除所有已标记为废号的账号，并返回被删除账号的 id/email。"""
+    deleted: list[dict] = []
+    with _LOCK:
+        rows = _load_accounts()
+        remaining = []
+        for row in rows:
+            if str(row.get("codex_status") or "").strip().lower() == "deactivated":
+                deleted.append({"id": int(row.get("id") or 0), "email": row.get("email")})
+                continue
+            remaining.append(row)
+        if deleted:
+            _save_accounts(remaining)
+    return deleted
+
+
 # ============================================================
 # outlook_pool
 # ============================================================
