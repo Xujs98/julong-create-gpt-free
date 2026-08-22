@@ -148,9 +148,17 @@ def fetch_latest_otp(
     poll_interval: int | None = None,
     settle_seconds: int | None = None,
     exclude_codes: set[str] | None = None,
+    code_url: str | None = None,
 ) -> str:
     """轮询 HTML 地址并返回稳定且未被排除的 6 位验证码。"""
-    account = get_account_context(email)
+    # 域名邮箱池可导入与 iCloud 相同的 ``email----code_url`` 素材。
+    # 显式传入 URL 时不要求该地址存在于 iCloud 池，旧的 QQ IMAP 域名记录
+    # 仍走原有 context 查找路径。
+    account = (
+        ICloudEmailAccount(email=str(email or "").strip(), code_url=str(code_url).strip())
+        if str(code_url or "").strip()
+        else get_account_context(email)
+    )
     if account is None:
         raise ICloudMailError(f"iCloud 邮箱不存在或未导入: {email}")
 

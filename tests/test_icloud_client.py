@@ -77,6 +77,25 @@ class ICloudClientTests(unittest.TestCase):
             exclude_codes={"683938"},
         )
 
+    @patch("core.icloud_client.requests.get")
+    @patch("core.icloud_client.get_account_context")
+    def test_fetch_latest_otp_accepts_explicit_url_for_imported_domain_email(self, get_context, request_get):
+        """域名邮箱导入行可复用 iCloud HTML 取码解析，无需伪造 iCloud 池记录。"""
+        get_context.return_value = None
+        request_get.return_value = Mock(status_code=200, text="Your verification code is 482931")
+
+        code = icloud_client.fetch_latest_otp(
+            "target@example.test",
+            code_url="https://mail.example.test/code/target",
+            max_wait=2,
+            poll_interval=1,
+            settle_seconds=0,
+        )
+
+        self.assertEqual(code, "482931")
+        get_context.assert_not_called()
+        self.assertEqual(request_get.call_args.args[0], "https://mail.example.test/code/target")
+
 
 class ICloudPoolTests(unittest.TestCase):
     def test_import_claim_release_and_delete(self):

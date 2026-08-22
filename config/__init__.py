@@ -183,7 +183,13 @@ from config.webui import (
 )
 
 # ---------- 账号查活 ----------
-from config.live_check import LIVE_CHECK_DRIVER, LIVE_CHECK_HEADLESS
+from config.live_check import (
+    LIVE_CHECK_DRIVER,
+    LIVE_CHECK_HEADLESS,
+    REBIND_LOGIN_DRIVER,
+    REBIND_ACTION_DRIVER,
+    REBIND_HYBRID_MODE,
+)
 
 
 # ---------- 热加载支持 ----------
@@ -304,4 +310,5 @@ __all__ = [
     "WEBUI_REGISTRATION_JOB_RETENTION_COUNT",
     # live check
     "LIVE_CHECK_DRIVER", "LIVE_CHECK_HEADLESS",
+    "REBIND_LOGIN_DRIVER", "REBIND_ACTION_DRIVER", "REBIND_HYBRID_MODE",
 ]

@@ -746,6 +746,7 @@ def _browser_fetch(
     body: str | None = None,
     stage: str = "browser_fetch",
     timeout_ms: int = _TWOFA_BROWSER_FETCH_TIMEOUT_MS,
+    allow_redirects: bool = True,
 ) -> dict:
     """在当前指纹浏览器页面内发送请求，复用真实 TLS、Cookie 和浏览器指纹。"""
     # 注册流程可能把 Selenium 异步脚本超时设为 8/12 秒；若小于浏览器
@@ -765,13 +766,14 @@ def _browser_fetch(
         const method = String(arguments[1] || 'GET');
         const headers = arguments[2] || {};
         const body = arguments[3];
-        const timeoutMs = Math.max(1000, Number(arguments[4] || 20000));
+        const allowRedirects = arguments[4] !== false;
+        const timeoutMs = Math.max(1000, Number(arguments[5] || 20000));
         const done = arguments[arguments.length - 1];
         (async () => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort('twofa_fetch_timeout'), timeoutMs);
           try {
-            const options = {method, headers, credentials: 'include', redirect: 'follow', signal: controller.signal};
+            const options = {method, headers, credentials: 'include', redirect: allowRedirects ? 'follow' : 'error', signal: controller.signal};
             if (body !== null && body !== undefined) options.body = String(body);
             const resp = await fetch(url, options);
             const text = await resp.text();
@@ -790,6 +792,7 @@ def _browser_fetch(
         str(method or "GET").upper(),
         dict(headers or {}),
         body,
+        bool(allow_redirects),
         int(timeout_ms),
         ) or {}
     except Exception as exc:

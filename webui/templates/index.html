@@ -756,6 +756,13 @@
     }
     .jobs-table-v2 .col-status { width: 110px; }
     .jobs-table-v2 .col-email { min-width: 200px; width: 24%; }
+    .jobs-table-v2 .jobs-v2-task-type {
+      display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px;
+      margin-right: 5px; border: 1px solid #dcdfe6; border-radius: 999px;
+      color: #909399; background: #f5f7fa; font-size: 11px; line-height: 1;
+      vertical-align: middle;
+    }
+    .jobs-table-v2 .jobs-v2-task-type.is-rebind { color: #7c3aed; border-color: #d8b4fe; background: #f5f3ff; }
     .jobs-table-v2 .col-time { width: 170px; }
     .jobs-table-v2 .col-duration { width: 118px; font-variant-numeric: tabular-nums; }
     .jobs-table-v2 .col-error { width: auto; min-width: 160px; }
@@ -2241,6 +2248,90 @@
     .account-export-foot button:hover { border-color: #b8c2d1; background: #f5f7fa; }
     .account-export-foot button.primary { border-color: #377dff; background: #377dff; color: #fff; }
     .account-export-foot button.primary:hover { border-color: #2869df; background: #2869df; }
+    /* ---- 账号换绑弹窗 ---- */
+    #accountRebindModal:not(.hidden) {
+      position: fixed; inset: 0; z-index: 1200;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px; box-sizing: border-box;
+      background: rgba(15, 23, 42, .45);
+    }
+    .account-rebind-dialog {
+      width: min(620px, 100%); max-height: min(780px, calc(100vh - 48px));
+      display: flex; flex-direction: column; background: #fff;
+      border: 1px solid #ebeef5; border-radius: 12px;
+      box-shadow: 0 24px 70px rgba(15,23,42,.28); overflow: hidden;
+    }
+    .account-rebind-head {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 18px 20px 14px; border-bottom: 1px solid #ebeef5;
+    }
+    .account-rebind-head-main { min-width: 0; flex: 1; }
+    .account-rebind-head h3 { margin: 0; color: #303133; font-size: 18px; line-height: 1.3; }
+    .account-rebind-head p { margin: 7px 0 0; color: #909399; font-size: 12px; line-height: 1.5; }
+    .account-rebind-close {
+      width: 30px; height: 30px; flex: 0 0 30px; margin: -2px -2px 0 0;
+      border: 0; border-radius: 6px; background: transparent; color: #909399;
+      font-size: 20px; line-height: 1; cursor: pointer;
+    }
+    .account-rebind-close:hover { color: #606266; background: #f5f7fa; }
+    .account-rebind-body { padding: 18px 20px 8px; overflow: auto; display: grid; gap: 16px; }
+    .account-rebind-summary {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 11px 13px; border: 1px solid #dbe8ff; border-radius: 8px;
+      background: #f4f8ff; color: #3f5f95; font-size: 13px; line-height: 1.45;
+    }
+    .account-rebind-summary strong { color: #2459b8; }
+    .account-rebind-field { display: grid; gap: 8px; }
+    .account-rebind-field > span:not(.account-rebind-hint),
+    .account-rebind-section-title { color: #303133; font-size: 13px; font-weight: 600; }
+    .account-rebind-hint { color: #909399; font-size: 12px; line-height: 1.45; }
+    .account-rebind-pools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .account-rebind-pool {
+      display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 0 12px;
+      border: 1px solid #e4e7ed; border-radius: 8px; background: #fff; cursor: pointer;
+      transition: border-color .15s ease, background-color .15s ease;
+    }
+    .account-rebind-pool:hover { border-color: #9bbcff; background: #f6f9ff; }
+    .account-rebind-pool.is-selected { border-color: #377DFF; background: #f1f6ff; }
+    .account-rebind-pool.is-empty { color: #a8abb2; background: #fafafa; }
+    .account-rebind-pool input { width: 16px; height: 16px; margin: 0; accent-color: #377DFF; flex: 0 0 16px; }
+    .account-rebind-pool-main { min-width: 0; flex: 1; display: grid; gap: 2px; }
+    .account-rebind-pool-name { color: #303133; font-size: 13px; font-weight: 600; }
+    .account-rebind-pool-meta { color: #909399; font-size: 11px; }
+    .account-rebind-pool-count { color: #377DFF; font-size: 13px; font-weight: 700; white-space: nowrap; }
+    .account-rebind-pool.is-empty .account-rebind-pool-count { color: #c0c4cc; }
+    .account-rebind-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .account-rebind-grid label { display: grid; gap: 7px; color: #606266; font-size: 13px; font-weight: 600; }
+    .account-rebind-grid input,
+    .account-rebind-grid select,
+    .account-rebind-field select {
+      width: 100%; height: 38px; padding: 0 10px; box-sizing: border-box;
+      border: 1px solid #dcdfe6; border-radius: 7px; background: #fff; color: #606266;
+      font: inherit; font-size: 13px;
+    }
+    .account-rebind-grid input:focus,
+    .account-rebind-grid select:focus,
+    .account-rebind-field select:focus { outline: none; border-color: #377DFF; box-shadow: 0 0 0 3px rgba(55,125,255,.12); }
+    .account-rebind-grid input:invalid { border-color: #e64545; }
+    .account-rebind-result { min-height: 0; }
+    .account-rebind-result:empty { display: none; }
+    .account-rebind-foot {
+      display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px 18px;
+      border-top: 1px solid #ebeef5; background: #fafbfc;
+    }
+    .account-rebind-foot button {
+      min-height: 40px; padding: 8px 18px; border: 1px solid #dcdfe6; border-radius: 6px;
+      background: #fff; color: #606266; font: inherit; font-size: 14px; cursor: pointer;
+    }
+    .account-rebind-foot button:hover:not(:disabled) { color: #409eff; border-color: #c6e2ff; background: #ecf5ff; }
+    .account-rebind-foot button.primary { color: #fff; background: #377DFF; border-color: #377DFF; }
+    .account-rebind-foot button.primary:hover:not(:disabled) { background: #5a94ff; border-color: #5a94ff; }
+    .account-rebind-foot button:disabled { opacity: .62; cursor: not-allowed; }
+    @media (max-width: 560px) {
+      #accountRebindModal:not(.hidden) { padding: 14px; align-items: end; }
+      .account-rebind-dialog { width: 100%; max-height: calc(100vh - 28px); }
+      .account-rebind-pools, .account-rebind-grid { grid-template-columns: 1fr; }
+    }
     @media (max-width: 560px) {
       #accountExportModal:not(.hidden) { padding: 14px; align-items: end; }
       .account-export-dialog { width: 100%; }
@@ -3019,6 +3110,10 @@ try {
           <button type="button" class="acc-v2-status-option" id="btnViewAccountGroupsV2" title="查看、筛选和管理账号分组">查看分组</button>
           <button type="button" class="acc-v2-status-option" id="btnMoveSelectedAccountsGroupV2" disabled title="将选中账号移动到现有分组">移动</button>
         </div>
+        <div class="acc-v2-btn-group" role="group" aria-label="账号换绑操作">
+          <span class="acc-v2-btn-group-title">换绑</span>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnRebindSelectedAccountsV2" disabled title="先选择要换绑的账号，再从邮箱池选择目标邮箱">换绑</button>
+        </div>
       </div>
       <div class="accounts-table-v2-wrap">
         <table class="accounts-table-v2">
@@ -3256,7 +3351,7 @@ try {
     <div class="outlook-import-head">
       <div class="outlook-import-head-main">
         <h3 id="outlookImportTitle">导入邮箱素材</h3>
-        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API / iCloud：邮箱----取码地址（---- 或 ==== 均可）。iCloud 取码地址返回 HTML，系统会读取页面中的验证码。</p>
+        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API / iCloud / 域名邮箱：邮箱----取码地址（---- 或 ==== 均可）。iCloud 与域名邮箱取码地址返回 HTML，系统会读取页面中的验证码。</p>
       </div>
       <button type="button" class="outlook-import-close" id="btnCloseOutlookImport" aria-label="关闭">×</button>
     </div>
@@ -3270,10 +3365,11 @@ try {
             <button type="button" class="outlook-v2-select-item is-active" data-value="outlook" role="option">Outlook 邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 取码邮箱</button>
             <button type="button" class="outlook-v2-select-item" data-value="icloud" role="option">iCloud 邮箱池</button>
+            <button type="button" class="outlook-v2-select-item" data-value="cloudflare_domain" role="option">域名邮箱池</button>
           </div>
           <input type="hidden" id="importSourceV2" value="outlook">
         </div>
-        <span class="outlook-import-hint">注册来源可在配置里填多个，例如：outlook,generic_api,icloud</span>
+        <span class="outlook-import-hint">注册来源可在配置里填多个，例如：outlook,generic_api,icloud,cloudflare_domain</span>
       </label>
       <label class="outlook-import-check">
         <input id="importAsRegisteredV2" type="checkbox">
@@ -3281,7 +3377,7 @@ try {
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
-        <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken&#10;通用API / iCloud: email----取码地址"></textarea>
+        <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken&#10;通用API / iCloud / 域名邮箱: email----取码地址"></textarea>
       </label>
       <div class="outlook-import-check-result" id="importCheckResultV2" aria-live="polite"></div>
     </div>
@@ -3363,6 +3459,52 @@ try {
     <div class="account-export-foot">
       <button type="button" id="btnCancelAccountExport">取消</button>
       <button type="button" class="primary" id="btnConfirmAccountExport">导出 TXT</button>
+    </div>
+  </div>
+</div>
+<div id="accountRebindModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="accountRebindTitle">
+  <div class="account-rebind-dialog" role="document">
+    <div class="account-rebind-head">
+      <div class="account-rebind-head-main">
+        <h3 id="accountRebindTitle">换绑账号邮箱</h3>
+        <p>换绑成功后才会清理旧账号；任务会进入“注册”页的任务列表，可打开任务日志查看进度。</p>
+      </div>
+      <button type="button" class="account-rebind-close" id="btnCloseAccountRebind" aria-label="关闭">×</button>
+    </div>
+    <div class="account-rebind-body">
+      <div class="account-rebind-summary" id="accountRebindSummaryV2" aria-live="polite">
+        <span>已选择账号：<strong id="accountRebindSelectedCountV2">0</strong> 个</span>
+        <span>可用目标邮箱：<strong id="accountRebindAvailableCountV2">0</strong> 个</span>
+      </div>
+      <div class="account-rebind-result" id="accountRebindResultV2" aria-live="polite"></div>
+      <div class="account-rebind-field">
+        <span>目标邮箱池（至少选择一个）</span>
+        <div class="account-rebind-pools" id="accountRebindPoolListV2">
+          <div class="account-rebind-hint">正在读取邮箱池…</div>
+        </div>
+        <div class="account-rebind-hint" id="accountRebindPoolHintV2">只会从选中的邮箱池领取“可用”邮箱，池耗尽后任务自动结束。</div>
+      </div>
+      <div class="account-rebind-hint" id="accountRebindModeHintV2">换绑方式：跟随“配置 → 账号查活”设置。</div>
+      <div class="account-rebind-grid">
+        <label>换绑数量
+          <input id="accountRebindCountV2" type="number" min="1" max="1" value="1" inputmode="numeric">
+          <span class="account-rebind-hint" id="accountRebindCountHintV2">不能超过已选账号数和目标邮箱池可用数量。</span>
+        </label>
+        <label>并发线程数
+          <input id="accountRebindWorkersV2" type="number" min="1" max="1" value="1" inputmode="numeric">
+          <span class="account-rebind-hint">不能超过换绑数量、目标邮箱池可用数量和 16。</span>
+        </label>
+      </div>
+      <label class="account-rebind-field">换绑完成后移动到分组
+        <select id="accountRebindGroupV2">
+          <option value="">请选择目标分组</option>
+        </select>
+        <span class="account-rebind-hint">换绑成功后账号会移动到此分组；失败账号保留原账号和原分组。</span>
+      </label>
+    </div>
+    <div class="account-rebind-foot">
+      <button type="button" id="btnCancelAccountRebind">取消</button>
+      <button type="button" class="primary" id="btnStartAccountRebind" disabled>开始换绑</button>
     </div>
   </div>
 </div>
@@ -3454,6 +3596,9 @@ let ACCOUNT_STATUS_FILTER = '';
 let ACCOUNT_GROUP_FILTER = [];
 let ACCOUNT_GROUPS = [];
 let ACCOUNT_GROUP_MODAL_MODE = 'view';
+let REBIND_POOL_SUMMARY = {};
+let REBIND_ACCOUNT_IDS = [];
+let REBIND_MODE_INFO = {driver: '', login_driver: '', action_driver: '', hybrid: false, headless: false};
 // 中文注释：账号分组筛选属于浏览器视图偏好，按当前浏览器保存，刷新后恢复。
 const ACCOUNT_GROUP_FILTER_STORAGE_KEY = 'gpt_console_account_group_filter_v2';
 let ACCOUNT_GROUP_FILTER_RESTORED = false;
@@ -4021,12 +4166,17 @@ function renderJobs() {
       const duration = formatTaskDuration(j.started_at, j.completed_at);
       const err = j.error_message || '';
       const manualOtp = j.status === 'running' && j.email && j.manual_otp_required;
+      const taskType = String(j.job_type || '').toLowerCase() === 'rebind' ? '换绑' : '注册';
+      const taskEmail = j.email || '-';
+      const taskEmailTitle = taskType === '换绑' && j.rebind_source_email
+        ? `原账号：${j.rebind_source_email} → 新邮箱：${taskEmail}`
+        : taskEmail;
       return `
       <tr>
         <td class="col-check"><input type="checkbox" class="job-row-check" data-job-id="${esc(j.id)}" ${JOB_SELECTED.has(Number(j.id)) ? 'checked' : ''} ${running ? 'disabled title="运行中的任务不能选择"' : ''}></td>
         <td class="col-id">#${esc(j.id)}${j.parent_job_id ? `<div class="sub-cell" title="重试自任务 #${esc(j.parent_job_id)}">↳ #${esc(j.parent_job_id)} · ${esc(j.retry_attempt || 1)}</div>` : ''}</td>
         <td class="col-status">${pillV2(j.display_status || j.status)}</td>
-        <td class="col-email" title="${esc(j.email || '-')}">${esc(j.email || '-')}</td>
+        <td class="col-email" title="${esc(taskEmailTitle)}"><span class="jobs-v2-task-type${taskType === '换绑' ? ' is-rebind' : ''}">${taskType}</span> ${esc(taskEmail)}${taskType === '换绑' && j.rebind_source_email ? `<div class="sub-cell">原：${esc(j.rebind_source_email)}</div>` : ''}</td>
         <td class="col-time" title="${esc(started)}">${esc(started)}</td>
         <td class="col-time" title="${esc(completed)}">${esc(completed)}</td>
         <td class="col-duration" data-duration-start="${attrEsc(j.started_at || '')}" data-duration-end="${attrEsc(j.completed_at || '')}" title="${esc(duration)}">${esc(duration)}</td>
@@ -4115,7 +4265,8 @@ function updateModalScrollLock() {
     || !$('#outlookImportModal').classList.contains('hidden')
     || !$('#accountsFilterModal').classList.contains('hidden')
     || !$('#accountGroupsModal').classList.contains('hidden')
-    || !$('#accountExportModal').classList.contains('hidden');
+    || !$('#accountExportModal').classList.contains('hidden')
+    || !$('#accountRebindModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -4436,6 +4587,7 @@ function renderJobLogMeta(job) {
   const rawStatus = String(job?.status || '');
   const status = statusLabels[rawStatus] || rawStatus || '未知';
   const email = String(job?.email || '等待分配邮箱');
+  const taskType = String(job?.job_type || '').toLowerCase() === 'rebind' ? '换绑' : '注册';
   const isActive = ['queued', 'running', 'stopping'].includes(rawStatus);
   const refreshSettings = getJobLogRefreshSettings();
   const refreshText = !isActive
@@ -4443,7 +4595,7 @@ function renderJobLogMeta(job) {
     : refreshSettings.enabled
       ? `每 ${refreshSettings.interval} 秒同步日志`
       : '实时刷新已关闭';
-  meta.textContent = `状态：${status} · 邮箱：${email} · ${refreshText}`;
+  meta.textContent = `类型：${taskType} · 状态：${status} · 邮箱：${email} · ${refreshText}`;
   const dot = document.querySelector('#logPanel .job-log-live-dot');
   if (dot) {
     dot.classList.toggle('is-failed', rawStatus === 'failed');
@@ -5293,6 +5445,7 @@ function updateAccountSelectionUi(pageRows = null) {
     'btnNoteSelectedAccountsV2', 'btnInjectSelectedSessionsV2',
     'btnCopySelectedTokensV2', 'btnCopySelectedLinesV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
+    'btnRebindSelectedAccountsV2',
   ];
   v2Ids.forEach(id => {
     const el = document.getElementById(id);
@@ -5323,6 +5476,228 @@ function clearSelectedAccountsV2() {
   renderAccounts();
   showToast('已取消当前选中');
 }
+
+// ---------- 账号换绑 ----------
+// 换绑目标邮箱池只展示本地池；可用数量来自 /api/summary 的 pool_by_source。
+const REBIND_POOL_DEFS = [
+  {source: 'icloud', label: 'iCloud 邮箱池', hint: '格式与 iCloud 邮箱池一致'},
+  {source: 'cloudflare_domain', label: '域名邮箱池', hint: 'Cloudflare 域名邮箱池'},
+];
+function rebindPoolAvailable(source) {
+  const value = REBIND_POOL_SUMMARY?.[source];
+  if (value && typeof value === 'object') return Math.max(0, Number(value.available || 0));
+  return Math.max(0, Number(value || 0));
+}
+function selectedRebindSources() {
+  return $$('#accountRebindPoolListV2 input[data-rebind-source]:checked').map(el => String(el.value || '').trim()).filter(Boolean);
+}
+function selectedRebindAvailableCount() {
+  return selectedRebindSources().reduce((total, source) => total + rebindPoolAvailable(source), 0);
+}
+function renderRebindPoolOptions() {
+  const mount = $('#accountRebindPoolListV2');
+  if (!mount) return;
+  const oldSelected = new Set(selectedRebindSources());
+  mount.innerHTML = REBIND_POOL_DEFS.map(item => {
+    const available = rebindPoolAvailable(item.source);
+    const checked = oldSelected.has(item.source) && available > 0;
+    return `<label class="account-rebind-pool${checked ? ' is-selected' : ''}${available ? '' : ' is-empty'}">
+      <input type="checkbox" data-rebind-source value="${attrEsc(item.source)}"${checked ? ' checked' : ''}${available ? '' : ' disabled'}>
+      <span class="account-rebind-pool-main"><span class="account-rebind-pool-name">${esc(item.label)}</span><span class="account-rebind-pool-meta">${esc(item.hint)}</span></span>
+      <strong class="account-rebind-pool-count" data-rebind-pool-count="${attrEsc(item.source)}">${available} 个可用</strong>
+    </label>`;
+  }).join('');
+  if (!mount.innerHTML) mount.innerHTML = '<div class="account-rebind-hint">暂无可选邮箱池</div>';
+  syncRebindLimits();
+}
+function renderRebindModeHint() {
+  const el = $('#accountRebindModeHintV2');
+  if (!el) return;
+  const driverLabels = {protocol: '纯协议', cloak: '本地指纹浏览器', roxy: 'RoxyBrowser'};
+  const login = driverLabels[String(REBIND_MODE_INFO.login_driver || '').toLowerCase()] || REBIND_MODE_INFO.login_driver || '配置中的方式';
+  const action = driverLabels[String(REBIND_MODE_INFO.action_driver || REBIND_MODE_INFO.driver || '').toLowerCase()] || REBIND_MODE_INFO.action_driver || REBIND_MODE_INFO.driver || '配置中的方式';
+  el.textContent = REBIND_MODE_INFO.hybrid
+    ? `混合换绑：${login}登录（${REBIND_MODE_INFO.headless ? '无头' : '有头'}） → ${action}提交并验证`
+    : `换绑方式：${action} · ${REBIND_MODE_INFO.headless ? '无头' : '有头'}（配置 → 账号查活）`;
+}
+function renderRebindGroupOptions() {
+  const select = $('#accountRebindGroupV2');
+  if (!select) return;
+  const current = String(select.value || '');
+  const groups = (ACCOUNT_GROUPS || []).filter(group => !group.is_all);
+  select.disabled = groups.length === 0;
+  select.innerHTML = `<option value="">${groups.length ? '请选择目标分组' : '暂无可用分组，请先创建分组'}</option>` + groups.map(group =>
+    `<option value="${attrEsc(group.id)}" data-group-name="${attrEsc(group.name || '')}">${esc(group.name || `分组 ${group.id}`)}</option>`
+  ).join('');
+  if (current && groups.some(group => String(group.id) === current)) select.value = current;
+}
+function setRebindResult(message, tone = 'warn') {
+  const el = $('#accountRebindResultV2');
+  if (!el) return;
+  if (!message) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="banner ${tone === 'error' ? 'warn' : tone}">${esc(message)}</div>`;
+}
+function syncRebindLimits() {
+  const selectedCount = REBIND_ACCOUNT_IDS.length;
+  const available = selectedRebindAvailableCount();
+  const countEl = $('#accountRebindCountV2');
+  const workersEl = $('#accountRebindWorkersV2');
+  const selectedHint = $('#accountRebindSelectedCountV2');
+  const availableHint = $('#accountRebindAvailableCountV2');
+  const countHint = $('#accountRebindCountHintV2');
+  if (selectedHint) selectedHint.textContent = selectedCount;
+  if (availableHint) availableHint.textContent = available;
+  const maxCount = Math.max(0, Math.min(selectedCount, available));
+  if (countEl) {
+    countEl.max = String(Math.max(1, maxCount));
+    countEl.disabled = maxCount < 1;
+    let value = Number(countEl.value || 1);
+    if (!Number.isFinite(value) || value < 1) value = maxCount || 1;
+    if (maxCount > 0) value = Math.min(value, maxCount);
+    countEl.value = String(Math.max(1, Math.floor(value)));
+  }
+  if (workersEl) {
+    const currentCount = Math.max(1, Number(countEl?.value || 1));
+    workersEl.max = String(Math.max(1, Math.min(16, available, currentCount)));
+    workersEl.disabled = available < 1;
+    let value = Number(workersEl.value || 1);
+    if (!Number.isFinite(value) || value < 1) value = 1;
+    if (available > 0) value = Math.min(value, Math.min(16, available, currentCount));
+    workersEl.value = String(Math.max(1, Math.floor(value)));
+  }
+  if (countHint) {
+    countHint.textContent = maxCount > 0
+      ? `最多 ${maxCount} 个（已选账号 ${selectedCount} 个，目标邮箱 ${available} 个）。`
+      : '请先选择有可用邮箱的目标邮箱池。';
+  }
+  const count = Number(countEl?.value || 0);
+  const workers = Number(workersEl?.value || 0);
+  const groupSelected = Boolean($('#accountRebindGroupV2')?.value);
+  const valid = selectedCount > 0 && selectedRebindSources().length > 0 && available > 0
+    && count >= 1 && count <= maxCount && workers >= 1 && workers <= Math.min(16, available, count) && groupSelected;
+  const start = $('#btnStartAccountRebind');
+  if (start) start.disabled = !valid;
+  $('#accountRebindPoolListV2')?.querySelectorAll('.account-rebind-pool').forEach(label => {
+    const cb = label.querySelector('input[data-rebind-source]');
+    label.classList.toggle('is-selected', !!cb?.checked);
+  });
+  return {selectedCount, available, maxCount, count, workers, valid, sources: selectedRebindSources()};
+}
+async function loadRebindPoolsV2() {
+  try {
+    let result;
+    try { result = await api('/api/rebind/pools'); }
+    catch (_) { result = await api('/api/summary'); }
+    const sourceMap = result.pool_by_source || result.pools || result;
+    REBIND_MODE_INFO = {
+      driver: String(result.driver || ''),
+      login_driver: String(result.login_driver || result.driver || ''),
+      action_driver: String(result.action_driver || result.driver || ''),
+      hybrid: Boolean(result.hybrid),
+      headless: Boolean(result.headless),
+    };
+    REBIND_POOL_SUMMARY = {};
+    REBIND_POOL_DEFS.forEach(item => {
+      const raw = sourceMap?.[item.source] ?? sourceMap?.[item.source === 'cloudflare_domain' ? 'domain' : item.source];
+      REBIND_POOL_SUMMARY[item.source] = raw && typeof raw === 'object' ? raw : {available: Number(raw || 0)};
+    });
+    renderRebindPoolOptions();
+    renderRebindModeHint();
+    return REBIND_POOL_SUMMARY;
+  } catch (error) {
+    REBIND_POOL_SUMMARY = {};
+    REBIND_MODE_INFO = {driver: '', login_driver: '', action_driver: '', hybrid: false, headless: false};
+    renderRebindPoolOptions();
+    renderRebindModeHint();
+    setRebindResult(`读取邮箱池失败：${error.message}`, 'error');
+    return {};
+  }
+}
+async function openAccountRebindModal() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number).filter(Number.isFinite);
+  if (!ids.length) { showToast('请先选择要换绑的账号'); return; }
+  REBIND_ACCOUNT_IDS = ids;
+  const modal = $('#accountRebindModal');
+  if (!modal) return;
+  setRebindResult('');
+  $('#accountRebindCountV2').value = String(Math.max(1, Math.min(ids.length, 1)));
+  $('#accountRebindWorkersV2').value = '1';
+  const groupSelect = $('#accountRebindGroupV2');
+  if (groupSelect) groupSelect.value = '';
+  const poolList = $('#accountRebindPoolListV2');
+  if (poolList) poolList.innerHTML = '<div class="account-rebind-hint">正在读取邮箱池…</div>';
+  REBIND_POOL_SUMMARY = {};
+  modal.classList.remove('hidden');
+  updateModalScrollLock();
+  await loadAccountGroups(false);
+  renderRebindGroupOptions();
+  await loadRebindPoolsV2();
+  syncRebindLimits();
+  requestAnimationFrame(() => $('#accountRebindPoolListV2 input[data-rebind-source]:not(:disabled)')?.focus());
+}
+function closeAccountRebindModal() {
+  const modal = $('#accountRebindModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  updateModalScrollLock();
+}
+async function startAccountRebind() {
+  const state = syncRebindLimits();
+  if (!state.valid) {
+    setRebindResult(state.selectedCount < 1 ? '请先选择至少一个账号' : state.sources.length < 1 ? '请至少选择一个目标邮箱池' : state.available < 1 ? '所选邮箱池暂无可用邮箱' : !$('#accountRebindGroupV2')?.value ? '请选择换绑完成后的目标分组' : '换绑数量或并发线程数超过可用邮箱数量', 'error');
+    return;
+  }
+  const group = $('#accountRebindGroupV2')?.selectedOptions?.[0];
+  const payload = {
+    account_ids: REBIND_ACCOUNT_IDS.slice(),
+    count: state.count,
+    workers: state.workers,
+    email_sources: state.sources,
+    sources: state.sources,
+    pool_sources: state.sources,
+    target_group_id: group?.value ? Number(group.value) : null,
+    group_id: group?.value ? Number(group.value) : null,
+    target_group: group?.dataset.groupName || '',
+  };
+  if (!await appConfirm(`确定换绑 ${state.count} 个账号吗？\n\n目标邮箱池：${state.sources.map(source => REBIND_POOL_DEFS.find(x => x.source === source)?.label || source).join('、')}\n并发线程：${state.workers}\n\n只有换绑成功的账号会清理旧账号。`)) return;
+  const btn = $('#btnStartAccountRebind');
+  if (btn) { btn.disabled = true; btn.textContent = '提交中…'; }
+  try {
+    let result;
+    try {
+      result = await api('/api/accounts/rebind', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      result = await api('/api/rebind', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+    }
+    const jobId = result.job_id || result.task_id || result.job?.id;
+    ACCOUNT_SELECTED.clear();
+    REBIND_ACCOUNT_IDS = [];
+    closeAccountRebindModal();
+    await Promise.allSettled([loadAccounts(), loadSummary(), refreshJobs()]);
+    showToast(result.message || `换绑任务已启动${jobId ? `（任务 #${jobId}）` : ''}，可在注册页查看日志`);
+  } catch (error) {
+    setRebindResult(`启动换绑失败：${error.message}`, 'error');
+  } finally {
+    if (btn) { btn.textContent = '开始换绑'; syncRebindLimits(); }
+  }
+}
+(function bindAccountRebindV2() {
+  const openBtn = $('#btnRebindSelectedAccountsV2');
+  const modal = $('#accountRebindModal');
+  if (openBtn) openBtn.addEventListener('click', openAccountRebindModal);
+  $('#btnCloseAccountRebind')?.addEventListener('click', closeAccountRebindModal);
+  $('#btnCancelAccountRebind')?.addEventListener('click', closeAccountRebindModal);
+  $('#btnStartAccountRebind')?.addEventListener('click', startAccountRebind);
+  $('#accountRebindPoolListV2')?.addEventListener('change', event => {
+    if (event.target.closest('input[data-rebind-source]')) syncRebindLimits();
+  });
+  $('#accountRebindCountV2')?.addEventListener('input', syncRebindLimits);
+  $('#accountRebindWorkersV2')?.addEventListener('input', syncRebindLimits);
+  $('#accountRebindGroupV2')?.addEventListener('change', syncRebindLimits);
+  modal?.addEventListener('click', event => { if (event.target === modal) closeAccountRebindModal(); });
+  modal?.addEventListener('keydown', event => { if (event.key === 'Escape') closeAccountRebindModal(); });
+})();
 
 // ---------- 补跑日志面板 ----------
 let retryLogEmail = null, retryLogTimer = null;
@@ -6966,11 +7341,10 @@ function onPoolSourceChange(el) {
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
   const val = el ? el.value : getPoolSource();
-  if (val === 'outlook' || val === 'generic_api' || val === 'icloud') {
+  if (val === 'outlook' || val === 'generic_api' || val === 'icloud' || val === 'cloudflare_domain') {
     setImportSourceV2(val);
     setRegistrationEmailSource(val);
   }
-  if (val === 'cloudflare_domain') setRegistrationEmailSource(val);
   loadOutlook();
 }
 function syncOutlookSelectAll(checked) {
@@ -7084,6 +7458,7 @@ const IMPORT_SOURCE_LABELS = {
   outlook: 'Outlook 邮箱池',
   generic_api: '通用 API 取码邮箱',
   icloud: 'iCloud 邮箱池',
+  cloudflare_domain: '域名邮箱池',
 };
 
 // 中文注释：前端实时预检只负责给出即时反馈，最终写入仍由后端再次校验。
@@ -7151,7 +7526,7 @@ function openOutlookImportModal() {
   const result = $('#importResultV2');
   if (result) result.innerHTML = '';
   const pool = getPoolSource();
-  if (pool === 'outlook' || pool === 'generic_api' || pool === 'icloud') setImportSourceV2(pool);
+  if (pool === 'outlook' || pool === 'generic_api' || pool === 'icloud' || pool === 'cloudflare_domain') setImportSourceV2(pool);
   else setImportSourceV2('outlook');
   modal.classList.remove('hidden');
   updateModalScrollLock();
@@ -7755,7 +8130,7 @@ function getConfigGroupNames() {
 function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
-  if (name === '账号查活') return '独立选择查活驱动与无头模式，不影响注册方式及指纹浏览器原有设置。';
+  if (name === '账号查活') return '分别配置查活、换绑登录和换绑提交方式；混合模式支持指纹浏览器登录后由协议完成邮箱变更。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
@@ -7895,6 +8270,10 @@ function renderRegistrationDriverField(f) {
 function renderFeatureSwitchField(f, opts = {}) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   const on = !!fv;
+  const displayLabel = f.key === 'LIVE_CHECK_HEADLESS' ? '查活 / 换绑登录浏览器无头' : f.label;
+  const displayHelp = f.key === 'LIVE_CHECK_HEADLESS'
+    ? `${f.help || ''} 关闭为有头，开启为无头；换绑的浏览器登录阶段会复用此设置。`
+    : f.help;
   const withIcon = opts.withIcon !== false;
   const icon = withIcon ? configFeatureIcon(f.key) : null;
   const agentReady = !f.requires_agent || !!(CONFIG.find(x => x.key === 'PAGE_AGENT_STATUS') || {}).status_ok;
@@ -7905,10 +8284,10 @@ function renderFeatureSwitchField(f, opts = {}) {
         <span class="config-switch-v2-icon ${icon.cls}" aria-hidden="true">
           <svg viewBox="0 0 24 24">${icon.svg}</svg>
         </span>
-        <div class="config-switch-v2-label">${esc(f.label)}</div>
-      </div>` : `<div class="config-switch-v2-label">${esc(f.label)}</div>`}
-      <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(f.key)}"${on ? ' checked' : ''}${agentReady ? '' : ' disabled aria-disabled="true"'} aria-label="${attrEsc(f.label)}">
-      <p class="config-switch-v2-help">${esc(f.help || '')}</p>
+        <div class="config-switch-v2-label">${esc(displayLabel)}</div>
+      </div>` : `<div class="config-switch-v2-label">${esc(displayLabel)}</div>`}
+      <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(f.key)}"${on ? ' checked' : ''}${agentReady ? '' : ' disabled aria-disabled="true"'} aria-label="${attrEsc(displayLabel)}">
+      <p class="config-switch-v2-help">${esc(displayHelp || '')}</p>
       ${f.requires_agent && !agentReady ? '<p class="config-switch-v2-help" style="color:var(--orange);">请先在“页面 Agent”中完成配置并点击测试</p>' : ''}
     </div>
   `;

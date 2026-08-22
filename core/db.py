@@ -11,6 +11,7 @@ SQLite 保存账号、邮箱池和任务的权威状态；根目录 JSON/TXT 继
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -23,6 +24,8 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from core.sqlite_store import SQLiteStore
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DATA_DIR = _PROJECT_ROOT
@@ -95,6 +98,7 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, data: Any) -> None:
     _ensure_storage()
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
@@ -251,6 +255,17 @@ def _icloud_email_line(row: dict) -> str:
         row.get("email") or "",
         row.get("code_url") or "",
     ])
+
+
+def _domain_email_line(row: dict) -> str:
+    """生成域名邮箱池文本行：邮箱----取码地址。
+
+    传统的 cloudflare_domain 邮箱由 QQ IMAP 收码，旧记录没有取码地址；
+    这类记录仍只输出邮箱，导入记录则保留与 iCloud 相同的两段格式。
+    """
+    email = row.get("email") or ""
+    code_url = row.get("code_url") or row.get("url") or ""
+    return "----".join([email, code_url]) if code_url else email
 
 
 def _totp_viewer_url(secret: str | None) -> str:
@@ -2631,6 +2646,610 @@ def delete_deactivated_accounts() -> list[dict]:
 
 
 # ============================================================
+# Account rebind helpers
+# ============================================================
+
+_REBIND_EMAIL_SOURCES = ("icloud", "cloudflare_domain", "generic_api", "outlook")
+
+
+def _rebind_bool(value: Any, default: bool = False) -> bool:
+    """Parse booleans crossing the JSON/WebUI boundary safely."""
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "on", "y", "是", "开启", "启用"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "n", "否", "关闭", "禁用", ""}:
+            return False
+        return bool(default)
+    return bool(value)
+
+
+def get_account_group(*, group_id: int | None = None, name: str | None = None) -> dict | None:
+    """Resolve a non-virtual account group for a rebind target."""
+    with _LOCK:
+        _ensure_account_group_storage()
+        group = _find_group(_load_group_rows(), group_id=group_id, name=name)
+        if group is None:
+            return None
+        if str(group.get("id") or "").strip().lower() == "all":
+            return None
+        result = dict(group)
+        result["count"] = sum(
+            1
+            for row in _load_accounts()
+            if str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold()
+            == str(group.get("name") or "").strip().casefold()
+        )
+        return result
+
+
+def has_active_rebind_for_account(account_id: int) -> bool:
+    """Return whether an account already has a queued/running rebind task."""
+    target = int(account_id)
+    with _LOCK:
+        for row in _load_jobs():
+            if str(row.get("job_type") or "") != "rebind":
+                continue
+            try:
+                source_id = int(row.get("rebind_source_account_id") or row.get("account_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if source_id == target and str(row.get("status") or "") in {"pending", "running", "stopping"}:
+                return True
+        return False
+
+
+def claim_rebind_job(job_id: int) -> dict | None:
+    """Atomically claim a pending rebind job for its worker.
+
+    A pending task can be cancelled from the WebUI while it is waiting in the
+    executor queue.  The worker must transition it to ``running`` only while
+    holding the same storage lock used by cancellation; otherwise a cancelled
+    task could wake up later and still execute against a reserved mailbox.
+    """
+    with _LOCK:
+        rows = _load_jobs()
+        row = next((item for item in rows if int(item.get("id") or 0) == int(job_id)), None)
+        if row is None or str(row.get("job_type") or "") != "rebind":
+            return None
+        if str(row.get("status") or "") != "pending":
+            return None
+        now = _now()
+        row["status"] = "running"
+        row["rebind_status"] = "running"
+        row["started_at"] = now
+        row["rebind_started_at"] = now
+        _save_jobs(rows)
+        return dict(row)
+
+
+def cancel_pending_rebind_job(job_id: int) -> dict | None:
+    """Atomically cancel a still-pending job and release its mailbox.
+
+    Returning ``None`` means another worker already claimed the job (or it was
+    terminal), so callers must re-read the current state before deciding how
+    to signal the running task.
+    """
+    with _LOCK:
+        rows = _load_jobs()
+        row = next((item for item in rows if int(item.get("id") or 0) == int(job_id)), None)
+        if row is None or str(row.get("job_type") or "") != "rebind":
+            return None
+        if str(row.get("status") or "") != "pending":
+            return None
+        source = str(row.get("rebind_target_source") or "").strip().lower()
+        email_key = str(row.get("rebind_target_email") or "").strip().casefold()
+        reservation = str(row.get("rebind_reservation_id") or "").strip()
+        target_released = False
+        previous_pool_rows: list[dict] | None = None
+        changed_pool_rows: list[dict] | None = None
+        if source in _REBIND_EMAIL_SOURCES and email_key and reservation:
+            pool_rows = _rebind_pool_rows(source)
+            pool_row = next((
+                item for item in pool_rows
+                if str(item.get("email") or "").strip().casefold() == email_key
+                and str(item.get("rebind_reservation_id") or "").strip() == reservation
+                and str(item.get("status") or "").strip().lower() == "used"
+                and str(item.get("rebind_status") or "").strip().lower() == "reserved"
+            ), None)
+            if pool_row is not None:
+                previous_pool_rows = [dict(item) for item in pool_rows]
+                now = _now()
+                pool_row["status"] = "available"
+                pool_row["used_at"] = None
+                pool_row["rebind_status"] = "cancelled"
+                pool_row["rebind_released_at"] = now
+                pool_row["note"] = "换绑任务取消，邮箱已释放"
+                pool_row.pop("rebind_reservation_id", None)
+                pool_row.pop("rebind_reserved_at", None)
+                # Save the release before the task state.  If storage fails,
+                # the job remains pending and a worker can still safely claim
+                # the intact reservation instead of running without a target.
+                _save_rebind_pool_rows(source, pool_rows)
+                changed_pool_rows = pool_rows
+                target_released = True
+        now = _now()
+        row["status"] = "cancelled"
+        row["rebind_status"] = "cancelled"
+        row["error_message"] = "用户手动取消"
+        row["completed_at"] = now
+        try:
+            _save_jobs(rows)
+        except Exception:
+            # Keep the two-file state coherent if the job write fails after a
+            # mailbox release.  The caller can retry cancellation safely.
+            if previous_pool_rows is not None and changed_pool_rows is not None:
+                try:
+                    _save_rebind_pool_rows(source, previous_pool_rows)
+                except Exception:
+                    logger.exception("恢复换绑取消前邮箱预留失败 job_id=%s", job_id)
+            raise
+        result = dict(row)
+        result["rebind_target_released"] = target_released
+        return result
+
+
+def get_rebind_target(
+    source: str | None,
+    pool_id: int | str | None,
+    email: str | None,
+    *,
+    reservation_id: str | None,
+) -> dict | None:
+    """Load the reserved mailbox material at worker execution time.
+
+    Credentials and code URLs are intentionally not copied into job records.
+    The worker resolves the exact pool row by source, id, email, and the
+    reservation token that was created when the batch was submitted.
+    """
+    source_key = str(source or "").strip().lower()
+    target_email = str(email or "").strip()
+    reservation = str(reservation_id or "").strip()
+    if source_key not in _REBIND_EMAIL_SOURCES or not target_email or not reservation:
+        return None
+    try:
+        target_id = int(pool_id)
+    except (TypeError, ValueError):
+        return None
+    with _LOCK:
+        rows = _rebind_pool_rows(source_key)
+        row = next((item for item in rows if int(item.get("id") or 0) == target_id), None)
+        if row is None:
+            return None
+        if str(row.get("email") or "").strip().casefold() != target_email.casefold():
+            return None
+        if str(row.get("rebind_reservation_id") or "").strip() != reservation:
+            return None
+        # reserve_rebind_emails marks the row used + rebind_status=reserved;
+        # no other task state is eligible for a worker to consume.
+        if str(row.get("status") or "").strip().lower() != "used":
+            return None
+        if str(row.get("rebind_status") or "").strip().lower() != "reserved":
+            return None
+        target = dict(row)
+        target.update({
+            "id": target_id,
+            "email": target_email,
+            "source": source_key,
+            "code_url": row.get("code_url") or row.get("url"),
+            "client_id": row.get("client_id") or row.get("clientId"),
+            "refresh_token": row.get("refresh_token") or row.get("refreshToken"),
+            "reservation_id": reservation,
+        })
+        return target
+
+
+def _rebind_pool_rows(source: str) -> list[dict]:
+    source = str(source or "").strip().lower()
+    if source == "icloud":
+        return _load_icloud_emails()
+    if source == "cloudflare_domain":
+        return _load_domain_pool()
+    if source == "generic_api":
+        return _load_generic_api_emails()
+    if source == "outlook":
+        return _load_outlook()
+    raise ValueError(f"未知邮箱池：{source}")
+
+
+def _save_rebind_pool_rows(source: str, rows: list[dict]) -> None:
+    source = str(source or "").strip().lower()
+    if source == "icloud":
+        _save_icloud_emails(rows)
+    elif source == "cloudflare_domain":
+        _save_domain_pool(rows)
+    elif source == "generic_api":
+        _save_generic_api_emails(rows)
+    elif source == "outlook":
+        _save_outlook(rows)
+    else:
+        raise ValueError(f"未知邮箱池：{source}")
+
+
+def list_rebind_email_pool_summary() -> dict[str, dict]:
+    """Return pool counts used by the rebind dialog.
+
+    The response deliberately includes only address/id/status metadata; the
+    actual code URL/password material stays in the task worker process.
+    """
+    with _LOCK:
+        result: dict[str, dict] = {}
+        for source in _REBIND_EMAIL_SOURCES:
+            rows = _rebind_pool_rows(source)
+            counts: dict[str, int] = {"available": 0, "used": 0, "failed": 0, "disabled": 0}
+            items: list[dict] = []
+            for row in rows:
+                status = str(row.get("status") or "available").strip().lower()
+                counts[status] = counts.get(status, 0) + 1
+                if status == "available":
+                    items.append({
+                        "id": row.get("id"),
+                        "email": row.get("email"),
+                        "source": source,
+                    })
+            counts["total"] = len(rows)
+            counts["items"] = items
+            result[source] = counts
+        return result
+
+
+def reserve_rebind_emails(
+    sources: list[str] | tuple[str, ...],
+    count: int,
+    *,
+    reservation_id: str,
+) -> list[dict]:
+    """Atomically reserve ``count`` available addresses across selected pools."""
+    normalized: list[str] = []
+    for raw in sources or []:
+        source = str(raw or "").strip().lower()
+        if source not in _REBIND_EMAIL_SOURCES:
+            raise ValueError(f"未知邮箱池：{source}")
+        if source not in normalized:
+            normalized.append(source)
+    try:
+        requested = int(count)
+    except (TypeError, ValueError):
+        raise ValueError("换绑数量必须是整数")
+    if requested < 1 or not normalized:
+        return []
+    reservation = str(reservation_id or "").strip()
+    if not reservation:
+        raise ValueError("reservation_id 不能为空")
+
+    with _LOCK:
+        loaded: dict[str, list[dict]] = {source: _rebind_pool_rows(source) for source in normalized}
+        available: list[tuple[str, dict]] = []
+        for source in normalized:
+            for row in sorted(loaded[source], key=lambda item: int(item.get("id") or 0)):
+                if str(row.get("status") or "available").strip().lower() == "available":
+                    available.append((source, row))
+        if len(available) < requested:
+            return []
+        now = _now()
+        selected: list[dict] = []
+        changed_sources: set[str] = set()
+        for source, row in available[:requested]:
+            row["status"] = "used"
+            row["used_at"] = now
+            row.pop("registered_account_id", None)
+            row.pop("access_token", None)
+            row.pop("completed_at", None)
+            row.pop("rebind_completed_at", None)
+            row["rebind_status"] = "reserved"
+            row["rebind_reservation_id"] = reservation
+            row["rebind_reserved_at"] = now
+            row["note"] = "换绑任务预留"
+            changed_sources.add(source)
+            selected.append({
+                "id": row.get("id"),
+                "email": row.get("email"),
+                "source": source,
+                "code_url": row.get("code_url") or row.get("url"),
+                "password": row.get("password"),
+                "client_id": row.get("client_id") or row.get("clientId"),
+                "refresh_token": row.get("refresh_token") or row.get("refreshToken"),
+                "reservation_id": reservation,
+            })
+        for source in changed_sources:
+            _save_rebind_pool_rows(source, loaded[source])
+        return selected
+
+
+def release_rebind_email(
+    source: str | None,
+    email: str | None,
+    *,
+    reservation_id: str | None = None,
+    success: bool,
+    note: str | None = None,
+) -> bool:
+    """Commit a reserved target or release it after a failed task."""
+    source = str(source or "").strip().lower()
+    email_key = str(email or "").strip().casefold()
+    if source not in _REBIND_EMAIL_SOURCES or not email_key:
+        return False
+    with _LOCK:
+        rows = _rebind_pool_rows(source)
+        row = next((item for item in rows if str(item.get("email") or "").strip().casefold() == email_key), None)
+        if row is None:
+            return False
+        expected = str(reservation_id or "").strip()
+        actual = str(row.get("rebind_reservation_id") or "").strip()
+        # A release must be tied to the reservation that selected this exact
+        # row; accepting an empty token could release a newer task's mailbox
+        # after a stale worker or cancellation request.
+        if not expected or expected != actual:
+            return False
+        if str(row.get("status") or "").strip().lower() != "used" or str(row.get("rebind_status") or "").strip().lower() != "reserved":
+            return False
+        now = _now()
+        if success:
+            row["status"] = "used"
+            row["used_at"] = row.get("used_at") or now
+            row["rebind_status"] = "completed"
+            row["rebind_completed_at"] = now
+        else:
+            row["status"] = "available"
+            row["used_at"] = None
+            row["rebind_status"] = "failed"
+            row["rebind_released_at"] = now
+            row.pop("registered_account_id", None)
+            row.pop("access_token", None)
+            row.pop("completed_at", None)
+            row.pop("rebind_completed_at", None)
+        if note is not None:
+            row["note"] = str(note)[:500]
+        row.pop("rebind_reservation_id", None)
+        row.pop("rebind_reserved_at", None)
+        _save_rebind_pool_rows(source, rows)
+        return True
+
+
+def release_rebind_reservation(reservation_id: str, *, note: str | None = None) -> int:
+    """Release all still-reserved addresses for a reservation."""
+    reservation = str(reservation_id or "").strip()
+    if not reservation:
+        return 0
+    released = 0
+    with _LOCK:
+        for source in _REBIND_EMAIL_SOURCES:
+            rows = _rebind_pool_rows(source)
+            changed = False
+            for row in rows:
+                if str(row.get("rebind_reservation_id") or "") != reservation:
+                    continue
+                if str(row.get("status") or "").strip().lower() != "used":
+                    continue
+                if str(row.get("rebind_status") or "").strip().lower() != "reserved":
+                    continue
+                row["status"] = "available"
+                row["used_at"] = None
+                row["rebind_status"] = "failed"
+                row["rebind_released_at"] = _now()
+                row["note"] = str(note or "换绑预留已释放")[:500]
+                row.pop("registered_account_id", None)
+                row.pop("access_token", None)
+                row.pop("completed_at", None)
+                row.pop("rebind_completed_at", None)
+                row.pop("rebind_reservation_id", None)
+                row.pop("rebind_reserved_at", None)
+                released += 1
+                changed = True
+            if changed:
+                _save_rebind_pool_rows(source, rows)
+    return released
+
+
+def rebind_email_pool_summary() -> dict[str, dict]:
+    """Alias retained for API callers using the shorter summary name."""
+    return list_rebind_email_pool_summary()
+
+
+def finalize_rebind_account(
+    account_id: int,
+    *,
+    target_email: str,
+    target_source: str,
+    target_pool_id: int | str | None,
+    reservation_id: str | None,
+    group_id: int | str | None = None,
+    group_name: str | None = None,
+    job_id: int | None = None,
+    target_material: dict | None = None,
+    result: dict | None = None,
+) -> dict:
+    """Atomically replace the old local account after confirmed external success."""
+    source = str(target_source or "").strip().lower()
+    target = str(target_email or "").strip()
+    if source not in _REBIND_EMAIL_SOURCES or not target:
+        raise ValueError("换绑目标邮箱参数无效")
+    expected_reservation = str(reservation_id or "").strip()
+    if not expected_reservation:
+        raise ValueError("换绑目标邮箱预留标识无效")
+    try:
+        expected_pool_id = int(target_pool_id)
+    except (TypeError, ValueError):
+        raise ValueError("换绑目标邮箱池记录无效")
+    # ``target_material`` is retained for caller compatibility, but mailbox
+    # credentials are copied from the locked pool row below so stale or forged
+    # executor input cannot overwrite the selected reservation.
+    _ = target_material
+    result = result if isinstance(result, dict) else {}
+    # JSON/API adapters may serialize booleans as strings; do not let
+    # ``bool('false')`` authorize destructive local account replacement.
+    if not _rebind_bool(result.get("ok"), False):
+        raise ValueError("换绑结果未确认成功")
+    session = result.get("session") if isinstance(result.get("session"), dict) else {}
+    session_user = session.get("user") if isinstance(session.get("user"), dict) else {}
+    verified_email = str(
+        result.get("verified_email")
+        or result.get("current_email")
+        or result.get("account_email")
+        or result.get("email")
+        or session.get("email")
+        or session.get("user_email")
+        or session_user.get("email")
+        or ""
+    ).strip()
+    if not verified_email or verified_email.casefold() != target.casefold():
+        raise ValueError("换绑结果未验证目标邮箱已生效")
+    verified_token = str(
+        result.get("access_token")
+        or session.get("access_token")
+        or session.get("accessToken")
+        or session_user.get("access_token")
+        or session_user.get("accessToken")
+        or ""
+    ).strip()
+    if not verified_token:
+        raise ValueError("换绑结果缺少已验证会话的 Access Token")
+    result = dict(result)
+    result["verified_email"] = verified_email
+    result["access_token"] = verified_token
+    with _LOCK:
+        accounts = _load_accounts()
+        old_index = next((idx for idx, row in enumerate(accounts) if int(row.get("id") or 0) == int(account_id)), None)
+        if old_index is None:
+            raise ValueError("原账号不存在")
+        old = dict(accounts[old_index])
+        if str(old.get("email") or "").strip().casefold() == target.casefold():
+            raise ValueError("换绑目标邮箱不能与原邮箱相同")
+        if _find_by_email(accounts, target) is not None:
+            raise ValueError("换绑目标邮箱已经存在账号")
+        group = _find_group(_load_group_rows(), group_id=group_id, name=group_name)
+        if group is None:
+            raise ValueError("换绑目标分组不存在")
+        pool_rows = _rebind_pool_rows(source)
+        pool_row = next((row for row in pool_rows if str(row.get("email") or "").strip().casefold() == target.casefold()), None)
+        if pool_row is None:
+            raise ValueError("换绑目标邮箱不在所选邮箱池")
+        try:
+            actual_pool_id = int(pool_row.get("id"))
+        except (TypeError, ValueError):
+            raise ValueError("换绑目标邮箱池记录无效")
+        if actual_pool_id != expected_pool_id:
+            raise ValueError("换绑目标邮箱池记录不匹配")
+        actual_reservation = str(pool_row.get("rebind_reservation_id") or "").strip()
+        if expected_reservation != actual_reservation:
+            raise ValueError("换绑目标邮箱预留已失效")
+        if str(pool_row.get("status") or "").strip().lower() != "used":
+            raise ValueError("换绑目标邮箱预留状态无效")
+        if str(pool_row.get("rebind_status") or "").strip().lower() != "reserved":
+            raise ValueError("换绑目标邮箱当前不可用")
+
+        now = _now()
+        replacement = dict(old)
+        replacement["id"] = _next_id(accounts)
+        replacement["email"] = target
+        replacement["email_source"] = source
+        # Clear provider-specific material inherited from the old account,
+        # then rebuild it solely from the selected pool row.
+        for field in ("password", "client_id", "refresh_token", "code_url", "original_email_line"):
+            replacement.pop(field, None)
+        if source == "outlook":
+            for field, aliases in (
+                ("password", ("password",)),
+                ("client_id", ("client_id", "clientId")),
+                ("refresh_token", ("refresh_token", "refreshToken")),
+            ):
+                value = next((pool_row.get(alias) for alias in aliases if pool_row.get(alias) not in (None, "")), None)
+                if value not in (None, ""):
+                    replacement[field] = value
+            replacement["original_email_line"] = _outlook_line(pool_row)
+        else:
+            target_code_url = str(pool_row.get("code_url") or pool_row.get("url") or "").strip()
+            if target_code_url:
+                replacement["code_url"] = target_code_url
+            if source == "generic_api":
+                replacement["original_email_line"] = _generic_api_email_line(pool_row)
+            elif source == "icloud":
+                replacement["original_email_line"] = _icloud_email_line(pool_row)
+            else:
+                replacement["original_email_line"] = _domain_email_line(pool_row)
+        replacement["group_name"] = str(group.get("name") or DEFAULT_ACCOUNT_GROUP)
+        replacement["rebind_from_account_id"] = int(account_id)
+        replacement["rebind_from_email"] = old.get("email")
+        replacement["rebind_completed_at"] = now
+        replacement["rebind_job_id"] = job_id
+        replacement["updated_at"] = now
+        # A successful driver may return refreshed AT/session/profile fields.
+        for key in ("access_token", "user_id", "user_name", "plan_type", "expires_at", "device_id", "proxy_used", "totp_secret"):
+            if result.get(key) not in (None, ""):
+                replacement[key] = result.get(key)
+        try:
+            extra = json.loads(str(replacement.get("extra_json") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            extra = {}
+        if not isinstance(extra, dict):
+            extra = {}
+        if isinstance(result.get("session"), dict):
+            extra["session"] = result["session"]
+        else:
+            # Never retain an old session object after the mailbox identity
+            # changed; the refreshed access token above remains the source of
+            # truth when the driver did not return a session payload.
+            extra.pop("session", None)
+        extra["rebind"] = {
+            "from_email": old.get("email"),
+            "verified_email": verified_email,
+            "completed_at": now,
+            "job_id": job_id,
+        }
+        replacement["extra_json"] = json.dumps(extra, ensure_ascii=False)
+        replacement["copy_line"] = _account_line(replacement)
+
+        # Save the replacement and remove the old local account in one locked update.
+        accounts = [row for idx, row in enumerate(accounts) if idx != old_index]
+        accounts.append(replacement)
+        pool_row["status"] = "used"
+        pool_row["used_at"] = pool_row.get("used_at") or now
+        pool_row["registered_account_id"] = replacement["id"]
+        pool_row["access_token"] = replacement.get("access_token")
+        if replacement.get("totp_secret"):
+            pool_row["totp_secret"] = replacement.get("totp_secret")
+        pool_row["completed_at"] = now
+        pool_row["rebind_status"] = "completed"
+        pool_row["rebind_completed_at"] = now
+        pool_row.pop("rebind_reservation_id", None)
+        pool_row.pop("rebind_reserved_at", None)
+        pool_row["note"] = f"换绑完成，关联账号 #{replacement['id']}"
+
+        # Keep the old pool material consumed, but annotate why it is no longer
+        # attached to a local account. This prevents accidental reuse of it.
+        old_source = str(old.get("email_source") or "").strip().lower()
+        old_email = str(old.get("email") or "").strip()
+        old_pool_rows: list[dict] | None = None
+        if old_source in _REBIND_EMAIL_SOURCES and old_email:
+            try:
+                old_pool_rows = pool_rows if old_source == source else _rebind_pool_rows(old_source)
+                old_pool = next((row for row in old_pool_rows if str(row.get("email") or "").strip().casefold() == old_email.casefold()), None)
+                if old_pool is not None:
+                    old_pool["rebind_replaced_at"] = now
+                    old_pool["registered_account_id"] = None
+                    old_pool["note"] = "原账号已完成换绑，邮箱不再作为账号记录"
+            except ValueError:
+                old_pool_rows = None
+
+        # Persist the consumed target before deleting the old account.  If the
+        # second write fails, the old account remains while the remotely-bound
+        # target stays unavailable; the reverse ordering could delete the only
+        # local account record before the mailbox commit was durable.
+        _save_rebind_pool_rows(source, pool_rows)
+        _save_accounts(accounts)
+        if old_pool_rows is not None and old_source != source:
+            try:
+                _save_rebind_pool_rows(old_source, old_pool_rows)
+            except Exception:
+                # This annotation is non-critical after both the replacement
+                # account and target mailbox have been committed.
+                pass
+        return dict(replacement)
+
+
+# ============================================================
 # outlook_pool
 # ============================================================
 
@@ -2675,19 +3294,22 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
 
     source:
       - outlook: records 元素 {email,password,client_id,refresh_token[,access_token,totp_secret]}
-      - generic_api / icloud: records 元素 {email,code_url[,access_token,totp_secret]}
+      - generic_api / icloud / cloudflare_domain: records 元素 {email,code_url[,access_token,totp_secret]}
 
     返回 (新增账号数, 跳过数)。已存在账号会跳过；邮箱池中已存在的素材会复用并标记 used。
     """
     source = (source or "").strip().lower()
-    if source not in ("outlook", "generic_api", "icloud"):
-        raise ValueError("source 必须显式传入 outlook / generic_api / icloud")
+    if source not in ("outlook", "generic_api", "icloud", "cloudflare_domain"):
+        raise ValueError("source 必须显式传入 outlook / generic_api / icloud / cloudflare_domain")
 
     with _LOCK:
         accounts = _load_accounts()
         outlook_rows = _load_outlook()
         generic_rows = _load_generic_api_emails()
         icloud_rows = _load_icloud_emails()
+        # 仅在域名邮箱来源下读取/写回域名池，避免导入其他来源时产生
+        # 与本次操作无关的 domain JSON/SQLite 镜像变更。
+        domain_rows = _load_domain_pool() if source == "cloudflare_domain" else []
         inserted = skipped = 0
 
         for raw in records:
@@ -2703,12 +3325,18 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
             original_line = email
             pool_row = None
 
-            if source in ("generic_api", "icloud"):
+            if source in ("generic_api", "icloud", "cloudflare_domain"):
                 code_url = (raw.get("code_url") or raw.get("url") or "").strip()
                 if not code_url:
                     skipped += 1
                     continue
-                pool_rows = generic_rows if source == "generic_api" else icloud_rows
+                pool_rows = (
+                    generic_rows
+                    if source == "generic_api"
+                    else icloud_rows
+                    if source == "icloud"
+                    else domain_rows
+                )
                 pool_row = _find_by_email(pool_rows, email)
                 if pool_row is None:
                     pool_row = {
@@ -2727,7 +3355,13 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                 pool_row["used_at"] = pool_row.get("used_at") or now
                 pool_row["completed_at"] = pool_row.get("completed_at") or now
                 pool_row["note"] = pool_row.get("note") or "导入为已注册账号，用于 Codex 授权"
-                pool_row["copy_line"] = _generic_api_email_line(pool_row) if source == "generic_api" else _icloud_email_line(pool_row)
+                pool_row["copy_line"] = (
+                    _generic_api_email_line(pool_row)
+                    if source == "generic_api"
+                    else _icloud_email_line(pool_row)
+                    if source == "icloud"
+                    else _domain_email_line(pool_row)
+                )
                 original_line = pool_row["copy_line"]
             else:
                 password = (raw.get("password") or "").strip()
@@ -2799,6 +3433,8 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
         _save_outlook(outlook_rows)
         _save_generic_api_emails(generic_rows)
         _save_icloud_emails(icloud_rows)
+        if source == "cloudflare_domain":
+            _save_domain_pool(domain_rows)
         _save_accounts(accounts)
         return inserted, skipped
 
@@ -3607,6 +4243,90 @@ def create_job(email_source: str, *, batch_id: int | None = None) -> dict:
         return dict(row)
 
 
+def create_rebind_job(
+    *,
+    source_account_id: int,
+    source_email: str,
+    target: dict,
+    group: dict,
+    reservation_id: str,
+    driver: str,
+    login_driver: str | None = None,
+    action_driver: str | None = None,
+    hybrid: bool = False,
+    headless: bool,
+    login_headless: bool | None = None,
+    proxy: str | None = None,
+) -> dict:
+    """Create one persisted rebind task in the shared registration job list."""
+    with _LOCK:
+        rows = _load_jobs()
+        source_id = int(source_account_id)
+        active = None
+        for item in rows:
+            if str(item.get("job_type") or "") != "rebind":
+                continue
+            if str(item.get("status") or "") not in {"pending", "running", "stopping"}:
+                continue
+            try:
+                item_source_id = int(item.get("rebind_source_account_id") or item.get("account_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if item_source_id == source_id:
+                active = item
+                break
+        if active is not None:
+            raise ValueError(f"账号已有换绑任务 #{active.get('id')}")
+        target_source = str(target.get("source") or "").strip().lower()
+        reservation = str(reservation_id or "").strip()
+        if target_source not in _REBIND_EMAIL_SOURCES or not reservation:
+            raise ValueError("换绑目标邮箱预留参数无效")
+        try:
+            target_id = int(target.get("id"))
+        except (TypeError, ValueError):
+            raise ValueError("换绑目标邮箱池记录无效")
+        target_email = str(target.get("email") or "").strip()
+        pool_rows = _rebind_pool_rows(target_source)
+        pool_row = next((item for item in pool_rows if int(item.get("id") or 0) == target_id), None)
+        if pool_row is None or str(pool_row.get("email") or "").strip().casefold() != target_email.casefold():
+            raise ValueError("换绑目标邮箱池记录不匹配")
+        if str(pool_row.get("rebind_reservation_id") or "").strip() != reservation:
+            raise ValueError("换绑目标邮箱预留已失效")
+        if str(pool_row.get("status") or "").strip().lower() != "used" or str(pool_row.get("rebind_status") or "").strip().lower() != "reserved":
+            raise ValueError("换绑目标邮箱当前不可用")
+        row = _new_job_row(
+            rows,
+            email_source=target_source,
+            job_type="rebind",
+            email=target_email,
+            account_id=source_id,
+        )
+        row.update({
+            "rebind_status": "pending",
+            "rebind_source_account_id": source_id,
+            "rebind_source_email": str(source_email or ""),
+            "rebind_target_email": target_email,
+            "rebind_target_source": target_source,
+            "rebind_target_pool_id": target.get("id"),
+            "rebind_reservation_id": reservation,
+            "rebind_group_id": group.get("id"),
+            "rebind_group_name": group.get("name"),
+            "rebind_driver": str(driver or "protocol"),
+            "rebind_login_driver": str(login_driver or driver or "protocol"),
+            "rebind_action_driver": str(action_driver or driver or "protocol"),
+            "rebind_hybrid_mode": _rebind_bool(hybrid, False),
+            "rebind_headless": _rebind_bool(headless, False),
+            "rebind_login_headless": _rebind_bool(
+                headless if login_headless is None else login_headless,
+                _rebind_bool(headless, False),
+            ),
+            "rebind_proxy": proxy,
+        })
+        rows.append(row)
+        _save_jobs(rows)
+        return dict(row)
+
+
 def create_retry_job(
     source_job_id: int,
     *,
@@ -3621,6 +4341,8 @@ def create_retry_job(
         source = next((r for r in rows if int(r.get("id") or 0) == int(source_job_id)), None)
         if source is None:
             raise LookupError("任务不存在")
+        if str(source.get("job_type") or "registration") == "rebind" or str(job_type or "") == "rebind":
+            raise ValueError("换绑任务由换绑流程管理")
         if source.get("status") not in ("failed", "stopped", "cancelled"):
             raise ValueError(f"当前状态不支持重试：{source.get('status')}")
 
@@ -3686,6 +4408,29 @@ def update_job(
         if account_id is not None:
             row["account_id"] = account_id
         _save_jobs(rows)
+
+
+def update_job_fields(job_id: int, **fields: Any) -> bool:
+    """Update task fields used by specialized task services.
+
+    This intentionally keeps the generic registration schema extensible while
+    retaining the same locked, atomic read/modify/write path.
+    """
+    with _LOCK:
+        rows = _load_jobs()
+        row = next((item for item in rows if int(item.get("id") or 0) == int(job_id)), None)
+        if row is None:
+            return False
+        for key, value in fields.items():
+            if key in {"id", "job_uuid"}:
+                continue
+            # ``None`` clears an existing optional field (notably error_message).
+            if key == "error":
+                row["error_message"] = value
+            else:
+                row[key] = value
+        _save_jobs(rows)
+        return True
 
 
 def _job_status_counts(rows: list[dict]) -> dict[str, int]:
@@ -3898,6 +4643,7 @@ def get_job_retry_info_batch(rows: list[dict]) -> dict[int, dict]:
     terminal_rows = [
         row for row in job_rows
         if str(row.get("status") or "") in ("failed", "stopped", "cancelled")
+        and str(row.get("job_type") or "registration") != "rebind"
     ]
     with _LOCK:
         successful_by_root = _successful_retries_for_jobs(terminal_rows)
@@ -3917,6 +4663,10 @@ def get_job_retry_info_batch(rows: list[dict]) -> dict[int, dict]:
             "retry_reason": None,
             "display_status": status,
         }
+        if str(job.get("job_type") or "registration") == "rebind":
+            info["retry_reason"] = "换绑任务由换绑流程管理"
+            result[job_id] = info
+            continue
         if status not in ("failed", "stopped", "cancelled"):
             result[job_id] = info
             continue
@@ -4453,6 +5203,10 @@ def _load_domain_pool() -> list[dict]:
 
 
 def _save_domain_pool(rows: list[dict]) -> None:
+    # 保留与 iCloud/通用 API 邮箱池一致的复制行；历史自动生成的域名邮箱
+    # 没有 code_url 时仍只显示邮箱地址，不改变既有 QQ IMAP 工作流。
+    for row in rows:
+        row["copy_line"] = _domain_email_line(row)
     if _uses_sqlite(_DOMAIN_EMAIL_JSON, _DEFAULT_DOMAIN_EMAIL_JSON):
         _sqlite_store().replace_records("domain_email_pool", rows)
     _write_json(_DOMAIN_EMAIL_JSON, rows)
@@ -4461,6 +5215,62 @@ def _save_domain_pool(rows: list[dict]) -> None:
 def _find_domain_email(rows: list[dict], email: str) -> dict | None:
     target = (email or "").lower()
     return next((r for r in rows if (r.get("email") or "").lower() == target), None)
+
+
+def _decorate_domain_email(row: dict, account_by_email: dict[str, dict] | None = None) -> dict:
+    """补充域名邮箱池复制行和关联注册账号信息。"""
+    out = dict(row)
+    out["copy_line"] = _domain_email_line(out)
+    account = None
+    if account_by_email is not None:
+        account = account_by_email.get((out.get("email") or "").lower())
+    if account:
+        out["registered_account_id"] = account.get("id")
+        out["access_token"] = account.get("access_token")
+        out["access_token_preview"] = (
+            (account.get("access_token") or "")[:40] + "..."
+            if account.get("access_token")
+            else ""
+        )
+        out["account_copy_line"] = _account_line(account)
+        out["totp_secret"] = account.get("totp_secret")
+    return out
+
+
+def import_domain_emails(records: list[dict]) -> tuple[int, int]:
+    """批量导入域名邮箱，格式与 iCloud 邮箱池一致：{email, code_url}。"""
+    with _LOCK:
+        rows = _load_domain_pool()
+        inserted = skipped = 0
+        for raw in records:
+            email = (raw.get("email") or "").strip()
+            code_url = (raw.get("code_url") or raw.get("url") or "").strip()
+            if not email or not code_url:
+                skipped += 1
+                continue
+            if _find_domain_email(rows, email):
+                skipped += 1
+                continue
+            now = _now()
+            row = {
+                "id": _next_id(rows),
+                "email": email,
+                "code_url": code_url,
+                "status": "available",
+                "used_at": None,
+                "note": None,
+                "imported_at": now,
+                "created_at": now,
+            }
+            row["copy_line"] = _domain_email_line(row)
+            rows.append(row)
+            inserted += 1
+        _save_domain_pool(rows)
+        return inserted, skipped
+
+
+# 兼容调用方使用更明确的来源名。
+import_cloudflare_domain_emails = import_domain_emails
 
 
 def claim_next_domain_email(email: str) -> dict:
@@ -4526,10 +5336,14 @@ def get_domain_email_by_email(email: str) -> dict | None:
 
 def list_domain_email_pool(status: str | None = None, limit: int = 500) -> list[dict]:
     with _LOCK:
+        account_by_email = {
+            (a.get("email") or "").lower(): a
+            for a in _load_accounts()
+        }
         rows = sorted(_load_domain_pool(), key=lambda x: int(x.get("id") or 0), reverse=True)
         if status:
             rows = [r for r in rows if r.get("status") == status]
-        return [dict(r) for r in rows[:limit]]
+        return [_decorate_domain_email(r, account_by_email) for r in rows[:limit]]
 
 
 def domain_email_pool_summary() -> dict:

@@ -27,6 +27,21 @@ def test_live_check_driver_config_is_independent_from_registration_browser_setti
     assert isinstance(live_check.LIVE_CHECK_HEADLESS, bool)
 
 
+def test_rebind_hybrid_driver_config_defaults_to_browser_login_protocol_action():
+    source = (ROOT / "config" / "live_check.py").read_text(encoding="utf-8")
+    fields = {item["key"]: item for item in EDITABLE_FIELDS}
+
+    assert 'REBIND_LOGIN_DRIVER: str = "cloak"' in source
+    assert 'REBIND_ACTION_DRIVER: str = "protocol"' in source
+    assert "REBIND_HYBRID_MODE: bool = True" in source
+    assert fields["REBIND_LOGIN_DRIVER"]["choices"] == ["cloak", "roxy", "protocol"]
+    assert fields["REBIND_ACTION_DRIVER"]["choices"] == ["protocol", "cloak", "roxy"]
+    assert fields["REBIND_HYBRID_MODE"]["type"] == "bool"
+    assert live_check.REBIND_LOGIN_DRIVER in {"cloak", "roxy", "protocol"}
+    assert live_check.REBIND_ACTION_DRIVER in {"cloak", "roxy", "protocol"}
+    assert isinstance(live_check.REBIND_HYBRID_MODE, bool)
+
+
 def test_roxy_open_headless_override_does_not_change_registration_default():
     """查活打开 Roxy 时可按本次参数覆盖无头，不写回注册配置。"""
     client = RoxyBrowserClient(api_base="http://127.0.0.1:50100", token="")

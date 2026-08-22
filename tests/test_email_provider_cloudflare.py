@@ -44,6 +44,43 @@ class EmailProviderCloudflareTests(unittest.TestCase):
         self.assertEqual(source, "cloudflare")
         release_account.assert_called_once()
 
+    @patch("core.icloud_client.fetch_latest_otp", return_value="482931")
+    @patch("core.db.get_domain_email_by_email", return_value={
+        "email": "target@example.test",
+        "code_url": "https://mail.example.test/code/target",
+    })
+    @patch("core.email_provider.resolve_email_source", return_value="cloudflare_domain")
+    def test_domain_imported_html_url_uses_icloud_parser(self, _resolve, get_domain, fetch_latest_otp):
+        code = email_provider.wait_for_otp(
+            "target@example.test",
+            after_ts=123.0,
+            max_wait=7,
+            exclude_codes={"123456"},
+        )
+
+        self.assertEqual(code, "482931")
+        get_domain.assert_called_once_with("target@example.test")
+        fetch_latest_otp.assert_called_once_with(
+            "target@example.test",
+            code_url="https://mail.example.test/code/target",
+            after_ts=123.0,
+            exclude_codes={"123456"},
+            max_wait=7,
+        )
+
+    @patch("core.qqmail_client.fetch_latest_otp", return_value="123456")
+    @patch("core.db.get_domain_email_by_email", return_value={
+        "email": "legacy@example.test",
+        "status": "available",
+    })
+    @patch("core.email_provider.resolve_email_source", return_value="cloudflare_domain")
+    def test_legacy_domain_row_without_url_keeps_qq_imap_path(self, _resolve, get_domain, fetch_latest_otp):
+        code = email_provider.wait_for_otp("legacy@example.test", after_ts=123.0)
+
+        self.assertEqual(code, "123456")
+        get_domain.assert_called_once_with("legacy@example.test")
+        fetch_latest_otp.assert_called_once_with("legacy@example.test", after_ts=123.0)
+
 
 if __name__ == "__main__":
     unittest.main()

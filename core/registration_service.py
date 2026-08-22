@@ -800,6 +800,9 @@ def get_retry_info(job: dict) -> dict:
         "retry_reason": None,
         "display_status": status,
     }
+    if str(job.get("job_type") or "registration") == "rebind":
+        info["retry_reason"] = "换绑任务由换绑流程管理"
+        return info
     if status not in ("failed", "stopped", "cancelled"):
         return info
 

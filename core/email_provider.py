@@ -172,6 +172,21 @@ def wait_for_otp(
         from core.cf_temp_mail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     if source == "cloudflare_domain":
+        # 导入的域名邮箱可沿用 iCloud 的 HTML 取码格式；历史自动生成的
+        # 记录没有 code_url，继续使用 QQ IMAP 收码，保持旧流程不变。
+        from core import db
+        domain_row = db.get_domain_email_by_email(email)
+        domain_code_url = str((domain_row or {}).get("code_url") or "").strip()
+        if domain_code_url:
+            from core.icloud_client import fetch_latest_otp
+            excluded = {str(code or "").strip() for code in (exclude_codes or []) if str(code or "").strip()}
+            return fetch_latest_otp(
+                email,
+                code_url=domain_code_url,
+                after_ts=after_ts,
+                exclude_codes=excluded,
+                **extra_kwargs,
+            )
         from core.qqmail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     if source == "generic_api":

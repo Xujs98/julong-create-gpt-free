@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, make_response, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service
+from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -54,12 +54,12 @@ def _parse_email_import_text(text: str, source: str) -> dict:
             errors.append("邮箱格式有误")
         if delimiter and any(not part for part in parts[:expected]):
             errors.append("必填字段不能为空")
-        if source in ("generic_api", "icloud") and len(parts) >= 2 and not _IMPORT_URL_RE.fullmatch(parts[1]):
+        if source in ("generic_api", "icloud", "cloudflare_domain") and len(parts) >= 2 and not _IMPORT_URL_RE.fullmatch(parts[1]):
             errors.append("取码地址需为 http(s) 或 data 地址")
         if errors:
             invalid.append({"line": line_no, "text": line, "email": email, "errors": errors})
             continue
-        if source in ("generic_api", "icloud"):
+        if source in ("generic_api", "icloud", "cloudflare_domain"):
             records.append({
                 "email": email,
                 "code_url": parts[1],
@@ -305,6 +305,52 @@ def _account_secret_value(row: dict, field: str) -> str:
     raise ValueError("field 仅支持 email/password/totp/url/access_token/session/copy_line/codex_agent_token/totp_code/icloud_code_url")
 
 
+def _rebind_response_secrets(row: dict | None) -> list[str]:
+    """Load exact worker-only values used to scrub rebind errors and logs."""
+    if not isinstance(row, dict) or str(row.get("job_type") or "").strip().lower() != "rebind":
+        return []
+    records: list[dict] = [row]
+    try:
+        account_id = row.get("rebind_source_account_id") or row.get("account_id")
+        if account_id is not None:
+            account = db.get_account(int(account_id))
+            if account:
+                records.append(account)
+    except (TypeError, ValueError):
+        pass
+    source = str(row.get("rebind_target_source") or "").strip().lower()
+    email = str(row.get("rebind_target_email") or row.get("email") or "").strip()
+    lookup = {
+        "outlook": db.get_outlook_by_email,
+        "generic_api": db.get_generic_api_email_by_email,
+        "icloud": db.get_icloud_email_by_email,
+        "cloudflare_domain": db.get_domain_email_by_email,
+    }.get(source)
+    if lookup is not None and email:
+        try:
+            pool_row = lookup(email)
+        except Exception:
+            pool_row = None
+        if pool_row:
+            records.append(pool_row)
+    keys = {
+        "password", "client_id", "clientId", "refresh_token", "refreshToken",
+        "access_token", "token", "code_url", "url", "reservation_id",
+        "rebind_reservation_id", "rebind_proxy", "log_file", "original_email_line",
+    }
+    values: list[str] = []
+    for record in records:
+        for key in keys:
+            value = record.get(key)
+            if value not in (None, ""):
+                values.append(str(value))
+    return values
+
+
+def _redact_rebind_response_text(row: dict | None, value: object) -> str:
+    return rebind_service.redact_rebind_text(value, _rebind_response_secrets(row))
+
+
 def _compact_job_for_list(row: dict) -> dict:
     """注册任务列表轻量对象：只返回表格展示和按钮判断需要的字段。"""
     out = {
@@ -314,16 +360,63 @@ def _compact_job_for_list(row: dict) -> dict:
     for key in (
         "parent_job_id", "retry_attempt", "batch_id", "email", "started_at", "completed_at",
         "display_status", "retryable", "retry_action", "retry_label",
-        "manual_otp_required",
+        "manual_otp_required", "job_type", "rebind_status", "rebind_source_account_id",
+        "rebind_source_email", "rebind_target_email", "rebind_target_source",
+        "rebind_target_pool_id", "rebind_group_id", "rebind_group_name",
+        "rebind_driver", "rebind_login_driver", "rebind_action_driver",
+        "rebind_hybrid_mode", "rebind_headless", "rebind_login_headless",
     ):
         value = row.get(key)
-        if value is not None and value != "" and value is not False:
+        # Rebind execution switches are meaningful when explicitly false;
+        # omitting them from the compact/paged task response made a protocol
+        # submission look like it had no hybrid/headless setting at all.
+        keep_false = key in {"rebind_hybrid_mode", "rebind_headless", "rebind_login_headless"}
+        if value is not None and value != "" and (value is not False or keep_false):
             out[key] = value
     err = str(row.get("error_message") or "").strip()
     if err:
+        if str(row.get("job_type") or "").strip().lower() == "rebind":
+            err = _redact_rebind_response_text(row, err)
         # 列表只需要摘要；完整错误和堆栈看“任务日志”。
         out["error_message"] = err[:240] + ("…" if len(err) > 240 else "")
     return out
+
+
+def _public_rebind_job(row: dict | None) -> dict:
+    """Return the UI-safe subset of a rebind job.
+
+    Mailbox passwords, refresh material, code URLs, reservation IDs and local
+    log paths are worker-only fields.  Keep this whitelist in one place so the
+    registration task list, task log endpoint and submit response share the
+    same redaction policy.
+    """
+    if not isinstance(row, dict):
+        return {}
+    allowed = {
+        "id", "job_uuid", "job_type", "parent_job_id", "root_job_id", "retry_attempt",
+        "retry_action", "email_source", "email", "status", "error_message",
+        "started_at", "completed_at", "created_at", "account_id", "batch_id",
+        "display_status", "retryable", "retry_label", "retry_reason",
+        "successful_retry_job_id", "manual_otp_required",
+        "rebind_status", "rebind_source_account_id", "rebind_source_email",
+        "rebind_target_email", "rebind_target_source", "rebind_target_pool_id",
+        "rebind_group_id", "rebind_group_name", "rebind_driver",
+        "rebind_login_driver", "rebind_action_driver", "rebind_hybrid_mode",
+        "rebind_headless", "rebind_login_headless",
+    }
+    public = {key: row[key] for key in allowed if key in row}
+    if public.get("error_message") not in (None, ""):
+        public["error_message"] = _redact_rebind_response_text(row, public["error_message"])
+    return public
+
+
+def _public_job_for_response(row: dict | None) -> dict:
+    """Redact specialized task rows before returning them from WebUI APIs."""
+    if not isinstance(row, dict):
+        return {}
+    if str(row.get("job_type") or "").strip().lower() == "rebind":
+        return _public_rebind_job(row)
+    return dict(row)
 
 
 def _job_status_counts(rows: list[dict]) -> dict:
@@ -517,6 +610,102 @@ def create_app(auth_code: str | None = None) -> Flask:
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         return jsonify({"ok": True, "updated": updated, "updated_count": len(updated), "skipped": skipped})
+
+    @app.get("/api/rebind/pools")
+    @app.get("/api/email-pools/rebind-summary")
+    def api_rebind_pool_summary():
+        """Return available target mailbox counts for the rebind dialog."""
+        try:
+            pools = db.rebind_email_pool_summary()
+        except Exception as exc:
+            logger.exception("读取换绑邮箱池失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        try:
+            from config import live_check as _live_cfg
+
+            login_driver = str(getattr(_live_cfg, "REBIND_LOGIN_DRIVER", "cloak") or "cloak")
+            action_driver = str(getattr(_live_cfg, "REBIND_ACTION_DRIVER", "protocol") or "protocol")
+            hybrid = rebind_service.coerce_rebind_bool(
+                getattr(_live_cfg, "REBIND_HYBRID_MODE", True), True
+            )
+            headless = rebind_service.coerce_rebind_bool(
+                getattr(_live_cfg, "LIVE_CHECK_HEADLESS", False), False
+            )
+        except Exception:
+            login_driver, action_driver, hybrid, headless = "cloak", "protocol", True, False
+        return jsonify({
+            "ok": True,
+            "pools": pools,
+            "pool_by_source": pools,
+            "driver": action_driver,
+            "login_driver": login_driver,
+            "action_driver": action_driver,
+            "hybrid": hybrid,
+            "headless": headless,
+            "queue": rebind_service.queue_settings(),
+        })
+
+    @app.post("/api/accounts/rebind")
+    def api_accounts_rebind():
+        """Start account rebind tasks.
+
+        Body: ``account_ids``, ``pool_sources``, ``group_id`` (or ``group_name``),
+        optional ``count``, ``workers``, ``driver``, ``headless`` and ``proxy``.
+        """
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        sources = data.get("pool_sources") or data.get("email_pools") or data.get("email_sources") or data.get("sources") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if not isinstance(sources, list) or not sources:
+            return jsonify({"ok": False, "error": "至少选择一个换绑邮箱池"}), 400
+        try:
+            raw_group_id = data.get("group_id") if data.get("group_id") is not None else data.get("target_group_id")
+            group_id = int(raw_group_id) if raw_group_id is not None else None
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "group_id 必须是有效分组 ID"}), 400
+        try:
+            count = int(data["count"]) if data.get("count") is not None else None
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "count 必须是整数"}), 400
+        try:
+            workers = int(data["workers"]) if data.get("workers") is not None else None
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "workers 必须是整数"}), 400
+        try:
+            result = rebind_service.submit_rebind(
+                ids,
+                pool_sources=sources,
+                group_id=group_id,
+                group_name=data.get("group_name") or data.get("target_group"),
+                count=count,
+                workers=workers,
+                driver=data.get("driver") or data.get("rebind_driver"),
+                login_driver=data.get("login_driver") or data.get("rebind_login_driver"),
+                action_driver=data.get("action_driver") or data.get("rebind_action_driver"),
+                hybrid=(
+                    data.get("hybrid")
+                    if "hybrid" in data
+                    else data.get("rebind_hybrid_mode")
+                ),
+                headless=data.get("headless") if "headless" in data else data.get("rebind_headless"),
+                login_headless=(
+                    data.get("login_headless")
+                    if "login_headless" in data
+                    else data.get("rebind_login_headless")
+                ),
+                proxy=data.get("proxy"),
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("提交换绑任务失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        # Reservation IDs are internal coordination tokens; clients only need
+        # the submitted count and public task metadata.
+        result.pop("reservation_id", None)
+        result["jobs"] = [_public_rebind_job(job) for job in result.get("jobs") or []]
+        return jsonify(result), 202
 
     @app.get("/api/accounts")
     def api_accounts():
@@ -2014,18 +2203,18 @@ def create_app(auth_code: str | None = None) -> Flask:
         """
         粘贴文本导入邮箱素材。
         Outlook：email----password----clientId----refreshToken
-        通用 API：email----code_url
+        通用 API / iCloud / 域名邮箱：email----code_url
         分隔符兼容 ---- 与 ====。
         """
         data = request.get_json(silent=True) or {}
         source = (data.get("source") or data.get("type") or "").strip()
-        if source not in ("outlook", "generic_api", "icloud"):
-            return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook、通用 API 或 iCloud"}), 400
+        if source not in ("outlook", "generic_api", "icloud", "cloudflare_domain"):
+            return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook、通用 API、iCloud 或域名邮箱"}), 400
         text = data.get("text") or ""
         as_registered = bool(data.get("as_registered", False))
         check = _parse_email_import_text(text, source)
         if not check["input_count"]:
-            need = "2 段：邮箱----HTML 取码地址" if source in ("generic_api", "icloud") else "4 段：email----password----clientId----refreshToken"
+            need = "2 段：邮箱----取码地址" if source in ("generic_api", "icloud", "cloudflare_domain") else "4 段：email----password----clientId----refreshToken"
             return jsonify({"ok": False, "error": f"未解析到邮箱素材（需 {need}，---- 或 ==== 分隔）", **{k: check[k] for k in ("input_count", "valid_count", "invalid_count", "invalid")}}), 400
         if check["invalid_count"]:
             details = "；".join(
@@ -2040,7 +2229,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             }), 400
         records = check["records"]
         if not records:
-            need = "2 段：邮箱----HTML 取码地址" if source in ("generic_api", "icloud") else "4 段：email----password----clientId----refreshToken"
+            need = "2 段：邮箱----取码地址" if source in ("generic_api", "icloud", "cloudflare_domain") else "4 段：email----password----clientId----refreshToken"
             return jsonify({"ok": False, "error": f"未解析到有效邮箱行（需 {need}，---- 或 ==== 分隔）"}), 400
         if as_registered:
             inserted, skipped = db.import_registered_email_accounts(records, source=source)
@@ -2048,6 +2237,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             inserted, skipped = db.import_generic_api_emails(records)
         elif source == "icloud":
             inserted, skipped = db.import_icloud_emails(records)
+        elif source == "cloudflare_domain":
+            inserted, skipped = db.import_domain_emails(records)
         else:
             inserted, skipped = db.import_outlook_accounts(records)
         return jsonify({
@@ -2221,7 +2412,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         data = request.get_json(silent=True) or {}
         email = (data.get("email") or "").strip()
         status = (data.get("status") or "").strip()
-        if not email or status not in ("available", "used", "failed"):
+        if not email or status not in ("available", "used", "failed", "disabled"):
             return jsonify({"ok": False, "error": "email 或 status 非法"}), 400
         db.release_domain_email(email, status=status, note=data.get("note"))
         return jsonify({"ok": True})
@@ -2761,6 +2952,31 @@ def create_app(auth_code: str | None = None) -> Flask:
             "running": twofa_setup_service.is_setting(email),
         })
 
+    @app.get("/api/accounts/rebind-log")
+    def api_account_rebind_log():
+        """Read one rebind task log; task logs are shared with the registration view."""
+        raw_job_id = request.args.get("job_id") or request.args.get("id")
+        try:
+            job_id = int(raw_job_id)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "job_id 必须是有效任务 ID"}), 400
+        job = db.get_job(job_id)
+        if not job or str(job.get("job_type") or "") != "rebind":
+            return jsonify({"ok": False, "error": "换绑任务不存在"}), 404
+        offset = max(0, request.args.get("offset", default=0, type=int) or 0)
+        delta = svc.read_job_log_delta(job_id, offset=offset, job=job)
+        delta = dict(delta)
+        delta["content"] = _redact_rebind_response_text(job, delta.get("content") or "")
+        return jsonify({
+            "ok": True,
+            "job": _public_rebind_job(job),
+            "log": delta.get("content") or "",
+            "log_delta": delta,
+            "offset": int(delta.get("offset") or 0),
+            "size": int(delta.get("size") or 0),
+            "running": str(job.get("status") or "") in {"pending", "running", "stopping"},
+        })
+
     @app.get("/api/accounts/<int:acc_id>/extract-link-log")
     def api_account_extract_link_log(acc_id: int):
         """读取账号最近一次通用提链日志。"""
@@ -2835,7 +3051,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             _schedule_job_retention_once()
             return jsonify(result)
         _schedule_job_retention_once()
-        return jsonify(rows)
+        return jsonify([_public_job_for_response(row) for row in rows])
 
     @app.get("/api/registration-batches")
     def api_registration_batches():
@@ -3077,12 +3293,14 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_jobs_cancel_pending():
         """取消所有还在排队（status=pending）的任务。已在 running 的不动。"""
         cancelled = svc.cancel_pending_jobs()
-        return jsonify({"ok": True, "cancelled": cancelled})
+        rebind_cancelled = rebind_service.cancel_pending_rebind_jobs()
+        return jsonify({"ok": True, "cancelled": cancelled + rebind_cancelled, "registration_cancelled": cancelled, "rebind_cancelled": rebind_cancelled})
 
     @app.post("/api/jobs/<int:job_id>/stop")
     def api_job_stop(job_id: int):
         """手动停止单个注册任务。pending 取消；running 发送停止信号。"""
-        result = svc.request_stop_job(job_id)
+        job = db.get_job(job_id)
+        result = rebind_service.request_stop_rebind_job(job_id) if job and str(job.get("job_type") or "") == "rebind" else svc.request_stop_job(job_id)
         if not result.get("ok"):
             return jsonify({"ok": False, "error": result.get("error") or "停止失败"}), int(result.get("status") or 400)
         return jsonify(result)
@@ -3090,6 +3308,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.post("/api/jobs/<int:job_id>/retry")
     def api_job_retry(job_id: int):
         """重试失败/停止/取消任务；服务端自动判断完整注册或 Codex 补跑。"""
+        source_job = db.get_job(job_id)
+        if source_job and str(source_job.get("job_type") or "").strip().lower() == "rebind":
+            return jsonify({"ok": False, "error": "换绑任务不支持注册重试，请重新提交换绑"}), 409
         data = request.get_json(silent=True) or {}
         try:
             workers = max(1, min(16, int(data.get("workers", svc.get_executor_workers()))))
@@ -3127,6 +3348,10 @@ def create_app(auth_code: str | None = None) -> Flask:
             if one_id in seen:
                 continue
             seen.add(one_id)
+            source_job = db.get_job(one_id)
+            if source_job and str(source_job.get("job_type") or "").strip().lower() == "rebind":
+                skipped.append({"id": one_id, "reason": "换绑任务不支持注册重试"})
+                continue
             result = svc.retry_job(one_id, workers=workers)
             if not result.get("ok"):
                 skipped.append({"id": one_id, "reason": result.get("error") or "不能重试"})
@@ -3153,6 +3378,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "任务不存在"}), 404
         if job.get("status") in ("running", "stopping"):
             return jsonify({"ok": False, "error": "运行中的任务不能删除，请等待完成后再删"}), 409
+        if str(job.get("job_type") or "").strip().lower() == "rebind" and job.get("status") == "pending":
+            # 释放目标邮箱后再移除任务记录，避免“删除任务但邮箱永远占用”。
+            rebind_service.request_stop_rebind_job(job_id)
         deleted = db.delete_job(job_id, delete_log=True, allow_running=False)
         if not deleted:
             return jsonify({"ok": False, "error": "任务不存在或已开始运行"}), 409
@@ -3188,6 +3416,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             if job.get("status") in ("running", "stopping"):
                 skipped.append({"id": job_id, "reason": "运行中，不能删除"})
                 continue
+            if str(job.get("job_type") or "").strip().lower() == "rebind" and job.get("status") == "pending":
+                rebind_service.request_stop_rebind_job(job_id)
             if db.delete_job(job_id, delete_log=True, allow_running=False):
                 deleted.append(job_id)
             else:
@@ -3202,9 +3432,12 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "任务不存在"}), 404
         offset = max(0, request.args.get("offset", default=0, type=int) or 0)
         log_delta = svc.read_job_log_delta(job_id, offset=offset, job=job)
+        if str(job.get("job_type") or "").strip().lower() == "rebind":
+            log_delta = dict(log_delta)
+            log_delta["content"] = _redact_rebind_response_text(job, log_delta.get("content") or "")
         return jsonify({
             "ok": True,
-            "job": job,
+            "job": _public_job_for_response(job),
             # 保留 log 字段兼容旧页面；新页面使用 offset/log_delta 增量追加。
             "log": log_delta.get("content") or "",
             "log_delta": log_delta,

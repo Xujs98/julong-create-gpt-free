@@ -81,6 +81,22 @@ EDITABLE_FIELDS = [
         "label": "查活浏览器无头", "help": "仅影响查活启动的 Cloak/Roxy 浏览器；不会修改注册流程或两个浏览器各自的无头设置",
     },
     {
+        "key": "REBIND_LOGIN_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
+        "label": "换绑登录方式", "help": "换绑第一阶段建立登录态的方式；推荐使用 CloakBrowser/RoxyBrowser 指纹浏览器",
+        "choices": ["cloak", "roxy", "protocol"],
+        "choice_labels": {"cloak": "CloakBrowser 指纹浏览器", "roxy": "RoxyBrowser 指纹浏览器", "protocol": "纯协议"},
+    },
+    {
+        "key": "REBIND_ACTION_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
+        "label": "换绑提交方式", "help": "换绑第二阶段提交新邮箱的方式；协议模式使用已建立的会话提交并验证邮箱变更",
+        "choices": ["protocol", "cloak", "roxy"],
+        "choice_labels": {"protocol": "纯协议", "cloak": "CloakBrowser 指纹浏览器", "roxy": "RoxyBrowser 指纹浏览器"},
+    },
+    {
+        "key": "REBIND_HYBRID_MODE", "file": "live_check.py", "type": "bool", "group": "账号查活",
+        "label": "换绑混合模式", "help": "开启后按“换绑登录方式 → 换绑提交方式”执行；关闭后换绑任务沿用单一驱动。默认是指纹浏览器登录、协议提交。",
+    },
+    {
         "key": "CODEX_RETRY_FOLLOW_LIVE_CHECK", "file": "codex.py", "type": "bool", "group": "账号查活",
         "label": "Codex补跑跟随查活", "help": "开启后，Codex补跑自动使用账号查活的驱动；关闭后使用下方独立补跑方式",
     },
