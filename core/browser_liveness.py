@@ -230,6 +230,46 @@ def _password_error_message(state: dict) -> str:
     return "；".join(dict.fromkeys(errors))[:500]
 
 
+def _totp_page_state(driver) -> dict:
+    """Read MFA/TOTP markers without treating every numeric OTP as email OTP."""
+    try:
+        return driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const inputs = [...document.querySelectorAll('input')].filter(visible).map(el => ({
+          attrs: [el.type, el.name, el.id, el.placeholder, el.autocomplete, el.inputMode,
+            el.getAttribute('aria-label'), el.getAttribute('data-testid')].filter(Boolean).join(' ').toLowerCase(),
+          valueLength: String(el.value || '').length
+        }));
+        const text = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 1800);
+        const attrs = inputs.map(item => item.attrs).join(' ');
+        return {url: location.href, text, attrs, hasNumericInput: /one-time|otp|mfa|2fa|totp|verification|numeric|code|tel/.test(attrs)};
+        """) or {}
+    except Exception as exc:
+        return {"url": getattr(driver, "current_url", ""), "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _is_totp_page(driver, *, expect_totp: bool = False) -> bool:
+    """Identify authenticator-app MFA before the generic email OTP detector."""
+    state = _totp_page_state(driver)
+    url = str(state.get("url") or "").lower()
+    text = f"{url} {state.get('text') or ''} {state.get('attrs') or ''}".lower()
+    if not state.get("hasNumericInput"):
+        return False
+    email_markers = (
+        "email-verification", "email verification", "code sent to", "check your email",
+        "verify your email", "邮箱验证码", "邮件验证码",
+    )
+    if any(marker in text for marker in email_markers):
+        return False
+    totp_markers = (
+        "/mfa", "mfa", "two-factor", "two factor", "2fa", "totp", "authenticator",
+        "authentication app", "verification app", "one-time password", "security code",
+        "身份验证器", "双重验证", "验证器",
+    )
+    return bool(expect_totp or any(marker in text for marker in totp_markers))
+
+
 def _fill_login_password(driver, password: str) -> dict:
     """稳定填写已有账号密码，选择同一表单的提交按钮并点击。"""
     marker = f"live-password-{int(time.time() * 1000)}"
@@ -347,7 +387,13 @@ def _resubmit_login_password_form(driver, marker: str = "") -> dict:
     """, marker) or {}
 
 
-def _wait_after_password(driver, timeout: int = 45, *, submission: dict | None = None) -> str:
+def _wait_after_password(
+    driver,
+    timeout: int = 45,
+    *,
+    submission: dict | None = None,
+    expect_totp: bool = False,
+) -> str:
     """等待密码提交后的登录态、TOTP 或邮箱验证码页面。"""
     from core.roxy_registration import _has_access_token, _is_email_verification_page
 
@@ -365,6 +411,8 @@ def _wait_after_password(driver, timeout: int = 45, *, submission: dict | None =
             last_url = ""
         lower = last_url.lower()
         if "mfa" in lower or "challenge" in lower:
+            return "totp"
+        if _is_totp_page(driver, expect_totp=expect_totp):
             return "totp"
         if _is_email_verification_page(driver):
             return "email_otp"
@@ -412,6 +460,27 @@ def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") ->
         if outcome != "accepted":
             raise RuntimeError(f"邮箱验证码未通过：{outcome}")
     return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+
+
+def _submit_totp_and_fetch_session(driver, secret: str, *, max_attempts: int = 2) -> dict:
+    """Submit the saved authenticator code using the same stable-window logic as liveness."""
+    from core.account_export import _totp_code_with_margin
+
+    totp = pyotp.TOTP(str(secret or "").replace(" ", "").strip())
+    last_error: Exception | None = None
+    attempts = max(1, min(3, int(max_attempts or 2)))
+    for attempt in range(attempts):
+        try:
+            code = _totp_code_with_margin(totp, force_next=attempt > 0)
+            logger.info("[查活][浏览器][TOTP] 提交动态验证码（%s/%s）", attempt + 1, attempts)
+            return _submit_code_and_fetch_session(driver, code, code_kind="totp")
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+            logger.warning("[查活][浏览器][TOTP] 当前验证码提交未完成，切换下一时间窗口：%s", str(exc)[:240])
+            time.sleep(0.5)
+    raise RuntimeError(f"TOTP 登录连续失败：{str(last_error or 'unknown')[:400]}") from last_error
 
 
 def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: int = 3) -> dict:
@@ -561,7 +630,11 @@ def _browser_login(
             otp_after_ts = time.time()
             logger.info("[查活][浏览器] 使用保存账号密码登录")
             submission = _fill_login_password(driver, password)
-            state = _wait_after_password(driver, submission=submission)
+            state = _wait_after_password(
+                driver,
+                submission=submission,
+                expect_totp=bool(totp_secret),
+            )
         else:
             otp_after_ts = time.time()
             switched = _click_passwordless_signup_if_present(driver)
@@ -574,7 +647,7 @@ def _browser_login(
         if not totp_secret:
             raise RuntimeError("账号要求 TOTP，但数据库没有保存 2FA secret")
         logger.info("[查活][浏览器] 提交 TOTP 动态验证码")
-        return _submit_code_and_fetch_session(driver, pyotp.TOTP(totp_secret).now(), code_kind="totp")
+        return _submit_totp_and_fetch_session(driver, totp_secret, max_attempts=2)
     if state == "otp" or state == "email_otp":
         logger.info("[查活][浏览器] 等待邮箱登录验证码")
         return _login_with_email_otp(driver, email, after_ts=otp_after_ts, max_attempts=3)

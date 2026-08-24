@@ -10,8 +10,10 @@ from core.browser_liveness import (
     _browser_token_status,
     _clear_browser_auth_state,
     _fill_login_password,
+    _is_totp_page,
     _login_with_email_otp,
     _password_error_message,
+    _submit_totp_and_fetch_session,
     _wait_after_password,
     check_account_liveness_browser,
 )
@@ -138,6 +140,43 @@ def test_wait_after_password_resubmits_once_then_detects_mfa():
         assert _wait_after_password(driver, timeout=10, submission={"marker": "marker"}) == "totp"
 
     resubmit.assert_called_once_with(driver, "marker")
+
+
+def test_wait_after_password_prefers_totp_over_generic_numeric_email_otp():
+    driver = MagicMock(current_url="https://auth.example/log-in/continue")
+    with patch("core.roxy_registration._has_access_token", return_value=False), patch(
+        "core.roxy_registration._is_email_verification_page", return_value=True
+    ), patch(
+        "core.browser_liveness._is_totp_page", return_value=True
+    ):
+        assert _wait_after_password(driver, timeout=5, expect_totp=True) == "totp"
+
+
+def test_totp_page_detector_rejects_explicit_email_verification_marker():
+    driver = MagicMock()
+    with patch(
+        "core.browser_liveness._totp_page_state",
+        return_value={
+            "url": "https://auth.example/email-verification",
+            "text": "Enter the code sent to your email",
+            "attrs": "inputmode numeric",
+            "hasNumericInput": True,
+        },
+    ):
+        assert _is_totp_page(driver, expect_totp=True) is False
+
+
+def test_totp_submission_uses_liveness_stable_window_helper():
+    driver = MagicMock()
+    with patch("core.account_export._totp_code_with_margin", return_value="123456") as code_factory, patch(
+        "core.browser_liveness._submit_code_and_fetch_session",
+        return_value={"accessToken": "TOKEN"},
+    ) as submit:
+        result = _submit_totp_and_fetch_session(driver, "JBSWY3DPEHPK3PXP")
+
+    assert result["accessToken"] == "TOKEN"
+    code_factory.assert_called_once()
+    submit.assert_called_once_with(driver, "123456", code_kind="totp")
 
 
 def test_wait_after_password_returns_logged_in_without_resubmit():
