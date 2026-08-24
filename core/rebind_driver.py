@@ -22,6 +22,8 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode, urljoin, urlparse
 
@@ -480,14 +482,19 @@ def _require_stage_success(raw: Any, stage: str) -> None:
         raise RebindDriverError(f"{stage}阶段未确认成功")
 
 
-def _validate_login_identity(context: RebindContext, source_email: str) -> None:
+def _validate_login_identity(
+    context: RebindContext,
+    source_email: str,
+    *,
+    require_token: bool = True,
+) -> None:
     """Require the login transport to identify the selected source account."""
     observed = _extract_email(context.session_info)
     if not observed:
         raise RebindDriverError("登录态未返回原账号邮箱，已停止换绑")
     if observed.casefold() != source_email.casefold():
         raise RebindDriverError("登录态账号与所选原账号不一致，已停止换绑")
-    if not _extract_token(context.session_info):
+    if require_token and not _extract_token(context.session_info):
         raise RebindDriverError("登录态未返回 Access Token，已停止换绑")
 
 
@@ -601,7 +608,7 @@ def _protocol_login_builtin(
     log: Callable[[str], None] | None,
     hooks: dict,
 ) -> tuple[Any, dict]:
-    """Login using the project's existing auth protocol while retaining session."""
+    """Run a fresh protocol login and retain the resulting authenticated session."""
     from core.account_export import fetch_session, follow_oauth_callback
     from core.account_liveness import (
         _auth_payload_value,
@@ -621,40 +628,15 @@ def _protocol_login_builtin(
     import pyotp
 
     email = _email(account.get("email"), "原账号邮箱")
-    session = _protocol_session(account, proxy, hooks, log)
-
-    # A factory may hand us an already-authenticated protocol session together
-    # with its JSON snapshot.  This is useful for desktop integrations and
-    # avoids a second login round trip.
-    initial_info = getattr(session, "_rebind_session_info", {})
-    if isinstance(initial_info, Mapping) and _extract_token(initial_info):
-        _safe_log(log, "协议登录：复用注入的登录态")
-        return session, dict(initial_info)
-
-    # A saved Session Cookie is the least disruptive path and retains the same
-    # account context for the subsequent email-change request.
-    try:
-        from core.session_state import extract_saved_session
-
-        saved = extract_saved_session(account) or {}
-        if _add_session_cookies(session, saved):
-            info = _fetch_protocol_session(session)
-            _safe_log(log, "协议登录：复用已保存 Session")
-            return session, info
-    except Exception as exc:
-        _safe_log(log, f"协议登录：保存 Session 不可用，转入重新登录（{type(exc).__name__}）")
-
-    # The auth helpers construct a fresh BrowserSession themselves so that
-    # network retries can rotate an unhealthy proxy.  Close the provisional
-    # factory session before adopting the returned one.
-    _close_resource(session)
-
     login_password = str(account.get("registration_password") or "").strip()
     try:
+        _safe_log(log, "协议登录步骤 1/7：创建全新协议会话，不复用旧 Session/Cookie")
         session, authorize_url = _protocol_preflight_with_fallback(email, proxy, log=log)
+        _safe_log(log, "协议登录步骤 2/7：网络预检通过，打开授权登录流程")
         final_url = follow_authorize(session, authorize_url, allow_password_page=bool(login_password))
 
         if login_password:
+            _safe_log(log, "协议登录步骤 3/7：原账号保存了密码，进入邮箱和密码验证")
             if _is_email_verification_state(final_url):
                 raise RebindDriverError("保存密码账号进入邮箱验证码页，登录状态不一致")
             if "/log-in/password" not in final_url.lower():
@@ -664,6 +646,7 @@ def _protocol_login_builtin(
                 next_url = _auth_payload_value(payload, "continue_url", "external_url", "redirect_url", "url")
                 if next_url and "password" in next_url.lower():
                     final_url = _navigate_auth_step(session, next_url, final_url)
+            _safe_log(log, "协议登录步骤 4/7：提交账号密码")
             auth_result = verify_login_password(session, login_password)
             if _is_email_verification_state(payload=auth_result):
                 raise RebindDriverError("密码校验返回邮箱验证码页")
@@ -672,33 +655,39 @@ def _protocol_login_builtin(
                 secret = str(account.get("totp_secret") or "").replace(" ", "").strip()
                 if not secret:
                     raise RebindDriverError("账号要求 TOTP，但未保存 TOTP secret")
+                _safe_log(log, "协议登录步骤 5/7：检测到 2FA，生成并提交动态验证码")
                 challenge = issue_mfa_challenge(session, factor)
                 challenge_id = _auth_payload_value(challenge, "mfa_request_id")
                 verify_factor = dict(factor)
                 if challenge_id:
                     verify_factor["metadata"] = {**(factor.get("metadata") or {}), "mfa_request_id": challenge_id}
                 auth_result = verify_mfa_code(session, verify_factor, pyotp.TOTP(secret).now())
+                _safe_log(log, "协议登录步骤 5/7：2FA 验证已通过")
             continue_url = _auth_payload_value(auth_result, "continue_url", "external_url", "redirect_url", "url", "location")
             if not continue_url:
                 raise RebindDriverError("密码登录未返回 OAuth continue_url")
             follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/log-in/password")
         else:
+            _safe_log(log, "协议登录步骤 3/7：账号未保存密码，切换原邮箱验证码登录")
             # Capture the boundary before sending the message so fast mailboxes
             # cannot race between the send request and OTP polling.
             otp_after_ts = time.time()
             send_email_otp(session)
+            _safe_log(log, "协议登录步骤 4/7：原邮箱登录验证码已发送，开始取码")
             code = otp_getter(email=email, after_ts=otp_after_ts, target={"email": email})
+            _safe_log(log, "协议登录步骤 5/7：已取得原邮箱验证码并提交")
             validate_result = validate_email_otp(session, code)
             continue_url = _auth_payload_value(validate_result, "continue_url", "external_url", "redirect_url", "url", "location")
             if not continue_url:
                 raise RebindDriverError("邮箱 OTP 登录未返回 OAuth continue_url")
             follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/email-verification")
 
+        _safe_log(log, "协议登录步骤 6/7：OAuth 回调已完成，刷新远端 Session")
         info = _fetch_protocol_session(session)
     except Exception:
         _close_resource(session)
         raise
-    _safe_log(log, "协议登录：已建立原账号登录态")
+    _safe_log(log, "协议登录步骤 7/7：已完成完整登录并建立新登录态")
     return session, info
 
 
@@ -752,6 +741,7 @@ def _browser_login_builtin(
     hooks: dict,
     log: Callable[[str], None] | None,
 ) -> tuple[Any, Callable[[], Any] | None, dict]:
+    _safe_log(log, f"{driver_name} 登录准备：启动独立指纹浏览器环境")
     driver, closer = _open_browser_builtin(driver_name, proxy, headless, hooks, stage="login", log=log)
     if driver is None:
         if callable(closer):
@@ -760,6 +750,7 @@ def _browser_login_builtin(
             except Exception:
                 logger.debug("浏览器驱动为空时资源关闭失败", exc_info=True)
         raise RebindDriverError("浏览器驱动工厂未返回 driver")
+    _safe_log(log, f"{driver_name} 登录准备：浏览器环境已启动，开始完整账号登录")
     try:
         # 换绑必须重新证明账号登录能力，不复用浏览器工厂、自身账号记录中
         # 携带的 Session/Cookie。直接复用查活的完整登录实现：有密码时执行
@@ -772,9 +763,11 @@ def _browser_login_builtin(
             _email(account.get("email"), "原账号邮箱"),
             headless=bool(headless),
             restore_saved_session=False,
+            progress=lambda message: _safe_log(log, f"{driver_name} {message}"),
+            require_session=False,
         )
-        if not isinstance(info, Mapping) or not _extract_token(info):
-            raise RebindDriverError("浏览器登录未返回 Access Token")
+        if not isinstance(info, Mapping) or not _as_bool(info.get("loginConfirmed"), False):
+            raise RebindDriverError("浏览器登录后页面未确认")
     except Exception as exc:
         if callable(closer):
             try:
@@ -788,7 +781,7 @@ def _browser_login_builtin(
         detail = _browser_error_text(exc)
         suffix = f": {detail}" if detail else ""
         raise RebindDriverError(f"{driver_name} 登录失败：{type(exc).__name__}{suffix}") from exc
-    _safe_log(log, f"{driver_name} 登录：已重新完成原账号登录流程并建立新登录态")
+    _safe_log(log, f"{driver_name} 登录：已重新完成原账号登录流程；Session 将在换绑成功后刷新")
     return driver, closer, dict(info)
 
 
@@ -918,10 +911,84 @@ def _wait_browser_state(driver: Any, predicate: Callable[[dict], bool], *, timeo
     return last
 
 
-def _submit_browser_email_form(driver: Any) -> dict:
-    """Submit the visible new-email form without depending on localization."""
+def _browser_state_diagnostic(state: Mapping[str, Any] | None) -> str:
+    """Return a compact page-shape diagnostic without input values."""
+    item = dict(state or {})
+    safe = {
+        "url": str(item.get("url") or "")[:300],
+        "inputs": [
+            {
+                "type": str(entry.get("type") or "")[:40],
+                "attrs": str(entry.get("attrs") or "")[:180],
+                "valueLength": int(entry.get("valueLength") or 0),
+            }
+            for entry in (item.get("inputs") or [])[:12]
+            if isinstance(entry, Mapping)
+        ],
+        "buttons": [
+            {
+                "text": str(entry.get("text") or "")[:100],
+                "attrs": str(entry.get("attrs") or "")[:160],
+                "disabled": bool(entry.get("disabled")),
+            }
+            for entry in (item.get("buttons") or [])[:16]
+            if isinstance(entry, Mapping)
+        ],
+    }
+    return json.dumps(safe, ensure_ascii=False, separators=(",", ":"))[:1800]
+
+
+def _save_rebind_browser_screenshot(driver: Any, stage: str) -> str | None:
+    """Persist a local screenshot for a failed browser stage."""
     try:
-        return driver.execute_script(r"""
+        root = Path(__file__).resolve().parents[1] / "注册日志" / "rebind-diagnostics"
+        root.mkdir(parents=True, exist_ok=True)
+        safe_stage = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(stage or "failure"))[:40] or "failure"
+        path = root / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{safe_stage}.png"
+        saver = getattr(driver, "save_screenshot", None)
+        if callable(saver) and saver(str(path)):
+            return str(path)
+    except Exception:
+        logger.debug("换绑失败截图保存失败", exc_info=True)
+    return None
+
+
+def _clear_rebind_resource_timings(driver: Any) -> None:
+    try:
+        driver.execute_script("performance.clearResourceTimings(); return true;")
+    except Exception:
+        logger.debug("清空换绑资源计时失败", exc_info=True)
+
+
+def _rebind_resource_diagnostic(driver: Any) -> list[dict]:
+    """Read recent fetch/XHR paths without query strings or request bodies."""
+    try:
+        rows = driver.execute_script(r"""
+        return performance.getEntriesByType('resource')
+          .filter(x => ['fetch','xmlhttprequest'].includes(String(x.initiatorType || '').toLowerCase()))
+          .slice(-30)
+          .map(x => {
+            try {
+              const u = new URL(x.name, location.href);
+              return {origin:u.origin, path:u.pathname, type:x.initiatorType, duration:Math.round(x.duration || 0)};
+            } catch (_) {
+              return {origin:'', path:String(x.name || '').split('?')[0].slice(0,300), type:x.initiatorType, duration:Math.round(x.duration || 0)};
+            }
+          });
+        """) or []
+        return [dict(row) for row in rows if isinstance(row, Mapping)]
+    except Exception:
+        logger.debug("读取换绑网络诊断失败", exc_info=True)
+        return []
+
+
+def _submit_browser_email_form(driver: Any, *, timeout: float = 12.0) -> dict:
+    """Submit the visible new-email form without depending on localization."""
+    end = time.time() + max(1.0, float(timeout))
+    last: dict = {"ok": False, "reason": "missing_email_submit"}
+    while time.time() < end:
+        try:
+            result = driver.execute_script(r"""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
           && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
         const enabled = el => visible(el) && !el.disabled
@@ -933,26 +1000,91 @@ def _submit_browser_email_form(driver: Any) -> dict:
           return String(el.value || '').includes('@') && /email|mail|username/.test(attrs);
         });
         if (!email) return {ok:false, reason:'missing_email_input'};
-        const form = email.closest('form');
-        const scope = form || document;
-        const bad = /resend|forgot|passwordless|google|apple|microsoft|facebook|github|oauth|social|cancel|back/;
-        const text = el => [el.type, el.value, el.name, el.id, el.getAttribute('data-testid'),
-          el.getAttribute('data-dd-action-name'), el.getAttribute('aria-label'), el.innerText, el.textContent]
-          .filter(Boolean).join(' ').toLowerCase();
-        const candidates = [...scope.querySelectorAll('button,input[type=submit],[role=button]')].filter(enabled);
-        const submit = candidates.find(el => {
-          const value = text(el);
-          return !bad.test(value) && /continue|next|verify|save|update|change|confirm|submit|weiter|suivant|继续|下一步|确认|保存/.test(value);
-        }) || candidates.find(el => !bad.test(text(el)) && String(el.type || '').toLowerCase() === 'submit');
-        if (!submit) return {ok:false, reason:'missing_email_submit'};
+        email.setAttribute('data-rebind-email-input', '1');
+        email.dispatchEvent(new Event('input', {bubbles:true}));
         email.dispatchEvent(new Event('change', {bubbles:true}));
-        submit.scrollIntoView({block:'center', inline:'nearest'});
-        if (form && typeof form.requestSubmit === 'function') form.requestSubmit(submit);
-        else submit.click();
-        return {ok:true, text:String(submit.innerText || submit.value || '').trim().slice(0,80)};
+        const form = email.closest('form');
+        const dialog = email.closest('[role="dialog"],[data-radix-dialog-content]');
+        // The current Edit email UI puts its action footer outside the inner
+        // form.  Scoping to form first leaves no Send button and the old global
+        // fallback can hit an unrelated background control.  Prefer the
+        // enclosing dialog so Cancel + Send verification email are evaluated
+        // together.
+        let localScope = dialog || form;
+        if (!localScope) {
+          let parent = email.parentElement;
+          while (parent && parent !== document.body) {
+            if (parent.querySelector('button,input[type="submit"],[role="button"]')) {
+              localScope = parent;
+              break;
+            }
+            parent = parent.parentElement;
+          }
+        }
+        const attrs = el => [el.type, el.name, el.id, el.className,
+          el.getAttribute('data-testid'), el.getAttribute('data-dd-action-name'),
+          el.getAttribute('data-variant'), el.getAttribute('data-color'),
+          el.getAttribute('aria-label')].filter(Boolean).join(' ').toLowerCase();
+        const selector = 'button,input[type=submit],[role=button]';
+        // Never leave the Edit email container. A global lookup can select the
+        // chat composer or a settings-background control and makes the dialog
+        // look as if it ignored submission.
+        const candidates = localScope
+          ? [...localScope.querySelectorAll(selector)].filter(enabled)
+          : [];
+        const usable = candidates.filter(el => !/close|dismiss|cancel|back|secondary|ghost/.test(attrs(el)));
+        let submit = usable.find(el => String(el.type || '').toLowerCase() === 'submit')
+          || usable.find(el => /submit|continue|verify|primary|confirm/.test(attrs(el)));
+        if (!submit && dialog) {
+          // Current UI: close icon, then Cancel, then the primary footer action.
+          // The final enabled action inside the dialog is the structural primary
+          // control regardless of language or visible label.
+          submit = usable[usable.length - 1] || null;
+        }
+        if (submit) {
+          submit.scrollIntoView({block:'center', inline:'nearest'});
+          if (form && typeof form.requestSubmit === 'function' && form.contains(submit)) form.requestSubmit(submit);
+          else submit.click();
+          return {
+            ok:true,
+            strategy:'dialog_primary_element',
+            element:{tag:String(submit.tagName || ''), type:String(submit.type || ''), attrs:attrs(submit).slice(0,180)}
+          };
+        }
+        if (form && typeof form.requestSubmit === 'function') {
+          try {
+            form.requestSubmit();
+            return {ok:true, strategy:'form_request_submit', text:''};
+          } catch (_) {}
+        }
+        return {
+          ok:false,
+          reason:'missing_email_submit',
+          hasForm:!!form,
+          hasLocalScope:!!localScope,
+          candidates:candidates.slice(0,12).map(el => ({tag:String(el.tagName || ''), attrs:attrs(el).slice(0,180), disabled:!!el.disabled}))
+        };
         """) or {}
+            last = result if isinstance(result, dict) else {"ok": False, "reason": "invalid_submit_result"}
+            if last.get("ok"):
+                return last
+        except Exception as exc:
+            last = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+        time.sleep(0.35)
+
+    # Some React dialogs handle Enter on the input while exposing no semantic
+    # submit button/form. Use the same marked input as a final Selenium fallback.
+    try:
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+
+        fields = driver.find_elements(By.CSS_SELECTOR, '[data-rebind-email-input="1"]')
+        if fields:
+            fields[0].send_keys(Keys.ENTER)
+            return {"ok": True, "strategy": "input_enter", "text": ""}
     except Exception as exc:
-        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+        last["enterFallback"] = f"{type(exc).__name__}: {exc}"
+    return last
 
 
 def _browser_ui_action(
@@ -976,6 +1108,8 @@ def _browser_ui_action(
             _clear_otp_inputs,
             _click_continue,
             _click_resend_email_otp,
+            _human_click,
+            _safe_get,
             _type_email_address,
             _type_otp,
             _wait_after_email_otp_submit,
@@ -1007,33 +1141,252 @@ def _browser_ui_action(
             "new chat", "skip to content", "open sidebar", "新建聊天", "跳转到内容",
         ))
 
+    def _log_failure_state(stage: str, state: Mapping[str, Any] | None = None) -> None:
+        snapshot = dict(state or _browser_page_state(driver))
+        _safe_log(log, f"浏览器换绑诊断[{stage}]：{_browser_state_diagnostic(snapshot)}")
+        screenshot = _save_rebind_browser_screenshot(driver, stage)
+        if screenshot:
+            _safe_log(log, f"浏览器换绑诊断截图：{screenshot}")
+
     def _open_email_settings_entry() -> dict:
+        _safe_log(log, "浏览器换绑步骤 1/8：打开账号设置页")
         try:
             driver.get("https://chatgpt.com/#settings/Account")
         except Exception as exc:
             raise RebindDriverError(f"浏览器打开账号设置失败：{type(exc).__name__}") from exc
+
+        def _has_email_settings_entry(item: Mapping[str, Any]) -> bool:
+            return any(
+                "account-info-email" in str(entry.get("attrs") or "")
+                or re.search(
+                    r"email|e-mail|邮箱|郵箱|メール|correo",
+                    f"{entry.get('text') or ''} {entry.get('attrs') or ''}",
+                    re.I,
+                )
+                for entry in item.get("buttons") or []
+                if isinstance(entry, Mapping)
+            )
+
         state = _wait_browser_state(
             driver,
-            lambda item: any("account-info-email" in str(entry.get("attrs") or "") for entry in item.get("buttons") or [])
-            or "e-mail" in str(item.get("text") or "").lower()
-            or "email address" in str(item.get("text") or "").lower()
-            or "邮箱" in str(item.get("text") or ""),
-            timeout=35,
+            _has_email_settings_entry,
+            timeout=8,
         )
+        if not _has_email_settings_entry(state):
+            # The current ChatGPT shell sometimes ignores direct hash
+            # navigation.  Open Settings through the already-authenticated
+            # profile menu, then select the Account tab.  This mirrors the
+            # manual UI path and works across English/Chinese localizations.
+            _safe_log(log, "浏览器换绑步骤 1/8：设置直达链接未展开，改走个人资料菜单")
+            try:
+                # Fully return to the shell before opening the menu. Merely
+                # replacing the stale hash leaves React's settings router in
+                # a half-open state where the profile control receives the
+                # click but no menu is mounted.
+                _safe_get(
+                    driver,
+                    "https://chatgpt.com/",
+                    timeout=35,
+                    attempts=2,
+                    accept_hosts=("chatgpt.com",),
+                )
+                _wait_browser_state(driver, _is_logged_in_page, timeout=15)
+                driver.execute_script("history.replaceState(null, '', '/'); return true;")
+            except Exception:
+                logger.debug("从失效设置路由返回 ChatGPT 首页失败", exc_info=True)
+            profile_result: Mapping[str, Any] = {}
+            opened_profile = False
+            try:
+                from selenium.webdriver.common.by import By
+
+                native_candidates = driver.find_elements(
+                    By.CSS_SELECTOR,
+                    '.accounts-profile-button,[data-testid="accounts-profile-button"],'
+                    '[data-testid*="profile"],button[aria-label*="profile" i],'
+                    'button[aria-label*="个人资料"],button[aria-label*="账户"]',
+                )
+                native_candidates = [
+                    item for item in native_candidates
+                    if getattr(item, "is_displayed", lambda: False)()
+                ]
+                if native_candidates:
+                    # The full-width sidebar control is the final visible
+                    # duplicate. Reuse the registration click implementation:
+                    # its CDP pointer events are reliable in Roxy Chrome where
+                    # ActionChains/element.click can leave the menu closed.
+                    button = native_candidates[-1]
+                    _human_click(driver, button, label="rebind_profile_menu")
+                    opened_profile = True
+                    profile_result = {"ok": True, "candidates": len(native_candidates), "strategy": "webdriver"}
+            except Exception:
+                opened_profile = False
+            try:
+                if not opened_profile:
+                    profile_result = driver.execute_script(r"""
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                  && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+                const label = el => [el.innerText, el.textContent, el.className,
+                  el.getAttribute('data-testid'), el.getAttribute('aria-label')]
+                  .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+                const selectors = [
+                  '[data-testid="accounts-profile-button"]', '.accounts-profile-button',
+                  '[data-testid*="profile"]', 'button[aria-label*="profile" i]',
+                  'button[aria-label*="个人资料"]', 'button[aria-label*="账户"]'
+                ];
+                const candidates = [...new Set([
+                  ...selectors.flatMap(selector => [...document.querySelectorAll(selector)]),
+                  ...[...document.querySelectorAll('button,[role=button]')]
+                    .filter(el => /accounts-profile-button|profile menu|个人资料.*菜单|账户.*菜单/.test(label(el)))
+                ])].filter(visible);
+                if (!candidates.length) return {ok:false, candidates:0};
+                // Prefer the bottom/sidebar profile control carrying visible
+                // account text over compact duplicate controls in the shell.
+                candidates.sort((a, b) => {
+                  const score = el => (/accounts-profile-button/.test(label(el)) ? 1000 : 0)
+                    + (/open profile menu|个人资料.*菜单|账户.*菜单/.test(label(el)) ? 500 : 0)
+                    + (String(el.innerText || el.textContent || '').trim() ? 100 : 0)
+                    + Math.max(0, el.getBoundingClientRect().top || 0);
+                  return score(a) - score(b);
+                });
+                const button = candidates[candidates.length - 1];
+                button.scrollIntoView({block:'center'});
+                try { button.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, pointerType:'mouse'})); } catch (_) {}
+                button.click();
+                try { button.dispatchEvent(new PointerEvent('pointerup', {bubbles:true, pointerType:'mouse'})); } catch (_) {}
+                return {ok:true, candidates:candidates.length};
+                """) or {}
+                    opened_profile = bool(isinstance(profile_result, Mapping) and profile_result.get("ok"))
+            except Exception:
+                profile_result = {}
+                opened_profile = False
+            _safe_log(
+                log,
+                "浏览器换绑步骤 1/8：个人资料菜单"
+                f"{'已点击' if opened_profile else '未找到'}（候选={int((profile_result or {}).get('candidates') or 0)}）",
+            )
+            if opened_profile:
+                settings_clicked = False
+                end = time.time() + 12.0
+                while time.time() < end and not settings_clicked:
+                    try:
+                        from selenium.webdriver.common.by import By
+
+                        native_settings = driver.find_elements(
+                            By.CSS_SELECTOR,
+                            'button,a,[role="button"],[role="menuitem"],'
+                            '[role="menuitemradio"],[data-radix-collection-item]',
+                        )
+                        keywords = (
+                            "settings", "设置", "設定", "设定", "preferences",
+                            "偏好设置", "paramètres", "configuración", "einstellungen",
+                        )
+                        native_settings = [
+                            item for item in native_settings
+                            if getattr(item, "is_displayed", lambda: False)()
+                            and any(
+                                marker in str(
+                                    getattr(item, "text", "")
+                                    or item.get_attribute("aria-label")
+                                    or ""
+                                ).strip().lower()
+                                for marker in keywords
+                            )
+                        ]
+                        if native_settings:
+                            _human_click(driver, native_settings[0], label="rebind_settings_menu")
+                            settings_clicked = True
+                            settings_result = {"ok": True, "candidates": len(native_settings), "strategy": "webdriver"}
+                    except Exception:
+                        settings_clicked = False
+                    try:
+                        if not settings_clicked:
+                            settings_result = driver.execute_script(r"""
+                        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+                        const text = el => String(el.innerText || el.textContent || el.getAttribute('aria-label') || '')
+                          .replace(/\s+/g, ' ').trim().toLowerCase();
+                        const candidates = [...document.querySelectorAll(
+                          'button,a,[role=button],[role=menuitem],[role=menuitemradio],[data-radix-collection-item]'
+                        )].filter(visible);
+                        let item = candidates.find(el => /settings|设置|設定|设定|preferences|偏好设置|paramètres|configuración|einstellungen/.test(text(el)));
+                        if (!item) {
+                          const child = [...document.querySelectorAll('span,div')].filter(visible)
+                            .find(el => /^(settings|设置|設定|设定|preferences|偏好设置|paramètres|configuración|einstellungen)$/.test(text(el)));
+                          item = child && child.closest('button,a,[role=button],[role=menuitem],[data-radix-collection-item]');
+                        }
+                        if (!item) return {ok:false, candidates:candidates.length};
+                        item.scrollIntoView({block:'center'});
+                        try { item.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, pointerType:'mouse'})); } catch (_) {}
+                        item.click();
+                        try { item.dispatchEvent(new PointerEvent('pointerup', {bubbles:true, pointerType:'mouse'})); } catch (_) {}
+                        return {ok:true, candidates:candidates.length};
+                        """) or {}
+                            settings_clicked = bool(isinstance(settings_result, Mapping) and settings_result.get("ok"))
+                    except Exception:
+                        settings_result = {}
+                        settings_clicked = False
+                    if not settings_clicked:
+                        time.sleep(0.3)
+                _safe_log(
+                    log,
+                    "浏览器换绑步骤 1/8：设置菜单"
+                    f"{'已点击' if settings_clicked else '未找到'}（候选={int((settings_result or {}).get('candidates') or 0)}）",
+                )
+                if not settings_clicked:
+                    screenshot = _save_rebind_browser_screenshot(driver, "settings-menu-not-found")
+                    if screenshot:
+                        _safe_log(log, f"浏览器换绑诊断截图：{screenshot}")
+                if settings_clicked:
+                    # Account is not always the default settings section. Use
+                    # its stable tab class/id instead of localized visible text.
+                    end = time.time() + 12.0
+                    while time.time() < end:
+                        try:
+                            current = _browser_page_state(driver)
+                            if _has_email_settings_entry(current):
+                                ready = True
+                                break
+                            from selenium.webdriver.common.by import By
+
+                            account_tabs = driver.find_elements(
+                                By.CSS_SELECTOR,
+                                '.account-tab,[id*="trigger-account"],'
+                                '[data-testid="account-tab"],[data-testid*="settings-account"]',
+                            )
+                            account_tabs = [
+                                item for item in account_tabs
+                                if getattr(item, "is_displayed", lambda: False)()
+                            ]
+                            if account_tabs:
+                                _human_click(driver, account_tabs[0], label="rebind_account_tab")
+                                ready = False
+                            else:
+                                ready = False
+                        except Exception:
+                            ready = False
+                        if ready:
+                            break
+                        time.sleep(0.35)
+            state = _wait_browser_state(driver, _has_email_settings_entry, timeout=25)
+        _safe_log(log, "浏览器换绑步骤 2/8：账号设置页已加载，定位邮箱变更入口")
         try:
             clicked = bool(driver.execute_script(r"""
-            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-            const button = document.querySelector('[data-testid="account-info-email"]')
-              || [...document.querySelectorAll('button,[role=button]')].find(el => visible(el)
-                && /email|e-mail|邮箱|メール/.test(String(el.innerText || el.textContent || '').toLowerCase()));
-            if (!button) return false;
-            button.scrollIntoView({block:'center'}); button.click(); return true;
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+              && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+            const entry = document.querySelector('[data-testid="account-info-email"]')
+              || document.querySelector('[data-testid*="account-info-email"]')
+              || document.querySelector('.account-info-email');
+            if (!visible(entry)) return false;
+            entry.scrollIntoView({block:'center', inline:'nearest'});
+            entry.click();
+            return true;
             """))
         except Exception:
             clicked = False
         if not clicked:
+            _log_failure_state("missing-email-settings-entry", state)
             raise RebindDriverError(f"账号设置中未找到邮箱变更入口：{state.get('url') or ''}")
-        _safe_log(log, "浏览器换绑：已打开账号邮箱变更入口")
+        _safe_log(log, "浏览器换绑步骤 3/8：已点击账号邮箱变更入口")
         return state
 
     _open_email_settings_entry()
@@ -1075,6 +1428,7 @@ def _browser_ui_action(
             raise RuntimeError(str(state.get("text") or "TOTP 页面未进入下一步")[:240])
 
         try:
+            _safe_log(log, "浏览器换绑步骤 5/8：提交当前密码后的 2FA 动态验证码")
             return _submit_totp_with_stable_window(
                 driver,
                 secret,
@@ -1092,6 +1446,7 @@ def _browser_ui_action(
         timeout=15,
     )
     if any(str(entry.get("type") or "").lower() == "password" for entry in password_state.get("inputs") or []):
+        _safe_log(log, "浏览器换绑步骤 4/8：检测到当前密码验证页")
         password = str(context.account.get("registration_password") or context.account.get("password") or "").strip()
         if not password:
             raise RebindDriverError("邮箱变更需要当前密码，请先在账号资料中保存登录密码")
@@ -1101,7 +1456,7 @@ def _browser_ui_action(
                 _fill_login_password(driver, password)
             except Exception as exc:
                 raise RebindDriverError(f"当前密码验证失败：{type(exc).__name__}") from exc
-            _safe_log(log, "浏览器换绑：当前密码验证已提交")
+            _safe_log(log, "浏览器换绑步骤 4/8：当前密码已提交，等待下一验证步骤")
             email_state = _wait_browser_state(
                 driver,
                 lambda item: _has_email_input(item)
@@ -1149,41 +1504,75 @@ def _browser_ui_action(
                 raise RebindDriverError("当前密码验证页面网络超时，请检查浏览器代理后重试")
             break
     else:
+        _safe_log(log, "浏览器换绑步骤 4/8：页面未要求再次输入当前密码")
         email_state = password_state
 
     if not _has_email_input(email_state):
         email_state = _wait_browser_state(driver, _has_email_input, timeout=20)
     if not _has_email_input(email_state):
+        _log_failure_state("missing-new-email-input", email_state)
         raise RebindDriverError("当前密码验证后未出现新邮箱输入框")
+    _safe_log(log, "浏览器换绑步骤 6/8：新邮箱输入框已就绪")
     try:
         _type_email_address(driver, target_email, timeout=20)
     except Exception as exc:
+        _log_failure_state("fill-new-email-failed")
         raise RebindDriverError(f"新邮箱填写失败：{type(exc).__name__}") from exc
+    _safe_log(log, "浏览器换绑步骤 6/8：新邮箱已填写，等待提交控件可用")
 
     otp_after_ts = time.time()
+    _clear_rebind_resource_timings(driver)
     submitted = _submit_browser_email_form(driver)
     if not submitted.get("ok"):
+        _safe_log(
+            log,
+            "浏览器换绑提交诊断："
+            + json.dumps({
+                "reason": submitted.get("reason"),
+                "hasForm": submitted.get("hasForm"),
+                "candidates": submitted.get("candidates") or [],
+            }, ensure_ascii=False, separators=(",", ":"))[:1400],
+        )
+        _log_failure_state("missing-new-email-submit")
         raise RebindDriverError(f"新邮箱提交按钮未找到：{submitted.get('reason') or 'unknown'}")
-    _safe_log(log, "浏览器换绑：新邮箱已提交，等待邮箱验证码")
+    _safe_log(
+        log,
+        f"浏览器换绑步骤 7/8：已提交新邮箱（方式={submitted.get('strategy') or 'button'}"
+        f"，元素={json.dumps(submitted.get('element') or {}, ensure_ascii=False, separators=(',', ':'))[:240]}），等待页面推进",
+    )
 
     otp_state = _wait_browser_state(
         driver,
         lambda item: any(
             re.search(r"one.?time|otp|verification|numeric|code", str(entry.get("attrs") or ""), re.I)
             for entry in item.get("inputs") or []
-        ) or "verification code" in str(item.get("text") or "").lower() or "验证码" in str(item.get("text") or ""),
+        ) or "verification code" in str(item.get("text") or "").lower()
+        or "验证码" in str(item.get("text") or "")
+        or not _has_email_input(item),
         timeout=20,
     )
     has_otp = any(
         re.search(r"one.?time|otp|verification|numeric|code", str(entry.get("attrs") or ""), re.I)
         for entry in otp_state.get("inputs") or []
     )
+    resources = _rebind_resource_diagnostic(driver)
+    if resources:
+        _safe_log(
+            log,
+            "浏览器换绑网络步骤："
+            + json.dumps(resources[-12:], ensure_ascii=False, separators=(",", ":"))[:1800],
+        )
+    if _has_email_input(otp_state) and not has_otp:
+        _log_failure_state("new-email-submit-stalled", otp_state)
+        raise RebindDriverError("新邮箱提交后页面未进入验证码或完成状态")
     if has_otp:
+        _safe_log(log, "浏览器换绑步骤 8/8：检测到目标邮箱验证码页面，开始取码")
         used: set[str] = set()
         outcome = "stalled"
         for attempt in range(2):
             code = otp_getter(email=target_email, after_ts=otp_after_ts, exclude_codes=used, target=context.target)
             used.add(code)
+            _safe_log(log, f"浏览器换绑步骤 8/8：已取得目标邮箱验证码，提交第 {attempt + 1}/2 次")
             _clear_otp_inputs(driver)
             _type_otp(driver, code, timeout=20)
             try:
@@ -1200,10 +1589,11 @@ def _browser_ui_action(
                     raise RebindDriverError("邮箱验证码校验失败且无法重新发送") from exc
                 otp_after_ts = time.time()
         if outcome != "accepted":
+            _log_failure_state("target-email-otp-failed")
             raise RebindDriverError("邮箱验证码校验失败")
-        _safe_log(log, "浏览器换绑：目标邮箱验证码已通过")
+        _safe_log(log, "浏览器换绑步骤 8/8：目标邮箱验证码已通过")
     else:
-        _safe_log(log, "浏览器换绑：页面未要求邮箱验证码")
+        _safe_log(log, "浏览器换绑步骤 8/8：页面未要求目标邮箱验证码，进入远端验证")
     return {"ok": True, "browser_ui": True, "submitted_email": target_email}
 
 
@@ -1466,9 +1856,24 @@ def _verified_session_snapshot(value: Mapping[str, Any], observed: str, token: s
 
 def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url: str, payload: Any = None) -> dict:
     target_url = _resolve_rebind_url(spec, url)
-    headers = dict(spec.get("headers") or {}) if isinstance(spec.get("headers"), Mapping) else {}
+    headers: dict[str, Any] = {}
+    header_factory = getattr(session, "get_chatgpt_headers", None)
+    if callable(header_factory) and str(urlparse(target_url).hostname or "").lower() in {
+        "chatgpt.com",
+        "www.chatgpt.com",
+    }:
+        try:
+            generated = header_factory(referer="https://chatgpt.com/")
+            if isinstance(generated, Mapping):
+                headers.update(dict(generated))
+        except Exception:
+            logger.debug("协议换绑生成 ChatGPT 请求头失败", exc_info=True)
+    if isinstance(spec.get("headers"), Mapping):
+        headers.update(dict(spec.get("headers") or {}))
     headers.setdefault("accept", "application/json")
     headers.setdefault("content-type", "application/json")
+    headers.setdefault("origin", "https://chatgpt.com")
+    headers.setdefault("referer", "https://chatgpt.com/")
     token = _extract_token(getattr(session, "_rebind_session_info", {}))
     if token:
         headers.setdefault("authorization", f"Bearer {token}")
@@ -1519,6 +1924,134 @@ def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url
     raise RebindDriverError("协议换绑请求重定向次数过多")
 
 
+def _builtin_chatgpt_protocol_action(
+    context: RebindContext,
+    *,
+    otp_getter: Callable[..., str],
+    log: Callable[[str], None] | None,
+) -> dict:
+    """Use ChatGPT's account email endpoints without opening Settings DOM."""
+    spec = {
+        "base_url": "https://chatgpt.com",
+        "otp_attempts": _DEFAULT_OTP_ATTEMPTS,
+    }
+    if context.hybrid and context.driver is not None:
+        # Keep the authenticated browser's network stack/proxy, but use direct
+        # HTTP endpoints instead of loading Settings.  The pre-change session
+        # is read only as an in-memory bearer credential and is never persisted.
+        from core.account_export import _browser_device_id, _browser_session_info
+
+        source_email = _email(context.account.get("email"), "原账号邮箱")
+
+        def refresh_browser_headers() -> None:
+            auth_info = _browser_session_info(context.driver)
+            observed_email = _extract_email(auth_info)
+            if not observed_email or observed_email.casefold() != source_email.casefold():
+                raise RebindDriverError("浏览器协议换绑登录态与原账号不一致")
+            access_token = _extract_token(auth_info)
+            if not access_token:
+                raise RebindDriverError("浏览器协议换绑未取得临时授权")
+            spec["headers"] = {
+                "authorization": f"Bearer {access_token}",
+                "oai-device-id": _browser_device_id(context.driver),
+                "oai-language": str(
+                    context.driver.execute_script("return navigator.language || 'en-US';") or "en-US"
+                ),
+            }
+
+        refresh_browser_headers()
+        request = _browser_request
+        transport = context.driver
+        _safe_log(log, "协议换绑：复用已登录浏览器网络栈，不打开 Settings DOM")
+    else:
+        if context.session is None:
+            raise RebindDriverError("协议换绑缺少登录态")
+        request = _protocol_request
+        transport = context.session
+    target_email = _email(context.target.get("email"), "目标邮箱")
+    _safe_log(log, "协议换绑步骤 1/4：检查当前账号邮箱换绑资格")
+    eligibility_response = request(
+        transport,
+        spec,
+        method="GET",
+        url="/backend-api/accounts/change_email/eligibility",
+    )
+    eligibility = eligibility_response.get("data") if isinstance(eligibility_response.get("data"), Mapping) else {}
+    if not _as_bool(eligibility.get("eligible"), False):
+        raise RebindDriverError("当前账号未通过邮箱换绑资格检查")
+    eligibility_type = str(eligibility.get("eligibility_type") or "").strip().lower()
+    social_user = eligibility_type in {"social", "social_password"}
+
+    payload: dict[str, Any] = {"email": target_email}
+    if social_user:
+        payload["remove_social_subs"] = True
+    otp_after_ts = time.time()
+    _safe_log(log, "协议换绑步骤 2/4：提交目标邮箱并发送验证码")
+    try:
+        begin = request(
+            transport,
+            spec,
+            method="POST",
+            url="/backend-api/accounts/change_email/begin",
+            payload=payload,
+        )
+    except RebindHttpError as exc:
+        if exc.status != 401 or not (context.hybrid and context.driver is not None):
+            raise
+        # The email endpoint requires pwd_auth_time within five minutes of the
+        # change request.  A long-running task can therefore outlive an
+        # otherwise valid login; repeat the existing full login flow once and
+        # immediately retry the protocol request.
+        from core.browser_liveness import _browser_login
+
+        _safe_log(log, "协议换绑：近期密码授权已过期，复用完整登录流程重新验证一次")
+        _browser_login(
+            context.driver,
+            context.account,
+            source_email,
+            headless=False,
+            restore_saved_session=False,
+            progress=lambda message: _safe_log(log, f"混合重认证 {message}"),
+            require_session=False,
+        )
+        refresh_browser_headers()
+        begin = request(
+            transport,
+            spec,
+            method="POST",
+            url="/backend-api/accounts/change_email/begin",
+            payload=payload,
+        )
+    _safe_log(log, f"协议换绑步骤 2/4：目标邮箱已提交 HTTP {begin.get('status', 0)}")
+
+    _safe_log(log, "协议换绑步骤 3/4：等待目标邮箱验证码")
+    verify_payload = dict(payload)
+    verify_payload["code"] = "{otp}"
+    verified = _request_with_otp_retry(
+        request,
+        transport,
+        spec,
+        method="POST",
+        url="/backend-api/accounts/change_email/verify",
+        payload=verify_payload,
+        variables={"target_email": target_email, "new_email": target_email, "email": target_email},
+        requires_otp=True,
+        target=context.target,
+        otp_getter=otp_getter,
+        log=log,
+        after_ts=otp_after_ts,
+    )
+    _safe_log(log, f"协议换绑步骤 3/4：目标邮箱验证码已通过 HTTP {verified.get('status', 0)}")
+    _safe_log(log, "协议换绑步骤 4/4：邮箱变更已提交，刷新最终 Session")
+    data = verified.get("data") if isinstance(verified.get("data"), Mapping) else {}
+    return {
+        "ok": True,
+        **dict(data or {}),
+        "responses": [eligibility_response, begin, verified],
+        "protocol_builtin": True,
+    }
+
+
 def _browser_request(driver: Any, spec: Mapping[str, Any], *, method: str, url: str, payload: Any = None) -> dict:
     from core.account_export import _browser_fetch
 
@@ -1526,9 +2059,11 @@ def _browser_request(driver: Any, spec: Mapping[str, Any], *, method: str, url: 
     headers = dict(spec.get("headers") or {}) if isinstance(spec.get("headers"), Mapping) else {}
     headers.setdefault("accept", "application/json")
     headers.setdefault("content-type", "application/json")
-    if str(method).upper() in {"GET", "HEAD"} and payload:
-        query = urlencode(payload, doseq=True)
-        target_url = f"{target_url}{'&' if '?' in target_url else '?'}{query}"
+    request_method = str(method or "GET").upper()
+    if request_method in {"GET", "HEAD"}:
+        if payload:
+            query = urlencode(payload, doseq=True)
+            target_url = f"{target_url}{'&' if '?' in target_url else '?'}{query}"
         body = None
     else:
         body = json.dumps(payload or {}, ensure_ascii=False)
@@ -1537,7 +2072,7 @@ def _browser_request(driver: Any, spec: Mapping[str, Any], *, method: str, url: 
             result = _browser_fetch(
                 driver,
                 target_url,
-                method=str(method or "GET").upper(),
+                method=request_method,
                 headers=headers,
                 body=body,
                 stage="rebind_email_change",
@@ -1551,7 +2086,7 @@ def _browser_request(driver: Any, spec: Mapping[str, Any], *, method: str, url: 
             result = _browser_fetch(
                 driver,
                 target_url,
-                method=str(method or "GET").upper(),
+                method=request_method,
                 headers=headers,
                 body=body,
                 stage="rebind_email_change",
@@ -1592,6 +2127,7 @@ def _request_with_otp_retry(
     for attempt in range(attempts):
         rendered = dict(variables)
         if requires_otp:
+            _safe_log(log, f"协议换绑验证码步骤：等待目标邮箱验证码（第 {attempt + 1}/{attempts} 次）")
             last_code = otp_getter(
                 email=str(target.get("email") or ""),
                 after_ts=started,
@@ -1599,6 +2135,7 @@ def _request_with_otp_retry(
                 target=dict(target),
             )
             rendered.update({"otp": last_code, "code": last_code})
+            _safe_log(log, f"协议换绑验证码步骤：已取得验证码，准备第 {attempt + 1}/{attempts} 次提交")
         rendered_payload = _render(payload, rendered)
         try:
             return request(
@@ -1641,17 +2178,20 @@ def _generic_action(
 ) -> dict:
     spec = _api_spec(context.account, context.target)
     if not spec:
-        # Browser drivers can complete the current account-settings flow even
-        # when a deployment has not supplied a site-specific API contract.
-        # Keep protocol-only callers strict so a missing endpoint is still
-        # diagnosed instead of being reported as a false success.
+        if action_driver == "protocol":
+            _safe_log(log, "协议换绑：使用内置账号邮箱接口，不等待 Settings DOM")
+            return _builtin_chatgpt_protocol_action(context, otp_getter=otp_getter, log=log)
+        # Browser drivers retain the account-settings path when explicitly
+        # selected as the action driver.
         if context.driver is not None:
+            _safe_log(log, "浏览器换绑：使用账号设置页面执行邮箱变更")
             return _browser_ui_action(context, otp_getter=otp_getter, log=log)
         raise RebindDriverError("未配置邮箱变更端点或提交钩子")
     request = _protocol_request if action_driver == "protocol" else _browser_request
     transport = context.session if action_driver == "protocol" else context.driver
     if transport is None:
         raise RebindDriverError("换绑提交阶段缺少登录传输")
+    _safe_log(log, f"{action_driver} 换绑步骤 1：已加载邮箱变更端点配置")
 
     variables = {
         "target_email": context.target.get("email"),
@@ -1661,11 +2201,18 @@ def _generic_action(
     steps = spec.get("steps")
     responses: list[dict] = []
     if isinstance(steps, list) and steps:
-        for raw_step in steps:
+        valid_steps = [raw for raw in steps if isinstance(raw, Mapping)]
+        _safe_log(log, f"{action_driver} 换绑步骤 2：开始执行 {len(valid_steps)} 个协议请求步骤")
+        for index, raw_step in enumerate(valid_steps, start=1):
             if not isinstance(raw_step, Mapping):
                 continue
             step = dict(raw_step)
             requires_otp = _as_bool(step.get("requires_otp") or step.get("otp"), False)
+            _safe_log(
+                log,
+                f"{action_driver} 换绑协议步骤 {index}/{len(valid_steps)}："
+                f"提交邮箱变更请求（需要验证码={requires_otp}）",
+            )
             response = _request_with_otp_retry(
                 request,
                 transport,
@@ -1680,6 +2227,11 @@ def _generic_action(
                 log=log,
                 after_ts=time.time(),
             )
+            _safe_log(
+                log,
+                f"{action_driver} 换绑协议步骤 {index}/{len(valid_steps)}："
+                f"请求完成 HTTP {response.get('status', 0)}",
+            )
             responses.append(response)
             data = response.get("data") if isinstance(response.get("data"), Mapping) else {}
             if data:
@@ -1693,6 +2245,7 @@ def _generic_action(
     email_field = str(spec.get("email_field") or "email")
     payload = spec.get("submit_payload") or spec.get("payload") or {email_field: context.target.get("email")}
     otp_start = time.time()
+    _safe_log(log, f"{action_driver} 换绑步骤 2：提交目标邮箱变更请求")
     first = _request_with_otp_retry(
         request,
         transport,
@@ -1708,6 +2261,7 @@ def _generic_action(
         after_ts=otp_start,
     )
     responses.append(first)
+    _safe_log(log, f"{action_driver} 换绑步骤 2：邮箱变更请求完成 HTTP {first.get('status', 0)}")
     data = first.get("data") if isinstance(first.get("data"), Mapping) else {}
     verify_url = spec.get("verify_url") or (data or {}).get("verify_url") or (data or {}).get("verification_url")
     otp_required = _as_bool(spec.get("otp_required"), bool(verify_url or (data or {}).get("otp_required") or (data or {}).get("verification_required")))
@@ -1716,6 +2270,7 @@ def _generic_action(
             raise RebindDriverError("变更响应要求 OTP，但未提供验证端点")
         code_field = str(spec.get("code_field") or "code")
         verify_payload = spec.get("verify_payload") or {email_field: context.target.get("email"), code_field: "{otp}"}
+        _safe_log(log, f"{action_driver} 换绑步骤 3：服务端要求目标邮箱验证码，开始验证")
         second = _request_with_otp_retry(
             request,
             transport,
@@ -1731,6 +2286,7 @@ def _generic_action(
             after_ts=otp_start,
         )
         responses.append(second)
+        _safe_log(log, f"{action_driver} 换绑步骤 3：目标邮箱验证码请求完成 HTTP {second.get('status', 0)}")
         data = second.get("data") if isinstance(second.get("data"), Mapping) else data
     _safe_log(log, f"{action_driver} 提交：邮箱变更请求已返回 HTTP {responses[-1].get('status', 0)}")
     return {"ok": True, **dict(data or {}), "responses": responses}
@@ -1743,6 +2299,7 @@ def _verify_remote(
     target_email: str,
     log: Callable[[str], None] | None,
 ) -> dict:
+    _safe_log(log, "远端验证步骤 1/2：刷新账号 Session，核对当前邮箱")
     verifier = hooks.get("verify")
     if verifier:
         raw = _invoke(
@@ -1758,17 +2315,33 @@ def _verify_remote(
         )
         verified = _normalize_hook_result(context, raw)
     elif context.action_driver == "protocol":
-        if context.session is None:
+        if context.session is not None:
+            verified = _fetch_protocol_session(context.session)
+        elif context.driver is not None:
+            from core.roxy_registration import _fetch_chatgpt_session
+
+            try:
+                verified = _fetch_chatgpt_session(
+                    context.driver,
+                    timeout=90,
+                    auto_jump_wait=2,
+                )
+            except Exception as exc:
+                raise RebindVerificationError(f"混合换绑最终 Session 验证失败：{type(exc).__name__}") from exc
+        else:
             raise RebindVerificationError("协议验证缺少登录态")
-        verified = _fetch_protocol_session(context.session)
         context.session_info = dict(verified)
     else:
         if context.driver is None:
             raise RebindVerificationError("浏览器验证缺少登录态")
-        from core.account_export import _browser_session_info
+        from core.roxy_registration import _fetch_chatgpt_session
 
         try:
-            verified = _browser_session_info(context.driver)
+            verified = _fetch_chatgpt_session(
+                context.driver,
+                timeout=90,
+                auto_jump_wait=5,
+            )
         except Exception as exc:
             raise RebindVerificationError(f"浏览器远端 Session 验证失败：{type(exc).__name__}") from exc
         context.session_info = dict(verified)
@@ -1792,8 +2365,53 @@ def _verify_remote(
         "action_driver": context.action_driver,
         "hybrid": context.hybrid,
     }
-    _safe_log(log, "远端验证：目标邮箱与新登录态已确认")
+    _safe_log(log, "远端验证步骤 2/2：目标邮箱与新登录态已确认")
     return result
+
+
+def _refresh_session_after_builtin_rebind(
+    context: RebindContext,
+    *,
+    target_email: str,
+    otp_getter: Callable[..., str],
+    hooks: dict,
+    headless: bool,
+    log: Callable[[str], None] | None,
+) -> None:
+    """Sign in with the new email after change_email/verify revokes sessions."""
+    updated_account = dict(context.account)
+    updated_account["email"] = target_email
+    _safe_log(log, "换绑后登录：邮箱已验证，旧会话已撤销，使用新邮箱获取最终 Session")
+    if context.driver is not None:
+        from core.browser_liveness import _browser_login
+
+        info = _browser_login(
+            context.driver,
+            updated_account,
+            target_email,
+            headless=bool(headless),
+            restore_saved_session=False,
+            progress=lambda message: _safe_log(log, f"换绑后登录 {message}"),
+            require_session=True,
+        )
+        context.session_info = dict(info or {})
+        _safe_log(log, "换绑后登录：已通过新邮箱、密码和 2FA 获取最终浏览器 Session")
+        return
+    if context.session is None:
+        raise RebindVerificationError("换绑后重新登录缺少协议传输")
+    old_session = context.session
+    session, info = _protocol_login_builtin(
+        updated_account,
+        proxy=context.proxy,
+        otp_getter=otp_getter,
+        log=lambda message: _safe_log(log, f"换绑后登录 {message}"),
+        hooks=hooks,
+    )
+    context.session = session
+    context.session_info = dict(info or {})
+    context.add_closer(lambda session=session: _close_resource(session))
+    _close_resource(old_session)
+    _safe_log(log, "换绑后登录：已通过新邮箱、密码和 2FA 获取最终协议 Session")
 
 
 def rebind_account(
@@ -1857,7 +2475,9 @@ def rebind_account(
     # The task service passes proxy separately; browser action transport uses it
     # when it has to open a second browser after protocol login.
     account.setdefault("rebind_proxy", effective_proxy)
+    completed = False
     try:
+        _safe_log(log, f"登录阶段开始：driver={login_name}，强制建立全新登录态")
         login_hook = hook_map.get("login_protocol" if login_name == "protocol" else "login_browser")
         if login_hook:
             raw_login = _invoke(
@@ -1918,7 +2538,11 @@ def rebind_account(
                         break
                     except RebindDriverError as fallback_exc:
                         fallback_errors.append(_browser_error_text(fallback_exc))
-                if browser is None or not isinstance(info, Mapping) or not _extract_token(info):
+                if (
+                    browser is None
+                    or not isinstance(info, Mapping)
+                    or not _as_bool(info.get("loginConfirmed"), False)
+                ):
                     detail = "; ".join(item for item in fallback_errors if item)[:500]
                     raise RebindDriverError(
                         f"{login_name} 登录网络出口均失败：{detail or _browser_error_text(first_exc)}"
@@ -1931,24 +2555,30 @@ def rebind_account(
         # Never let a hook silently switch the account context.  Built-in
         # logins already return the identity; injected hooks must expose the
         # same email through ``session_info``/their result before submission.
-        _validate_login_identity(context, source_email)
+        _validate_login_identity(
+            context,
+            source_email,
+            require_token=login_name == "protocol",
+        )
+        _safe_log(
+            log,
+            "登录阶段完成：原账号身份和登录页面已确认；换绑成功后再刷新并保存 Session",
+        )
 
         submit_hook = hook_map.get("submit_protocol" if action_name == "protocol" else "submit_browser")
+        _safe_log(log, f"换绑提交阶段开始：action_driver={action_name}")
         # A built-in submitter needs a concrete transport.  A site-specific
         # hook may own its transport (for example, a remote automation service
         # that returns only a verified session), so do not force a local
         # browser/protocol conversion before invoking that hook.
         if not submit_hook:
             if action_name == "protocol":
-                # When no protocol endpoint is configured, the generic
-                # submitter intentionally falls back to the account-settings
-                # browser UI.  Do not create a curl session just to validate a
-                # browser login; CF can reject that duplicate /api/auth/session
-                # request even though the browser session is already valid.
+                # The built-in mixed path sends protocol HTTP requests through
+                # the already-authenticated browser network stack.  A custom
+                # endpoint contract, or pure-protocol login, keeps using the
+                # standalone protocol transport.
                 if _api_spec(account, target) or context.driver is None:
                     _ensure_protocol_transport(context, hook_map, log)
-                else:
-                    _safe_log(log, "协议端点未配置，复用已建立的浏览器登录态执行账号设置换绑")
             else:
                 _ensure_browser_transport(context, hook_map, selected_headless, log)
 
@@ -1992,9 +2622,39 @@ def rebind_account(
             _normalize_hook_result(context, raw_action)
             _require_stage_success(raw_action, "提交")
 
-        return _verify_remote(context, hooks=hook_map, target_email=target_email, log=log)
+        if (
+            not hook_map.get("verify")
+            and (
+                _as_bool(context.action_result.get("protocol_builtin"), False)
+                or _as_bool(context.action_result.get("browser_ui"), False)
+            )
+        ):
+            _refresh_session_after_builtin_rebind(
+                context,
+                target_email=target_email,
+                otp_getter=otp_getter,
+                hooks=hook_map,
+                headless=selected_headless,
+                log=log,
+            )
+
+        _safe_log(log, "换绑提交阶段完成：开始远端结果验证")
+        result = _verify_remote(context, hooks=hook_map, target_email=target_email, log=log)
+        completed = True
+        return result
     finally:
-        context.close()
+        keep_on_failure = _as_bool(
+            os.getenv("REBIND_DEBUG_KEEP_BROWSER_ON_FAILURE"),
+            False,
+        ) and not completed
+        if keep_on_failure:
+            _safe_log(
+                log,
+                "调试保留：换绑异常后保留本次协议会话和指纹浏览器环境，等待现场检查与手动清理",
+            )
+        else:
+            _safe_log(log, "资源清理：换绑流程已结束，关闭本次协议会话和指纹浏览器环境")
+            context.close()
 
 
 __all__ = [

@@ -135,7 +135,7 @@ def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monk
     calls = []
     driver = object()
     closer = lambda: None
-    info = {"user": {"email": OLD}, "accessToken": "old-token"}
+    info = {"user": {"email": OLD}, "loginConfirmed": True, "loginConfirmation": "browser_ui"}
 
     def browser_login(account, *, driver_name, proxy, **_kwargs):
         calls.append(proxy)
@@ -169,7 +169,7 @@ def test_browser_rebind_forces_fresh_full_login_and_ignores_factory_session(monk
     driver = MagicMock()
     driver._rebind_session_info = {"user": {"email": OLD}, "accessToken": "stale-token"}
     closer = MagicMock()
-    fresh = {"user": {"email": OLD}, "accessToken": "fresh-token"}
+    fresh = {"user": {"email": OLD}, "loginConfirmed": True, "loginConfirmation": "browser_ui"}
     monkeypatch.setattr(
         rebind_driver,
         "_open_browser_builtin",
@@ -195,6 +195,8 @@ def test_browser_rebind_forces_fresh_full_login_and_ignores_factory_session(monk
         OLD,
         headless=True,
         restore_saved_session=False,
+        progress=ANY,
+        require_session=False,
     )
 
 
@@ -271,15 +273,96 @@ def test_remote_verification_rejects_wrong_email_and_closes_registered_resource(
     assert closed == [True]
 
 
-def test_missing_site_endpoint_fails_without_claiming_success():
-    transport = FakeTransport()
+def test_debug_failure_mode_keeps_browser_resources_for_inspection(monkeypatch):
+    closed = []
+    monkeypatch.setenv("REBIND_DEBUG_KEEP_BROWSER_ON_FAILURE", "1")
+
+    def login(context, **_kwargs):
+        context.driver = object()
+        context.driver_kind = "roxy"
+        context.session_info = {
+            "user": {"email": OLD},
+            "loginConfirmed": True,
+        }
+        return {"close": lambda: closed.append(True)}
+
+    with pytest.raises(rebind_driver.RebindVerificationError, match="邮箱"):
+        rebind_driver.rebind_account(
+            _account(),
+            _target(),
+            login_driver="roxy",
+            action_driver="roxy",
+            hybrid=False,
+            hooks={
+                "login_browser": login,
+                "submit_browser": lambda **_kwargs: {"ok": True},
+                "verify": lambda **_kwargs: {
+                    "session": {
+                        "user": {"email": "wrong@example.test"},
+                        "accessToken": "fresh-token",
+                    }
+                },
+            },
+        )
+
+    assert closed == []
+
+
+class FakeBuiltinEmailChangeSession(FakeTransport):
+    def __init__(self, *, eligibility_type="password"):
+        super().__init__()
+        self.eligibility_type = eligibility_type
+        self.requests = []
+        self._rebind_session_info = {}
+
+    def get_chatgpt_headers(self, referer):
+        return {"x-test-browser-profile": "1", "referer": referer}
+
+    def get(self, url, **kwargs):
+        self.requests.append(("GET", url, kwargs))
+        return FakeResponse(
+            200,
+            {"eligible": True, "eligibility_type": self.eligibility_type},
+            url,
+        )
+
+    def post(self, url, **kwargs):
+        self.requests.append(("POST", url, kwargs))
+        return FakeResponse(200, {"ok": True}, url)
+
+
+def test_builtin_protocol_rebind_uses_email_change_endpoints_without_site_config():
+    transport = FakeBuiltinEmailChangeSession()
+    logs = []
 
     def login(context, **_kwargs):
         context.session = transport
         context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
 
-    with pytest.raises(rebind_driver.RebindDriverError, match="端点或提交钩子"):
-        rebind_driver.rebind_account(_account(), _target(), driver="protocol", hooks={"login_protocol": login})
+    result = rebind_driver.rebind_account(
+        _account(),
+        _target(),
+        driver="protocol",
+        log=logs.append,
+        hooks={
+            "login_protocol": login,
+            "otp": lambda **_kwargs: "654321",
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert result["verified_email"] == TARGET
+    assert [item[1].rsplit("/", 1)[-1] for item in transport.requests] == [
+        "eligibility",
+        "begin",
+        "verify",
+    ]
+    assert TARGET in transport.requests[1][2]["data"]
+    assert "654321" in transport.requests[2][2]["data"]
+    assert transport.requests[0][2]["headers"]["x-test-browser-profile"] == "1"
+    assert all("654321" not in line for line in logs)
 
 
 def test_protocol_preflight_rotates_failed_proxy_within_pool(monkeypatch):
@@ -341,23 +424,84 @@ def test_browser_submission_without_endpoint_uses_account_settings_fallback(monk
     assert calls == [(TARGET, True, True)]
 
 
-def test_protocol_action_without_endpoint_reuses_browser_login_without_bridge(monkeypatch):
+def test_new_email_submit_scopes_actions_to_dialog_before_inner_form():
+    driver = MagicMock()
+
+    def execute(script, *_args):
+        assert "let localScope = dialog || form" in script
+        assert "submit = usable[usable.length - 1]" in script
+        return {
+            "ok": True,
+            "strategy": "dialog_primary_element",
+            "element": {"tag": "BUTTON", "type": "", "attrs": "btn-primary"},
+        }
+
+    driver.execute_script.side_effect = execute
+
+    result = rebind_driver._submit_browser_email_form(driver, timeout=1)
+
+    assert result == {
+        "ok": True,
+        "strategy": "dialog_primary_element",
+        "element": {"tag": "BUTTON", "type": "", "attrs": "btn-primary"},
+    }
+
+
+def test_browser_protocol_get_does_not_send_json_body(monkeypatch):
+    captured = {}
+
+    def browser_fetch(_driver, _url, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "status": 200, "url": "https://chatgpt.com/check", "data": {"eligible": True}}
+
+    monkeypatch.setattr("core.account_export._browser_fetch", browser_fetch)
+    result = rebind_driver._browser_request(
+        object(),
+        {"base_url": "https://chatgpt.com"},
+        method="GET",
+        url="/check",
+    )
+
+    assert result["status"] == 200
+    assert captured["method"] == "GET"
+    assert captured["body"] is None
+
+
+def test_protocol_action_without_endpoint_uses_browser_http_and_skips_settings_dom(monkeypatch):
     calls = []
+    transport = FakeBuiltinEmailChangeSession()
+
+    class FakeDriver:
+        def execute_script(self, _script):
+            return "en-US"
+
+    driver = FakeDriver()
 
     def login(context, **_kwargs):
-        context.driver = object()
+        context.driver = driver
         context.driver_kind = "roxy"
-        context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
+        context.session_info = {"user": {"email": OLD}, "loginConfirmed": True}
 
-    def browser_ui(context, otp_getter, log):
-        calls.append((context.action_driver, context.target["email"], callable(otp_getter), log is None))
-        return {"ok": True, "browser_ui": True}
+    def browser_request(actual_driver, spec, **kwargs):
+        calls.append(("http", actual_driver is driver, kwargs["url"]))
+        return rebind_driver._protocol_request(transport, spec, **kwargs)
 
-    def unexpected_protocol_bridge(*_args, **_kwargs):
-        raise AssertionError("protocol bridge should not run without a protocol endpoint")
-
-    monkeypatch.setattr(rebind_driver, "_browser_ui_action", browser_ui)
-    monkeypatch.setattr(rebind_driver, "_ensure_protocol_transport", unexpected_protocol_bridge)
+    monkeypatch.setattr(
+        "core.account_export._browser_session_info",
+        lambda _driver: {"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+    monkeypatch.setattr("core.account_export._browser_device_id", lambda _driver: "device-id")
+    monkeypatch.setattr(rebind_driver, "_browser_request", browser_request)
+    monkeypatch.setattr(
+        rebind_driver,
+        "_ensure_protocol_transport",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("mixed built-in path must not bridge")),
+    )
+    monkeypatch.setattr(
+        rebind_driver,
+        "_browser_ui_action",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Settings DOM must not be used")),
+    )
     result = rebind_driver.rebind_account(
         _account(),
         _target(),
@@ -366,6 +510,7 @@ def test_protocol_action_without_endpoint_reuses_browser_login_without_bridge(mo
         hybrid=True,
         hooks={
             "login_browser": login,
+            "otp": lambda **_kwargs: "654321",
             "verify": lambda target_email, **_kwargs: {
                 "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
             },
@@ -373,7 +518,134 @@ def test_protocol_action_without_endpoint_reuses_browser_login_without_bridge(mo
     )
 
     assert result["verified_email"] == TARGET
-    assert calls == [("protocol", TARGET, True, True)]
+    assert [item[2].rsplit("/", 1)[-1] for item in calls] == ["eligibility", "begin", "verify"]
+    assert all(item[1] for item in calls)
+    assert [item[1].rsplit("/", 1)[-1] for item in transport.requests] == [
+        "eligibility",
+        "begin",
+        "verify",
+    ]
+
+
+def test_mixed_protocol_reauthenticates_once_when_begin_returns_401(monkeypatch):
+    calls = []
+
+    class FakeDriver:
+        def execute_script(self, _script):
+            return "en-US"
+
+    driver = FakeDriver()
+
+    def login(context, **_kwargs):
+        context.driver = driver
+        context.driver_kind = "roxy"
+        context.session_info = {"user": {"email": OLD}, "loginConfirmed": True}
+
+    def browser_request(_driver, _spec, *, method, url, payload=None):
+        calls.append((method, url))
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True, "eligibility_type": "password"}}
+        if url.endswith("/begin") and sum(item[1].endswith("/begin") for item in calls) == 1:
+            raise rebind_driver.RebindHttpError(401, data={"error": "reauth_required"})
+        return {"status": 200, "data": {"ok": True}}
+
+    monkeypatch.setattr(
+        "core.account_export._browser_session_info",
+        lambda _driver: {"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+    monkeypatch.setattr("core.account_export._browser_device_id", lambda _driver: "device-id")
+    monkeypatch.setattr(rebind_driver, "_browser_request", browser_request)
+    monkeypatch.setattr(
+        "core.browser_liveness._browser_login",
+        lambda *_args, **_kwargs: calls.append(("LOGIN", "reauth")) or {"loginConfirmed": True},
+    )
+    result = rebind_driver.rebind_account(
+        _account(),
+        _target(),
+        login_driver="roxy",
+        action_driver="protocol",
+        hybrid=True,
+        hooks={
+            "login_browser": login,
+            "otp": lambda **_kwargs: "654321",
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert result["verified_email"] == TARGET
+    assert calls.count(("POST", "/backend-api/accounts/change_email/begin")) == 2
+    assert calls.count(("LOGIN", "reauth")) == 1
+
+
+def test_builtin_mixed_rebind_logs_in_with_new_email_before_final_verification(monkeypatch):
+    captured = {}
+    driver = object()
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="roxy",
+        action_driver="protocol",
+        hybrid=True,
+        driver=driver,
+    )
+
+    def browser_login(actual_driver, account, email, **kwargs):
+        captured.update({"driver": actual_driver, "account": account, "email": email, **kwargs})
+        return {"user": {"email": TARGET}, "accessToken": "fresh-token"}
+
+    monkeypatch.setattr("core.browser_liveness._browser_login", browser_login)
+    rebind_driver._refresh_session_after_builtin_rebind(
+        context,
+        target_email=TARGET,
+        otp_getter=lambda **_kwargs: "654321",
+        hooks={},
+        headless=False,
+        log=None,
+    )
+
+    assert captured["driver"] is driver
+    assert captured["account"]["email"] == TARGET
+    assert captured["email"] == TARGET
+    assert captured["restore_saved_session"] is False
+    assert captured["require_session"] is True
+    assert context.session_info["user"]["email"] == TARGET
+
+
+def test_builtin_pure_protocol_rebind_replaces_revoked_session(monkeypatch):
+    old_session = FakeTransport()
+    new_session = FakeTransport()
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=old_session,
+        proxy="POOL",
+    )
+    monkeypatch.setattr(
+        rebind_driver,
+        "_protocol_login_builtin",
+        lambda account, **_kwargs: (
+            new_session,
+            {"user": {"email": account["email"]}, "accessToken": "fresh-token"},
+        ),
+    )
+
+    rebind_driver._refresh_session_after_builtin_rebind(
+        context,
+        target_email=TARGET,
+        otp_getter=lambda **_kwargs: "654321",
+        hooks={},
+        headless=False,
+        log=None,
+    )
+
+    assert old_session.closed is True
+    assert context.session is new_session
+    assert context.session_info["user"]["email"] == TARGET
 
 
 class FakeResponse:

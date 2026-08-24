@@ -471,6 +471,42 @@ def _submit_code_and_fetch_session(
     return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
 
 
+def _wait_browser_logged_in_ui(driver, email: str, *, timeout: int = 90) -> dict:
+    """Confirm the authenticated ChatGPT shell without reading Session/AT.
+
+    Rebind only needs the live browser identity to open account settings.  Its
+    authoritative Session is collected after the mailbox change.  A guest
+    shell can expose a profile-shaped control too, so login/sign-up controls
+    must also be absent before the UI is accepted as authenticated.
+    """
+    end = time.time() + max(5, int(timeout or 90))
+    last: dict = {}
+    while time.time() < end:
+        try:
+            last = driver.execute_script(r"""
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+              && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+            const controls = [...document.querySelectorAll('button,a,[role="button"]')].filter(visible);
+            const attrs = el => [el.id, el.className, el.getAttribute('data-testid'), el.getAttribute('aria-label')]
+              .filter(Boolean).join(' ').toLowerCase();
+            const loginPresent = controls.some(el => /login-button|signup-button/.test(attrs(el)));
+            const profilePresent = controls.some(el => /accounts-profile-button|open profile menu|个人资料.*菜单|账户.*菜单/.test(attrs(el)));
+            const shellPresent = profilePresent || controls.some(el => /composer|new-chat|create-new-chat/.test(attrs(el)));
+            return {url:location.href, loginPresent, profilePresent, shellPresent};
+            """) or {}
+        except Exception as exc:
+            last = {"url": str(getattr(driver, "current_url", "") or ""), "error": type(exc).__name__}
+        url = str(last.get("url") or "").lower()
+        if "chatgpt.com" in url and bool(last.get("shellPresent")) and not bool(last.get("loginPresent")):
+            return {
+                "user": {"email": str(email or "").strip()},
+                "loginConfirmed": True,
+                "loginConfirmation": "browser_ui",
+            }
+        time.sleep(0.5)
+    raise RuntimeError(f"登录验证已提交，但未进入登录后的 ChatGPT 页面：{last}")
+
+
 def _submit_totp_with_stable_window(
     driver,
     secret: str,
@@ -507,6 +543,25 @@ def _submit_totp_with_stable_window(
             return on_submitted(code)
         except Exception as exc:
             last_error = exc
+            # A successful TOTP submit can already have navigated to the
+            # ChatGPT shell while the first /api/auth/session request times
+            # out on a weak proxy.  In that state another TOTP attempt is
+            # wrong: the input no longer exists and the login gets reported
+            # as failed even though authentication succeeded.  Retry only the
+            # caller's post-submit confirmation when the MFA page is gone.
+            try:
+                left_totp_page = not _is_totp_page(driver, expect_totp=True)
+            except Exception:
+                left_totp_page = False
+            if left_totp_page:
+                logger.warning(
+                    "[查活][浏览器][TOTP] 页面已离开 2FA，重试 Session/页面确认，不重复提交验证码：%s",
+                    str(exc)[:240],
+                )
+                try:
+                    return on_submitted(code)
+                except Exception as confirm_exc:
+                    last_error = confirm_exc
             if attempt + 1 >= attempts:
                 break
             logger.warning(
@@ -519,17 +574,29 @@ def _submit_totp_with_stable_window(
 
 def _submit_totp_and_fetch_session(driver, secret: str, *, max_attempts: int = 2) -> dict:
     """Submit the saved authenticator code using the same stable-window logic as liveness."""
+    from core.roxy_registration import _fetch_chatgpt_session
+
     return _submit_totp_with_stable_window(
         driver,
         secret,
         max_attempts=max_attempts,
-        fill_input=False,
-        click_submit=False,
-        on_submitted=lambda code: _submit_code_and_fetch_session(driver, code, code_kind="totp"),
+        fill_input=True,
+        click_submit=True,
+        # Input and button handling belongs to the shared stable-window
+        # helper.  The callback only confirms the new authenticated Session,
+        # so it is safe to repeat after a transient session-fetch timeout.
+        on_submitted=lambda _code: _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12),
     )
 
 
-def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: int = 3) -> dict:
+def _login_with_email_otp(
+    driver,
+    email: str,
+    *,
+    after_ts: float,
+    max_attempts: int = 3,
+    require_session: bool = True,
+) -> dict:
     """邮箱 OTP 登录；旧码/过期码失败后重发并等待一个不同的新验证码。"""
     from core.roxy_registration import (
         _clear_otp_inputs,
@@ -563,7 +630,9 @@ def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: 
             current_after_ts = time.time()
             resend = _click_resend_email_otp(driver, timeout=25)
             if resend.get("reason") == "already_accepted":
-                return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+                if require_session:
+                    return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+                return _wait_browser_logged_in_ui(driver, email, timeout=90)
             continue
 
         code = str(code or "").strip()
@@ -576,7 +645,9 @@ def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: 
         last_outcome = _wait_after_email_otp_submit(driver, timeout=12)
         if last_outcome == "accepted":
             logger.info("[查活][浏览器][OTP] 邮箱验证码已通过")
-            return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+            if require_session:
+                return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+            return _wait_browser_logged_in_ui(driver, email, timeout=90)
 
         used_codes.add(code)
         if attempt >= attempts:
@@ -590,7 +661,9 @@ def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: 
         current_after_ts = time.time()
         resend = _click_resend_email_otp(driver, timeout=25)
         if resend.get("reason") == "already_accepted":
-            return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+            if require_session:
+                return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
+            return _wait_browser_logged_in_ui(driver, email, timeout=90)
 
     raise RuntimeError(f"邮箱验证码连续未通过，已重试 {attempts} 次：last_outcome={last_outcome or 'unknown'}")
 
@@ -603,8 +676,15 @@ def _browser_login(
     headless: bool,
     restore_saved_session: bool = True,
     stale_session_retry: bool = False,
+    progress: Callable[[str], None] | None = None,
+    require_session: bool = True,
 ) -> dict:
-    """在当前指纹浏览器内执行 Session 恢复或账号重新登录。"""
+    """在当前指纹浏览器内执行登录。
+
+    查活保持 ``require_session=True``，登录后立即刷新并验证 AT。换绑传
+    ``False``，登录阶段只确认已进入认证后的页面，目标邮箱验证成功后再
+    读取并保存新的 Session。
+    """
     from core.roxy_registration import (
         _click_passwordless_signup_if_present,
         _fetch_chatgpt_session,
@@ -613,7 +693,16 @@ def _browser_login(
         _wait_for_cloudflare_challenge,
     )
 
+    def emit(message: str) -> None:
+        if not callable(progress):
+            return
+        try:
+            progress(message)
+        except Exception:
+            logger.debug("[查活][浏览器] 登录步骤回调失败", exc_info=True)
+
     if not restore_saved_session:
+        emit("登录步骤 1/7：清空旧 Session/Cookie，准备重新登录")
         _clear_browser_auth_state(driver)
         logger.info("[查活][浏览器] 已清空旧登录态，跳过保存 Session/Cookie")
     _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com",))
@@ -627,6 +716,7 @@ def _browser_login(
             token_status = _browser_token_status(driver, token)
             if 200 <= token_status < 300:
                 logger.info("[查活][浏览器] 保存 Session 已恢复，AT 浏览器内在线校验通过")
+                emit("登录完成：保存登录态在线校验通过")
                 return session_info
             logger.info("[查活][浏览器] 保存 Session 的 AT 校验状态=%s，继续重新登录", token_status)
 
@@ -634,11 +724,13 @@ def _browser_login(
         _clear_browser_auth_state(driver)
         logger.info("[查活][浏览器] 保存 Session 校验未通过，已清空旧登录态")
     logger.info("[查活][浏览器] 强制重新登录获取新 Session/AT")
+    emit("登录步骤 2/7：打开账号登录页面并检查人机验证")
     _safe_get(driver, "https://chatgpt.com/auth/login", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
     _wait_for_cloudflare_challenge(driver, timeout=300, headless=headless)
     from core.roxy_registration import _maybe_accept
     _maybe_accept(driver)
     otp_after_ts = time.time()
+    emit("登录步骤 3/7：填写并提交原账号邮箱")
     state = _submit_email_and_wait_next(
         driver,
         email,
@@ -646,15 +738,28 @@ def _browser_login(
         allow_login_password=True,
         allow_existing_session=False,
     )
+    state_labels = {
+        "login_password": "密码验证",
+        "totp": "2FA 验证",
+        "otp": "邮箱验证码",
+        "email_otp": "邮箱验证码",
+        "logged_in": "已登录",
+        "password": "创建密码",
+    }
+    emit(f"登录步骤 3/7：邮箱已提交，进入{state_labels.get(state, state or '未知页面')}")
     password = str(account.get("registration_password") or "").strip()
     totp_secret = str(account.get("totp_secret") or "").replace(" ", "").strip()
 
     if state == "logged_in":
+        if not require_session:
+            emit("登录步骤 7/7：已进入登录后的页面，Session 将在换绑成功后刷新")
+            return _wait_browser_logged_in_ui(driver, email, timeout=60)
         session_info = _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
         token = str(session_info.get("accessToken") or "").strip()
         token_status = _browser_token_status(driver, token) if token else 0
         if 200 <= token_status < 300:
             logger.info("[查活][浏览器] 当前 Session 的 AT 已通过浏览器内在线校验")
+            emit("登录步骤 7/7：新 Session/AT 在线校验通过")
             return session_info
         if not stale_session_retry:
             logger.warning(
@@ -669,36 +774,70 @@ def _browser_login(
                 headless=headless,
                 restore_saved_session=False,
                 stale_session_retry=True,
+                progress=progress,
+                require_session=require_session,
             )
         raise RuntimeError(f"彻底清理登录态后仍读取到失效 Session：AT 浏览器内校验状态={token_status}")
     if state == "login_password":
         if password:
             otp_after_ts = time.time()
             logger.info("[查活][浏览器] 使用保存账号密码登录")
+            emit("登录步骤 4/7：填写并提交账号密码")
             submission = _fill_login_password(driver, password)
             state = _wait_after_password(
                 driver,
                 submission=submission,
                 expect_totp=bool(totp_secret),
             )
+            emit(f"登录步骤 4/7：密码验证已完成，下一步为{state_labels.get(state, state or '未知页面')}")
         else:
             otp_after_ts = time.time()
             switched = _click_passwordless_signup_if_present(driver)
             if not switched.get("ok"):
                 raise RuntimeError("账号没有保存密码，且登录页没有一次性验证码入口")
             logger.info("[查活][浏览器] 未保存密码，已切换邮箱验证码登录")
+            emit("登录步骤 4/7：账号未保存密码，已切换邮箱验证码登录")
             state = "email_otp"
 
     if state == "totp":
         if not totp_secret:
             raise RuntimeError("账号要求 TOTP，但数据库没有保存 2FA secret")
         logger.info("[查活][浏览器] 提交 TOTP 动态验证码")
-        return _submit_totp_and_fetch_session(driver, totp_secret, max_attempts=2)
+        emit("登录步骤 5/7：生成并提交 2FA 动态验证码")
+        if require_session:
+            session_info = _submit_totp_and_fetch_session(driver, totp_secret, max_attempts=2)
+            emit("登录步骤 6/7：2FA 已通过，已获取新登录态")
+        else:
+            session_info = _submit_totp_with_stable_window(
+                driver,
+                totp_secret,
+                max_attempts=2,
+                on_submitted=lambda _code: _wait_browser_logged_in_ui(driver, email, timeout=90),
+            )
+            emit("登录步骤 6/7：2FA 已通过，已进入登录后的页面")
+        return session_info
     if state == "otp" or state == "email_otp":
         logger.info("[查活][浏览器] 等待邮箱登录验证码")
-        return _login_with_email_otp(driver, email, after_ts=otp_after_ts, max_attempts=3)
+        emit("登录步骤 5/7：等待并提交原邮箱登录验证码")
+        session_info = _login_with_email_otp(
+            driver,
+            email,
+            after_ts=otp_after_ts,
+            max_attempts=3,
+            require_session=require_session,
+        )
+        emit(
+            "登录步骤 6/7：邮箱验证码已通过，"
+            + ("已获取新登录态" if require_session else "已进入登录后的页面")
+        )
+        return session_info
     if state == "logged_in":
-        return _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
+        if not require_session:
+            emit("登录步骤 7/7：已进入登录后的页面，Session 将在换绑成功后刷新")
+            return _wait_browser_logged_in_ui(driver, email, timeout=60)
+        session_info = _fetch_chatgpt_session(driver, timeout=60, auto_jump_wait=8)
+        emit("登录步骤 7/7：已获取新 Session/AT")
+        return session_info
     if state == "password":
         raise RuntimeError("已注册账号进入创建密码页，登录状态与账号资料不一致")
     raise RuntimeError(f"指纹浏览器登录进入未知状态: {state}")

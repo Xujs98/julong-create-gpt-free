@@ -700,9 +700,13 @@ def _click_email_entry_option(driver) -> bool:
       .filter(visible)
       .map(el => ({el, attrs: attrText(el), href: String(el.getAttribute('href') || '').toLowerCase()}))
       .filter(x => !bad.test(x.attrs) && /(?:[?&]slm=1\b|\/login\b|\/signup\b|log.?in|sign.?up)/i.test(`${x.href} ${x.attrs}`));
-    if (welcome.length === 1) {
-      welcome[0].el.scrollIntoView({block:'center'});
-      return welcome[0].el;
+    if (welcome.length) {
+      // Guest shells now expose both login and signup buttons.  Prefer the
+      // stable login control instead of requiring one unique welcome item.
+      const login = welcome.find(x => /login-button|\/auth\/login|(?:^|\s)\/login(?:\s|$)|log.?in/.test(`${x.href} ${x.attrs}`))
+        || welcome[0];
+      login.el.scrollIntoView({block:'center'});
+      return login.el;
     }
     return null;
     """)
@@ -2637,19 +2641,41 @@ def _click_if_enabled_submit(driver) -> bool:
 def _read_chatgpt_session_once(driver) -> dict | None:
     """当前页面必须在 chatgpt.com；读取 /api/auth/session，拿不到 token 返回 None。"""
     script = r"""
-    const done = arguments[0];
-    fetch('/api/auth/session', {credentials: 'include'})
-      .then(r => r.json())
-      .then(j => done({ok: true, data: j}))
-      .catch(e => done({ok: false, error: String(e)}));
+    const timeoutMs = Math.max(1000, Number(arguments[0] || 15000));
+    const done = arguments[arguments.length - 1];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort('session_fetch_timeout'), timeoutMs);
+    fetch('/api/auth/session', {
+      credentials: 'include', cache: 'no-store', signal: controller.signal,
+      headers: {'accept':'application/json','cache-control':'no-cache'}
+    })
+      .then(async r => {
+        const text = await r.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch (_) {}
+        clearTimeout(timer);
+        done({ok: true, status: r.status, data});
+      })
+      .catch(e => {
+        clearTimeout(timer);
+        done({ok: false, timedOut: e && e.name === 'AbortError', error: String(e)});
+      });
     """
-    result = driver.execute_async_script(script)
+    setter = getattr(driver, "set_script_timeout", None)
+    if callable(setter):
+        try:
+            setter(22)
+        except Exception:
+            logger.debug("%s 设置 session 脚本超时失败", _log_prefix(driver), exc_info=True)
+    result = driver.execute_async_script(script, 15_000)
     if result and result.get("ok"):
         data = result.get("data") or {}
         if data.get("accessToken"):
             logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))
             return data
         logger.info("%s 等待 ChatGPT session 写入 accessToken，当前响应 keys=%s", _log_prefix(driver), list(data.keys()))
+    elif result and result.get("timedOut"):
+        logger.warning("%s /api/auth/session 页面请求超时，继续重试", _log_prefix(driver))
     return None
 
 

@@ -169,14 +169,49 @@ def test_totp_page_detector_rejects_explicit_email_verification_marker():
 def test_totp_submission_uses_liveness_stable_window_helper():
     driver = MagicMock()
     with patch("core.account_export._totp_code_with_margin", return_value="123456") as code_factory, patch(
-        "core.browser_liveness._submit_code_and_fetch_session",
+        "core.roxy_registration._fetch_chatgpt_session",
         return_value={"accessToken": "TOKEN"},
-    ) as submit:
+    ) as fetch_session, patch("core.roxy_registration._clear_otp_inputs") as clear_inputs, patch(
+        "core.roxy_registration._type_otp"
+    ) as type_otp, patch("core.roxy_registration._click_continue") as click_continue:
         result = _submit_totp_and_fetch_session(driver, "JBSWY3DPEHPK3PXP")
 
     assert result["accessToken"] == "TOKEN"
     code_factory.assert_called_once()
-    submit.assert_called_once_with(driver, "123456", code_kind="totp")
+    clear_inputs.assert_called_once_with(driver)
+    type_otp.assert_called_once_with(driver, "123456", timeout=20)
+    click_continue.assert_called_once_with(driver)
+    fetch_session.assert_called_once_with(driver, timeout=90, auto_jump_wait=12)
+
+
+def test_totp_session_timeout_after_navigation_retries_session_without_second_code():
+    driver = MagicMock()
+    with patch("core.account_export._totp_code_with_margin", return_value="123456"), patch(
+        "core.roxy_registration._fetch_chatgpt_session",
+        side_effect=[RuntimeError("session fetch timeout"), {"accessToken": "TOKEN"}],
+    ) as fetch_session, patch("core.roxy_registration._clear_otp_inputs") as clear_inputs, patch(
+        "core.roxy_registration._type_otp"
+    ) as type_otp, patch("core.roxy_registration._click_continue") as click_continue, patch(
+        "core.browser_liveness._is_totp_page", return_value=False
+    ):
+        result = _submit_totp_and_fetch_session(driver, "JBSWY3DPEHPK3PXP")
+
+    assert result["accessToken"] == "TOKEN"
+    assert fetch_session.call_count == 2
+    clear_inputs.assert_called_once_with(driver)
+    type_otp.assert_called_once_with(driver, "123456", timeout=20)
+    click_continue.assert_called_once_with(driver)
+
+
+def test_roxy_session_read_has_page_abort_and_rearms_script_timeout():
+    from core.roxy_registration import _read_chatgpt_session_once
+
+    driver = MagicMock()
+    driver.execute_async_script.return_value = {"ok": False, "timedOut": True}
+
+    assert _read_chatgpt_session_once(driver) is None
+    driver.set_script_timeout.assert_called_once_with(22)
+    assert driver.execute_async_script.call_args.args[-1] == 15_000
 
 
 def test_wait_after_password_returns_logged_in_without_resubmit():
