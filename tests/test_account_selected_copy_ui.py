@@ -6,7 +6,6 @@ import pytest
 ROOT = Path(__file__).parents[1]
 TEMPLATES = (
     ROOT / "webui" / "templates" / "index.html",
-    ROOT / "webui" / "templates" / "index_legacy.html",
 )
 
 
@@ -35,13 +34,9 @@ def test_selected_token_and_line_copy_use_selected_id_set(template):
     assert "fetchAccountSecrets(ids, 'copy_line')" in line_fn
 
 
-def test_modern_and_legacy_copy_buttons_follow_selection_disabled_state():
+def test_copy_buttons_follow_selection_disabled_state():
     modern = TEMPLATES[0].read_text(encoding="utf-8")
-    legacy = TEMPLATES[1].read_text(encoding="utf-8")
 
     assert 'id="btnCopySelectedTokensV2" disabled' in modern
     assert "'btnCopySelectedTokensV2', 'btnCopySelectedLinesV2'" in modern
     assert "bind('btnCopySelectedTokensV2', copySelectedAccountTokens);" in modern
-    assert 'id="btnCopySelectedTokens" disabled' in legacy
-    assert "copySelectedTokenBtn.disabled = ACCOUNT_SELECTED.size === 0" in legacy
-    assert "$('#btnCopySelectedTokens').addEventListener('click', copySelectedAccountTokens);" in legacy

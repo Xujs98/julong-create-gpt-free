@@ -8,7 +8,6 @@ from webui.app import _compact_account_for_list
 ROOT = Path(__file__).parents[1]
 TEMPLATES = (
     ROOT / "webui" / "templates" / "index.html",
-    ROOT / "webui" / "templates" / "index_legacy.html",
 )
 
 

@@ -2935,6 +2935,255 @@
       }
     }
 
+    /* ---- Commercial UI System v3: 全站商业化视觉与非原生下拉组件 ---- */
+    :root {
+      --bg: #f4f6fb;
+      --surface: #ffffff;
+      --soft: #f7f8fc;
+      --text: #172033;
+      --muted: #6f7b91;
+      --line: #e6eaf2;
+      --blue: #4f6bff;
+      --green: #159a72;
+      --red: #d94f5c;
+      --amber: #d98b28;
+      --sidebar-width: 244px;
+      --sidebar-accent: #4f6bff;
+      --sidebar-accent-soft: #eef1ff;
+    }
+    body {
+      background:
+        radial-gradient(circle at 88% -8%, rgba(99,102,241,.10), transparent 26%),
+        radial-gradient(circle at 16% 104%, rgba(45,212,191,.07), transparent 30%),
+        var(--bg);
+      color: var(--text);
+    }
+    .app-sidebar {
+      width: var(--sidebar-width);
+      border-right: 1px solid #e7eaf2;
+      background: rgba(255,255,255,.96);
+      box-shadow: 12px 0 36px rgba(29,41,81,.045);
+      backdrop-filter: blur(18px);
+    }
+    .sidebar-brand {
+      height: 76px; padding: 0 18px;
+      border-bottom: 1px solid #edf0f5;
+    }
+    .sidebar-brand-icon { width: 42px; height: 42px; }
+    .sidebar-brand-title { color: #192237; font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+    .sidebar-toggle { border-color: #e1e5ed; border-radius: 10px; background: #fff; box-shadow: 0 5px 14px rgba(35,48,88,.07); }
+    .sidebar-nav { padding: 15px 12px; gap: 5px; }
+    .app-sidebar .sidebar-nav button,
+    .app-sidebar .sidebar-nav button.sidebar-item {
+      min-height: 45px; padding: 0 13px; border: 1px solid transparent; border-radius: 11px;
+      color: #68748a; font-size: 13px; font-weight: 680;
+      transition: color .16s ease, background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+    .app-sidebar .sidebar-nav button:hover { color: #263149; background: #f7f8fb; transform: translateX(2px); }
+    .app-sidebar .sidebar-nav button.active {
+      color: var(--sidebar-accent); border-color: #dce2ff;
+      background: linear-gradient(135deg, #eef1ff, #f7f8ff);
+      box-shadow: inset 3px 0 0 var(--sidebar-accent), 0 8px 20px rgba(79,107,255,.08);
+    }
+    .sidebar-item-icon { width: 19px; height: 19px; }
+    .sidebar-footer { padding: 12px; border-top-color: #edf0f5; }
+    .sidebar-footer a, .sidebar-logout button {
+      min-height: 43px; padding: 0 13px; border-radius: 11px; font-size: 13px; font-weight: 680;
+    }
+    .sidebar-logout button { color: #a54851; }
+    main { margin-top: 22px; margin-bottom: 54px; gap: 18px; }
+    main > div:not(.hidden) { gap: 20px; }
+    .register-overview,
+    #tab-accounts > .register-title,
+    #tab-codex > .register-title,
+    #tab-outlook > .register-title {
+      position: relative;
+    }
+    .register-title {
+      margin: 0 0 15px; color: #172033; font-size: 27px; font-weight: 780;
+      line-height: 1.2; letter-spacing: -.035em;
+    }
+    .stat {
+      min-height: 118px; padding: 17px 18px;
+      border-color: #e7eaf1; border-radius: 16px;
+      box-shadow: 0 10px 26px rgba(28,40,82,.055);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+    .stat:hover { transform: translateY(-2px); border-color: #dce1ed; box-shadow: 0 16px 34px rgba(28,40,82,.09); }
+    .stat-top span { color: #8791a3; font-size: 11px; font-weight: 720; letter-spacing: .04em; }
+    .stat-icon { width: 36px; height: 36px; border-radius: 11px; }
+    .stat strong { margin-top: 13px; color: #172033; font-size: 25px; font-weight: 780; letter-spacing: -.03em; }
+    .jobs-panel-v2,
+    .accounts-panel-v2,
+    .codex-panel-v2,
+    .outlook-panel-v2 {
+      border: 1px solid #e5e9f1; border-radius: 18px; background: rgba(255,255,255,.98);
+      box-shadow: 0 14px 38px rgba(28,40,82,.065); overflow: hidden;
+    }
+    .jobs-toolbar-v2,
+    .accounts-filter-v2,
+    .codex-filter-v2,
+    .outlook-filter-v2 {
+      padding: 15px 17px; gap: 9px;
+      border-bottom: 1px solid #edf0f5; background: linear-gradient(180deg, #fff, #fbfcfe);
+    }
+    .jobs-toolbar-v2 .jobs-tb-field { color: #748096; font-size: 11px; font-weight: 720; }
+    .jobs-toolbar-v2 .jobs-tb-btn,
+    .accounts-filter-v2 .jobs-tb-btn,
+    .outlook-filter-v2 .jobs-tb-btn,
+    .codex-filter-v2 .jobs-tb-btn,
+    .jobs-tb-btn {
+      min-height: 39px; padding: 0 14px; border-color: #dfe4ed; border-radius: 10px;
+      background: #fff; color: #5b667a; font-size: 12px; font-weight: 720;
+      box-shadow: 0 4px 12px rgba(30,43,86,.035);
+      transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+    }
+    .jobs-toolbar-v2 .jobs-tb-btn:hover:not(:disabled),
+    .accounts-filter-v2 .jobs-tb-btn:hover:not(:disabled),
+    .outlook-filter-v2 .jobs-tb-btn:hover:not(:disabled),
+    .codex-filter-v2 .jobs-tb-btn:hover:not(:disabled),
+    .jobs-tb-btn:hover:not(:disabled) {
+      color: #34425c; border-color: #bdc7da; background: #fff; transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(30,43,86,.07);
+    }
+    .jobs-toolbar-v2 .jobs-tb-btn--primary,
+    .accounts-filter-v2 .jobs-tb-btn--primary,
+    .outlook-filter-v2 .jobs-tb-btn--primary,
+    .codex-filter-v2 .jobs-tb-btn--primary,
+    .jobs-tb-btn--primary {
+      border-color: #4f6bff; background: linear-gradient(135deg, #5873ff, #455eea); color: #fff;
+      box-shadow: 0 8px 18px rgba(79,107,255,.20);
+    }
+    .jobs-toolbar-v2 .jobs-tb-btn--primary:hover:not(:disabled),
+    .accounts-filter-v2 .jobs-tb-btn--primary:hover:not(:disabled),
+    .outlook-filter-v2 .jobs-tb-btn--primary:hover:not(:disabled),
+    .codex-filter-v2 .jobs-tb-btn--primary:hover:not(:disabled),
+    .jobs-tb-btn--primary:hover:not(:disabled) {
+      border-color: #3d52d5; background: linear-gradient(135deg, #4f69f1, #394fcf); color: #fff;
+    }
+    input:not([type="checkbox"]):not([type="radio"]), textarea {
+      border-color: #dfe4ed; border-radius: 10px; background: #fff; color: #263146;
+      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus {
+      outline: none; border-color: #8d9cff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); background: #fff;
+    }
+    .accounts-filter-v2 .acc-v2-search-wrap input,
+    .outlook-filter-v2 .acc-v2-search-wrap input,
+    .codex-filter-v2 input[type="search"] {
+      min-height: 41px; border-color: #e0e5ee; border-radius: 11px; background: #f8f9fc;
+    }
+    .jobs-table-v2-wrap,
+    .accounts-table-v2-wrap,
+    .codex-table-v2-wrap,
+    .outlook-table-v2-wrap { background: #fff; }
+    .jobs-table-v2 thead th,
+    .accounts-table-v2 thead th,
+    .codex-table-v2 thead th,
+    .outlook-table-v2 thead th {
+      height: 45px; border-bottom-color: #e9edf4; background: #f8f9fc;
+      color: #748096; font-size: 10px; font-weight: 800; letter-spacing: .055em;
+    }
+    .jobs-table-v2 tbody td,
+    .accounts-table-v2 tbody td,
+    .codex-table-v2 tbody td,
+    .outlook-table-v2 tbody td { border-bottom-color: #edf0f5; color: #445066; }
+    .jobs-table-v2 tbody tr:hover td,
+    .accounts-table-v2 tbody tr:hover td,
+    .codex-table-v2 tbody tr:hover td,
+    .outlook-table-v2 tbody tr:hover td { background: #fafbff; }
+    .jobs-v2-pager { min-height: 55px; padding: 10px 17px; border-top-color: #edf0f5; background: #fbfcfe; }
+    .outlook-import-dialog,
+    .accounts-filter-dialog,
+    .account-groups-dialog,
+    .account-export-dialog,
+    .account-rebind-dialog {
+      border: 1px solid #e3e7ef; border-radius: 18px; background: #fff;
+      box-shadow: 0 28px 90px rgba(20,30,62,.24);
+    }
+    .outlook-import-head,
+    .account-export-head,
+    .account-groups-head,
+    .account-rebind-head {
+      padding: 19px 22px; border-bottom-color: #edf0f5; background: linear-gradient(180deg, #fff, #fbfcff);
+    }
+    .outlook-import-head h3,
+    .account-export-head h3,
+    .account-groups-head h3,
+    .account-rebind-head h3 { color: #172033; font-size: 18px; font-weight: 760; }
+    .outlook-import-foot,
+    .account-export-foot,
+    .account-rebind-foot { border-top-color: #edf0f5; background: #fbfcfe; }
+    .config-section-v2 { position: relative; overflow: visible; }
+    .config-section-v2:has(.config-ep-select.open) { z-index: 120; }
+    .config-section-v2-head { border-radius: 18px 18px 0 0; }
+    .config-section-v2-actions { border-radius: 0 0 18px 18px; }
+    .config-ep-select.open { z-index: 200; }
+    .config-ep-select-menu { z-index: 240; }
+
+    /* 所有原生 select 仅作为数据容器，可见交互由统一商业化组件接管。 */
+    select.ui-select-native-v3 {
+      position: absolute !important; width: 1px !important; height: 1px !important;
+      min-width: 1px !important; min-height: 1px !important; margin: 0 !important; padding: 0 !important;
+      opacity: 0 !important; pointer-events: none !important; overflow: hidden !important;
+    }
+    .ui-select-v3 { position: relative; display: block; width: 100%; min-width: 0; margin-top: 6px; }
+    .ui-select-trigger-v3 {
+      position: relative; width: 100%; min-height: 42px; margin: 0; padding: 0 38px 0 13px;
+      border: 1px solid #dfe4ed; border-radius: 10px; background: #fff; color: #2c374c;
+      font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer;
+      display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      box-shadow: inset 0 1px 1px rgba(20,30,55,.02);
+      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    .ui-select-trigger-v3::after {
+      content: ''; position: absolute; right: 14px; top: 50%; width: 7px; height: 7px;
+      border-right: 2px solid #8b95a7; border-bottom: 2px solid #8b95a7;
+      transform: translateY(-65%) rotate(45deg); transition: transform .16s ease;
+    }
+    .ui-select-v3.is-open .ui-select-trigger-v3,
+    .ui-select-trigger-v3:hover,
+    .ui-select-trigger-v3:focus-visible {
+      outline: none; border-color: #8798ff; background: #fff; box-shadow: 0 0 0 3px rgba(79,107,255,.10);
+    }
+    .ui-select-v3.is-open .ui-select-trigger-v3::after { transform: translateY(-30%) rotate(225deg); }
+    .ui-select-trigger-v3:disabled { color: #a3abba; background: #f5f6f8; cursor: not-allowed; box-shadow: none; }
+    .ui-select-menu-v3 {
+      position: fixed; display: none; z-index: 6000; max-height: 320px; padding: 7px;
+      border: 1px solid #e2e6ef; border-radius: 13px; background: rgba(255,255,255,.985);
+      box-shadow: 0 24px 60px rgba(20,30,62,.20), 0 4px 16px rgba(20,30,62,.08);
+      overflow-y: auto; overscroll-behavior: contain; backdrop-filter: blur(16px);
+    }
+    .ui-select-menu-v3.is-open { display: grid; gap: 3px; animation: uiSelectInV3 .14s ease-out; }
+    .ui-select-option-v3 {
+      position: relative; width: 100%; min-height: 38px; margin: 0; padding: 8px 34px 8px 12px;
+      border: 0; border-radius: 9px; background: transparent; color: #59657a;
+      font: inherit; font-size: 13px; font-weight: 620; text-align: left; cursor: pointer;
+    }
+    .ui-select-option-v3:hover { color: #32415d; background: #f5f6fa; }
+    .ui-select-option-v3.is-selected { color: #4f6bff; background: #eef1ff; font-weight: 750; }
+    .ui-select-option-v3.is-selected::after {
+      content: ''; position: absolute; right: 13px; top: 50%; width: 9px; height: 5px;
+      border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-65%) rotate(-45deg);
+    }
+    .ui-select-option-v3:disabled { color: #b1b8c4; cursor: not-allowed; background: transparent; }
+    .jobs-tb-field .ui-select-v3 { width: 142px; margin-top: 0; }
+    .jobs-tb-field .ui-select-trigger-v3 { min-height: 38px; font-size: 12px; }
+    .config-field-v2-control .ui-select-v3 { margin-top: 0; }
+    .outlook-import-field .ui-select-v3,
+    .account-rebind-field .ui-select-v3 { margin-top: 8px; }
+    .jobs-v2-pager .ui-select-v3 { display: inline-block; width: 108px; margin: 0; vertical-align: middle; }
+    .jobs-v2-pager .ui-select-trigger-v3 { min-height: 34px; padding-left: 10px; font-size: 11px; }
+    @keyframes uiSelectInV3 { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @media (prefers-reduced-motion: reduce) { .ui-select-menu-v3.is-open { animation: none; } }
+    @media (max-width: 700px) {
+      :root { --sidebar-width: 64px; }
+      .app-sidebar { width: var(--sidebar-width); }
+      .register-title { font-size: 23px; }
+      .stat { min-height: 108px; }
+      .ui-select-menu-v3 { max-height: min(320px, calc(100vh - 24px)); }
+    }
+
   </style>
 </head>
 <body>
@@ -2992,12 +3241,6 @@ try {
         <circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/>
       </svg>
       <span>矩龙 API</span>
-    </a>
-    <a href="/?ui=legacy" title="切换到历史版顶部导航 UI">
-      <svg class="sidebar-footer-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M3 6h18M3 12h18M3 18h18"/>
-      </svg>
-      <span>切换老 UI</span>
     </a>
     <form class="sidebar-logout" method="post" action="/logout">
       <button type="submit">
@@ -3701,6 +3944,179 @@ try {
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+// 全站统一商业化下拉组件：原生 select 保留数据、表单与 change 语义，可见菜单使用 body portal 避免被容器裁切。
+const UI_SELECT_STATE_V3 = { select: null, wrap: null, trigger: null, menu: null };
+
+function ensureCommercialSelectMenuV3() {
+  if (UI_SELECT_STATE_V3.menu?.isConnected) return UI_SELECT_STATE_V3.menu;
+  const menu = document.createElement('div');
+  menu.className = 'ui-select-menu-v3';
+  menu.setAttribute('role', 'listbox');
+  menu.addEventListener('click', (event) => {
+    const optionButton = event.target.closest('[data-ui-select-index-v3]');
+    const select = UI_SELECT_STATE_V3.select;
+    if (!optionButton || !select || optionButton.disabled) return;
+    const index = Number(optionButton.dataset.uiSelectIndexV3);
+    if (!Number.isInteger(index) || !select.options[index]) return;
+    select.selectedIndex = index;
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    syncCommercialSelectV3(select);
+    closeCommercialSelectV3({ restoreFocus: true });
+  });
+  document.body.appendChild(menu);
+  UI_SELECT_STATE_V3.menu = menu;
+  return menu;
+}
+
+function commercialSelectLabelV3(select) {
+  const option = select.selectedOptions?.[0] || select.options?.[select.selectedIndex] || select.options?.[0];
+  return String(option?.textContent || select.dataset.placeholder || '请选择').trim();
+}
+
+function syncCommercialSelectV3(select) {
+  if (!select) return;
+  const wrap = select.closest('.ui-select-v3');
+  const trigger = wrap?.querySelector('.ui-select-trigger-v3');
+  if (!wrap || !trigger) return;
+  trigger.textContent = commercialSelectLabelV3(select);
+  trigger.disabled = !!select.disabled;
+  trigger.setAttribute('aria-disabled', String(!!select.disabled));
+  if (UI_SELECT_STATE_V3.select === select) renderCommercialSelectMenuV3(select);
+}
+
+function positionCommercialSelectMenuV3() {
+  const { trigger, menu } = UI_SELECT_STATE_V3;
+  if (!trigger || !menu?.classList.contains('is-open')) return;
+  const rect = trigger.getBoundingClientRect();
+  const viewportGap = 10;
+  const width = Math.max(rect.width, 180);
+  menu.style.width = `${Math.min(width, window.innerWidth - viewportGap * 2)}px`;
+  menu.style.maxHeight = `${Math.max(140, Math.min(320, window.innerHeight - viewportGap * 2))}px`;
+  const menuHeight = Math.min(menu.scrollHeight, parseFloat(menu.style.maxHeight) || 320);
+  const below = window.innerHeight - rect.bottom - viewportGap;
+  const above = rect.top - viewportGap;
+  const openAbove = below < Math.min(menuHeight, 190) && above > below;
+  const top = openAbove
+    ? Math.max(viewportGap, rect.top - menuHeight - 8)
+    : Math.min(window.innerHeight - menuHeight - viewportGap, rect.bottom + 8);
+  const left = Math.min(Math.max(viewportGap, rect.left), Math.max(viewportGap, window.innerWidth - width - viewportGap));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(viewportGap, top)}px`;
+}
+
+function renderCommercialSelectMenuV3(select) {
+  const menu = ensureCommercialSelectMenuV3();
+  const buttons = Array.from(select.options || []).map((option, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `ui-select-option-v3${index === select.selectedIndex ? ' is-selected' : ''}`;
+    button.dataset.uiSelectIndexV3 = String(index);
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(index === select.selectedIndex));
+    button.disabled = !!option.disabled;
+    button.textContent = String(option.textContent || option.value || '请选择').trim();
+    return button;
+  });
+  menu.replaceChildren(...buttons);
+  positionCommercialSelectMenuV3();
+}
+
+function closeCommercialSelectV3(options = {}) {
+  const { wrap, trigger, menu } = UI_SELECT_STATE_V3;
+  wrap?.classList.remove('is-open');
+  trigger?.setAttribute('aria-expanded', 'false');
+  menu?.classList.remove('is-open');
+  if (menu) menu.innerHTML = '';
+  UI_SELECT_STATE_V3.select = null;
+  UI_SELECT_STATE_V3.wrap = null;
+  UI_SELECT_STATE_V3.trigger = null;
+  if (options.restoreFocus) trigger?.focus();
+}
+
+function openCommercialSelectV3(select) {
+  if (!select || select.disabled) return;
+  const wrap = select.closest('.ui-select-v3');
+  const trigger = wrap?.querySelector('.ui-select-trigger-v3');
+  if (!wrap || !trigger) return;
+  if (UI_SELECT_STATE_V3.select === select) {
+    closeCommercialSelectV3();
+    return;
+  }
+  closeCommercialSelectV3();
+  const menu = ensureCommercialSelectMenuV3();
+  UI_SELECT_STATE_V3.select = select;
+  UI_SELECT_STATE_V3.wrap = wrap;
+  UI_SELECT_STATE_V3.trigger = trigger;
+  wrap.classList.add('is-open');
+  trigger.setAttribute('aria-expanded', 'true');
+  menu.classList.add('is-open');
+  renderCommercialSelectMenuV3(select);
+  requestAnimationFrame(positionCommercialSelectMenuV3);
+}
+
+function enhanceCommercialSelectV3(select) {
+  if (!select || select.multiple || select.dataset.uiSelectEnhancedV3 === '1') return;
+  select.dataset.uiSelectEnhancedV3 = '1';
+  select.classList.add('ui-select-native-v3');
+  select.setAttribute('aria-hidden', 'true');
+  select.tabIndex = -1;
+  const wrap = document.createElement('div');
+  wrap.className = 'ui-select-v3';
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'ui-select-trigger-v3';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  wrap.appendChild(trigger);
+  trigger.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openCommercialSelectV3(select);
+  });
+  trigger.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openCommercialSelectV3(select);
+    }
+    if (event.key === 'Escape') closeCommercialSelectV3({ restoreFocus: true });
+  });
+  select.addEventListener('change', () => syncCommercialSelectV3(select));
+  new MutationObserver(() => syncCommercialSelectV3(select)).observe(select, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected', 'label']
+  });
+  syncCommercialSelectV3(select);
+}
+
+function enhanceCommercialSelectsV3(root = document) {
+  if (root instanceof HTMLSelectElement) enhanceCommercialSelectV3(root);
+  root.querySelectorAll?.('select').forEach(enhanceCommercialSelectV3);
+}
+
+function installCommercialSelectsV3() {
+  enhanceCommercialSelectsV3(document);
+  const observer = new MutationObserver((records) => {
+    records.forEach(record => record.addedNodes.forEach(node => {
+      if (node.nodeType === Node.ELEMENT_NODE) enhanceCommercialSelectsV3(node);
+    }));
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('.ui-select-v3, .ui-select-menu-v3')) return;
+    closeCommercialSelectV3();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && UI_SELECT_STATE_V3.select) closeCommercialSelectV3({ restoreFocus: true });
+  });
+  window.addEventListener('resize', positionCommercialSelectMenuV3);
+  window.addEventListener('scroll', () => closeCommercialSelectV3(), true);
+  window.syncCommercialSelectV3 = syncCommercialSelectV3;
+}
+
+installCommercialSelectsV3();
 let copySeq = 0;
 const copyStore = new Map();
 let ACCOUNTS = [], OUTLOOK = [], CONFIG = [];
@@ -4054,7 +4470,10 @@ function getRegistrationEmailSource() {
 function setRegistrationEmailSource(value, persist=true) {
   const next = REG_EMAIL_SOURCE_VALUES.has(String(value || '')) ? String(value || '') : '';
   const el = document.getElementById('regEmailSourceV2');
-  if (el) el.value = next;
+  if (el) {
+    el.value = next;
+    syncCommercialSelectV3(el);
+  }
   if (persist) localStorage.setItem(REG_EMAIL_SOURCE_STORAGE_KEY, next);
 }
 
@@ -5661,6 +6080,7 @@ function renderRebindGroupOptions() {
     `<option value="${attrEsc(group.id)}" data-group-name="${attrEsc(group.name || '')}">${esc(group.name || `分组 ${group.id}`)}</option>`
   ).join('');
   if (current && groups.some(group => String(group.id) === current)) select.value = current;
+  syncCommercialSelectV3(select);
 }
 function setRebindResult(message, tone = 'warn') {
   const el = $('#accountRebindResultV2');
@@ -5754,7 +6174,10 @@ async function openAccountRebindModal() {
   $('#accountRebindCountV2').value = String(Math.max(1, Math.min(ids.length, 1)));
   $('#accountRebindWorkersV2').value = '1';
   const groupSelect = $('#accountRebindGroupV2');
-  if (groupSelect) groupSelect.value = '';
+  if (groupSelect) {
+    groupSelect.value = '';
+    syncCommercialSelectV3(groupSelect);
+  }
   const poolList = $('#accountRebindPoolListV2');
   if (poolList) poolList.innerHTML = '<div class="account-rebind-hint">正在读取邮箱池…</div>';
   REBIND_POOL_SUMMARY = {};
@@ -8434,57 +8857,23 @@ function registrationDriverLabel(value) {
   const hit = registrationDriverChoices().find(c => String(c.value) === cur);
   return hit ? String(hit.label || hit.value) : (cur || '—');
 }
-function closeConfigEpSelects(exceptId) {
-  document.querySelectorAll('.config-ep-select.open').forEach(el => {
-    if (exceptId && el.id === exceptId) return;
-    el.classList.remove('open');
-  });
-}
-function toggleConfigEpSelect(wrapId, e) {
-  if (e) { e.preventDefault(); e.stopPropagation(); }
-  const wrap = document.getElementById(wrapId);
-  if (!wrap) return;
-  const willOpen = !wrap.classList.contains('open');
-  closeConfigEpSelects(wrapId);
-  wrap.classList.toggle('open', willOpen);
-}
-function setRegistrationDriverValue(value) {
-  const cur = String(value || 'protocol').trim().toLowerCase() || 'protocol';
-  setConfigPendingValueV2('REGISTRATION_DRIVER', cur);
-  closeConfigEpSelects();
-  renderRegistrationDriverCard();
-  const sectionMount = document.getElementById('configRegistrationSelectV2');
-  if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
-  bindRoxyWorkspaceToolsV2();
-  bindCloudMailToolsV2();
-  syncConfigDirtyIndicatorsV2();
-}
-function renderRegistrationEpSelect(mount, wrapId) {
-  if (!mount) return;
-  const cur = getRegistrationDriverValue();
-  const label = registrationDriverLabel(cur);
-  const items = registrationDriverChoices().map(c => `
-    <button type="button" class="config-ep-select-item${c.value === cur ? ' is-active' : ''}" role="option" data-driver-value="${attrEsc(c.value)}">${esc(c.label)}</button>
-  `).join('');
-  mount.className = 'config-ep-select';
-  mount.id = wrapId;
-  mount.innerHTML = `
-    <button type="button" class="config-ep-select-btn" data-ep-toggle="${attrEsc(wrapId)}">${esc(label)}</button>
-    <div class="config-ep-select-menu" role="listbox">${items}</div>
-    <input type="hidden" data-key="REGISTRATION_DRIVER" value="${attrEsc(cur)}">
-  `;
-}
 function renderRegistrationDriverCard() {
   renderConfigOverviewCardsV2();
 }
 function renderRegistrationDriverField(f) {
+  const cur = getRegistrationDriverValue();
+  const options = registrationDriverChoices().map(choice => `
+    <option value="${attrEsc(choice.value)}"${choice.value === cur ? ' selected' : ''}>${esc(choice.label)}</option>
+  `).join('');
   return `
     <label class="fld config-select-v2-field">
       <span class="config-field-v2-copy">
         <span class="config-field-v2-label">注册方式</span>
         <span class="hint">选择注册所用的自动化方式</span>
       </span>
-      <div class="config-field-v2-control"><div class="config-ep-select" id="configRegistrationSelectV2"></div></div>
+      <div class="config-field-v2-control">
+        <select id="configRegistrationSelectV3" data-key="REGISTRATION_DRIVER">${options}</select>
+      </div>
     </label>
   `;
 }
@@ -8632,7 +9021,10 @@ function openExtractLinkApiModal() {
   const type = document.getElementById('extractApiType');
   const workers = document.getElementById('extractApiWorkers');
   const result = document.getElementById('extractApiResult');
-  if (type) type.value = 'pix';
+  if (type) {
+    type.value = 'pix';
+    syncCommercialSelectV3(type);
+  }
   if (workers) workers.value = '3';
   if (result) result.innerHTML = '';
   modal.classList.remove('hidden'); modal.style.display = 'flex'; updateModalScrollLock();
@@ -8988,18 +9380,10 @@ function codexOauthDriverLabel(value) {
   const hit = codexOauthDriverChoices().find(c => String(c.value) === cur);
   return hit ? String(hit.label || hit.value) : (cur || '—');
 }
-function setCodexOauthDriverValue(value) {
-  const cur = String(value || 'protocol').trim().toLowerCase() || 'protocol';
-  setConfigPendingValueV2('CODEX_OAUTH_DRIVER', cur);
-  closeConfigEpSelects();
-  renderConfigLayoutV2();
-}
 function renderCodexOauthDriverField() {
   const cur = getCodexOauthDriverValue();
-  const label = codexOauthDriverLabel(cur);
-  const wrapId = 'configCodexOauthSelectV2';
-  const items = codexOauthDriverChoices().map(c => `
-    <button type="button" class="config-ep-select-item${c.value === cur ? ' is-active' : ''}" role="option" data-codex-oauth-value="${attrEsc(c.value)}">${esc(c.label)}</button>
+  const options = codexOauthDriverChoices().map(choice => `
+    <option value="${attrEsc(choice.value)}"${choice.value === cur ? ' selected' : ''}>${esc(choice.label)}</option>
   `).join('');
   return `
     <label class="fld config-select-v2-field">
@@ -9008,11 +9392,7 @@ function renderCodexOauthDriverField() {
         <span class="hint">选择 Codex 授权所用的自动化方式</span>
       </span>
       <div class="config-field-v2-control">
-        <div class="config-ep-select" id="${wrapId}">
-          <button type="button" class="config-ep-select-btn" data-ep-toggle="${wrapId}">${esc(label)}</button>
-          <div class="config-ep-select-menu" role="listbox">${items}</div>
-          <input type="hidden" data-key="CODEX_OAUTH_DRIVER" value="${attrEsc(cur)}">
-        </div>
+        <select id="configCodexOauthSelectV3" data-key="CODEX_OAUTH_DRIVER">${options}</select>
       </div>
     </label>
   `;
@@ -9283,8 +9663,6 @@ function renderConfigLayoutV2() {
   `).join('');
   sections.innerHTML = names.map(name => renderConfigSectionV2(name, groups[name] || [])).join('');
   renderRegistrationDriverCard();
-  const sectionMount = document.getElementById('configRegistrationSelectV2');
-  if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
   bindCloudMailToolsV2();
   bindProxyTestToolsV2();
@@ -9347,30 +9725,7 @@ function bindConfigLayoutV2() {
         renderConfigLayoutV2();
         return;
       }
-      const toggle = e.target.closest('[data-ep-toggle]');
-      if (toggle) {
-        toggleConfigEpSelect(toggle.dataset.epToggle, e);
-        return;
-      }
-      const item = e.target.closest('[data-driver-value]');
-      if (item) {
-        e.preventDefault();
-        e.stopPropagation();
-        setRegistrationDriverValue(item.dataset.driverValue);
-        return;
-      }
-      const oauthItem = e.target.closest('[data-codex-oauth-value]');
-      if (oauthItem) {
-        e.preventDefault();
-        e.stopPropagation();
-        setCodexOauthDriverValue(oauthItem.dataset.codexOauthValue);
-        return;
-      }
     });
-  }
-  if (!document.documentElement.dataset.configEpCloseBound) {
-    document.documentElement.dataset.configEpCloseBound = '1';
-    document.addEventListener('click', () => closeConfigEpSelects());
   }
   const sectionRoot = document.getElementById('configSectionsV2');
   if (sectionRoot && 'IntersectionObserver' in window) {

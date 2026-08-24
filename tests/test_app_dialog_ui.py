@@ -4,10 +4,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 TEMPLATES = ROOT / "webui" / "templates"
-PAGE_TEMPLATES = ("index.html", "index_legacy.html")
+PAGE_TEMPLATES = ("index.html",)
 
 
-def test_both_webuis_include_the_shared_app_dialog():
+def test_webui_includes_the_shared_app_dialog():
     for name in PAGE_TEMPLATES:
         source = (TEMPLATES / name).read_text(encoding="utf-8")
         assert '{% include "_app_dialog.html" %}' in source

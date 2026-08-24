@@ -107,16 +107,15 @@ def test_proxy_country_search_backfills_legacy_proxy_label():
 
 def test_account_search_inputs_explain_formula_syntax():
     root = Path(__file__).parents[1]
-    for relative in ("webui/templates/index.html", "webui/templates/index_legacy.html"):
-        source = (root / relative).read_text(encoding="utf-8")
-        assert "[提链=true]" in source
-        assert "[提链=false]" in source
-        assert "![提链=true]" in source
-        assert "![提链=false]" in source
-        assert "[@邮箱]" in source
-        assert "[@icloud.com]" in source
-        assert "&&" in source
-        assert "!**free" in source
+    source = (root / "webui/templates/index.html").read_text(encoding="utf-8")
+    assert "[提链=true]" in source
+    assert "[提链=false]" in source
+    assert "![提链=true]" in source
+    assert "![提链=false]" in source
+    assert "[@邮箱]" in source
+    assert "[@icloud.com]" in source
+    assert "&&" in source
+    assert "!**free" in source
 
 
 

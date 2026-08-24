@@ -5,7 +5,6 @@ from webui.config_editor import EDITABLE_FIELDS
 
 ROOT = Path(__file__).parents[1]
 MODERN = ROOT / "webui" / "templates" / "index.html"
-LEGACY = ROOT / "webui" / "templates" / "index_legacy.html"
 
 
 def test_modern_rebind_toolbar_and_dialog_are_present():
@@ -48,17 +47,18 @@ def test_rebind_ui_enforces_selection_pool_group_and_worker_limits():
 
 def test_rebind_dialog_requires_fresh_pool_and_group_choices_each_time():
     source = MODERN.read_text(encoding="utf-8")
-    assert "if (groupSelect) groupSelect.value = ''" in source
+    assert "groupSelect.value = ''" in source
+    assert "syncCommercialSelectV3(groupSelect)" in source
     assert "正在读取邮箱池…" in source
     assert "REBIND_POOL_SUMMARY = {}" in source
     assert "await loadAccountGroups(false)" in source
 
 
-def test_rebind_changes_are_modern_only():
+def test_legacy_ui_and_switch_are_removed():
     modern = MODERN.read_text(encoding="utf-8")
-    legacy = LEGACY.read_text(encoding="utf-8")
     assert "accountRebindModal" in modern
-    assert "accountRebindModal" not in legacy
+    assert "切换老 UI" not in modern
+    assert not (ROOT / "webui" / "templates" / "index_legacy.html").exists()
 
 
 def test_live_check_config_is_presented_as_shared_rebind_mode():

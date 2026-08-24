@@ -8,7 +8,6 @@ from webui.app import create_app
 ROOT = Path(__file__).parents[1]
 MODERN = ROOT / "webui" / "templates" / "index.html"
 LOGIN = ROOT / "webui" / "templates" / "login.html"
-LEGACY = ROOT / "webui" / "templates" / "index_legacy.html"
 LOGO = ROOT / "webui" / "static" / "brand" / "julong-logo.png"
 
 
@@ -27,14 +26,12 @@ def test_transparent_brand_assets_exist():
 def test_pages_use_julong_branding_and_favicon():
     modern = MODERN.read_text(encoding="utf-8")
     login = LOGIN.read_text(encoding="utf-8")
-    legacy = LEGACY.read_text(encoding="utf-8")
 
     assert "矩龙 搞号" in modern
     assert "矩龙 搞号" in login
-    assert "矩龙 搞号" in legacy
     assert 'src="/static/brand/julong-logo.png"' in modern
     assert 'src="/static/brand/julong-logo.png"' in login
-    assert all("/static/brand/julong-favicon.png" in source for source in (modern, login, legacy))
+    assert all("/static/brand/julong-favicon.png" in source for source in (modern, login))
     assert "GPT Registrator" not in modern
     assert "GPT Registrator" not in login
 

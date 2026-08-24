@@ -34,7 +34,6 @@ def test_inject_session_bulk_rejects_empty_selection():
 
 def test_inject_session_ui_shows_first_failure_reason():
     root = Path(__file__).resolve().parents[1]
-    for template in ("index.html", "index_legacy.html"):
-        source = (root / "webui" / "templates" / template).read_text(encoding="utf-8")
-        assert "problems[0]?.reason" in source
-        assert "失败 ${problems.length}${reason}" in source
+    source = (root / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert "problems[0]?.reason" in source
+    assert "失败 ${problems.length}${reason}" in source

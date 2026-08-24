@@ -21,20 +21,18 @@ def test_account_email_is_a_copyable_text_button():
 
 def test_failed_twofa_state_retries_after_confirmation():
     root = Path(__file__).parents[1]
-    for template in (root / "webui" / "templates" / "index.html", root / "webui" / "templates" / "index_legacy.html"):
-        source = template.read_text(encoding="utf-8")
-        assert 'data-account-setup-twofa="${esc(r.id)}"' in source
-        assert "retryAccountTwofa" in source
-        assert "await appConfirm(" in source
-        assert "/setup-2fa" in source
+    source = (root / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'data-account-setup-twofa="${esc(r.id)}"' in source
+    assert "retryAccountTwofa" in source
+    assert "await appConfirm(" in source
+    assert "/setup-2fa" in source
 
 
 def test_account_actions_include_twofa_reset_and_log_entries():
     root = Path(__file__).parents[1]
-    for template in (root / "webui" / "templates" / "index.html", root / "webui" / "templates" / "index_legacy.html"):
-        source = template.read_text(encoding="utf-8")
-        assert "重新设置2FA" in source
-        assert "重设2FA日志" in source
-        assert 'data-account-twofa-log="${esc(r.email)}"' in source
-        assert "/api/accounts/twofa-log?email=" in source
-        assert "openTwofaLog" in source
+    source = (root / "webui" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert "重新设置2FA" in source
+    assert "重设2FA日志" in source
+    assert 'data-account-twofa-log="${esc(r.email)}"' in source
+    assert "/api/accounts/twofa-log?email=" in source
+    assert "openTwofaLog" in source

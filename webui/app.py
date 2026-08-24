@@ -18,7 +18,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from flask import Flask, Response, jsonify, make_response, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
 from webui.auth import init_auth, register_auth_routes
@@ -511,19 +511,7 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     @app.get("/")
     def index():
-        requested_ui = (request.args.get("ui") or "").strip().lower()
-        if requested_ui in {"legacy", "modern"}:
-            ui_mode = requested_ui
-        else:
-            ui_mode = (request.cookies.get("ui_mode") or "modern").strip().lower()
-            if ui_mode not in {"legacy", "modern"}:
-                ui_mode = "modern"
-
-        template_name = "index_legacy.html" if ui_mode == "legacy" else "index.html"
-        resp = make_response(render_template(template_name))
-        if requested_ui in {"legacy", "modern"}:
-            resp.set_cookie("ui_mode", ui_mode, max_age=60 * 60 * 24 * 365, samesite="Lax")
-        return resp
+        return render_template("index.html")
 
     # ----------------------------------------------------------
     # 统计概览
