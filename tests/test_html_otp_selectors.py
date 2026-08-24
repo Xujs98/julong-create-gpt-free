@@ -39,6 +39,17 @@ class HtmlOtpSelectorTests(unittest.TestCase):
             "482931",
         )
 
+    def test_selector_accepts_html_inspector_tag_notation(self):
+        html = "<section class='otp'><code>936885</code></section>"
+        self.assertEqual(
+            generic_api_mail_client._extract_html_selector_code(html, ["<code>"]),
+            "936885",
+        )
+        self.assertEqual(
+            generic_api_mail_client._extract_html_selector_code(html, ["</code>"]),
+            "936885",
+        )
+
     @patch("core.icloud_client.requests.get")
     @patch("core.icloud_client.get_account_context")
     def test_icloud_prefers_configured_element_over_page_noise(self, get_context, request_get):

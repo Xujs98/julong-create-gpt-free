@@ -105,6 +105,11 @@ def _normalise_html_otp_selectors(selectors=None) -> list[str]:
         value = str(raw or "").strip()
         if not value:
             continue
+        # 网页检查器常把标签显示为 ``<code>``；配置中允许直接粘贴
+        # ``<tag>`` 或 ``</tag>``，统一转换为 CSS 的裸标签选择器。
+        tag_match = re.fullmatch(r"</?\s*([A-Za-z][A-Za-z0-9:_-]*)\s*>", value)
+        if tag_match:
+            value = tag_match.group(1)
         # 便于直接填写属性名，统一转换为 CSS 选择器。
         lowered = value.lower()
         if lowered.startswith("id=") or lowered.startswith("id:"):
@@ -122,6 +127,10 @@ def _parse_html_otp_selector(selector: str) -> dict:
     result = {"tag": "", "id": "", "classes": [], "bare": ""}
     if not value:
         return result
+
+    tag_match = re.fullmatch(r"</?\s*([A-Za-z][A-Za-z0-9:_-]*)\s*>", value)
+    if tag_match:
+        value = tag_match.group(1)
 
     lowered = value.lower()
     if lowered.startswith("id=") or lowered.startswith("id:"):

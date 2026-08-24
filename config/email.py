@@ -64,7 +64,8 @@ ICLOUD_REQUEST_TIMEOUT = 20
 ICLOUD_VERIFY_TLS = True
 
 # HTML 取码页的可选 CSS 选择器，按顺序逐行填写多个值。
-# 支持：#otp、.verification-code、id=otp、class=verification-code，以及 tag#id/tag.class。
+# 支持：#otp、.verification-code、id=otp、class=verification-code、裸标签 code，
+# 以及网页检查器格式的 <code> / </code> 和 tag#id/tag.class。
 # 选择器命中后优先从对应元素文本提取 6 位验证码，再回退到整页文本识别。
 HTML_OTP_SELECTORS = []
 
