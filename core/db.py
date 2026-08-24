@@ -3956,12 +3956,23 @@ def _elapsed_seconds(started_at: Any, completed_at: Any = None, *, now: datetime
         return 0
 
 
+def _registration_success_rate(success_count: Any, failed_count: Any) -> float:
+    """按已产生终态结果的任务计算注册成功率，保留两位小数。"""
+    success = max(0, int(success_count or 0))
+    failed = max(0, int(failed_count or 0))
+    completed = success + failed
+    return round(success * 100 / completed, 2) if completed else 0.0
+
+
 def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime | None = None) -> dict:
     """根据批次关联任务生成实时统计，不依赖前端自行猜测任务状态。"""
     current_time = now or datetime.now()
     if str(batch.get("status") or "") == "completed" and batch.get("completed_at"):
         # 批次终态一旦落盘就保持不变；后续删除单任务记录不应改写历史成功/失败统计。
         result = dict(batch)
+        result["success_rate"] = _registration_success_rate(
+            result.get("success_count"), result.get("failed_count")
+        )
         result["elapsed_seconds"] = _elapsed_seconds(batch.get("started_at"), batch.get("completed_at"), now=current_time)
         return result
     batch_id = int(batch.get("id") or 0)
@@ -3969,18 +3980,24 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         int(item) for item in (batch.get("job_ids") or [])
         if str(item).strip().lstrip("-").isdigit()
     }
-    related = [
-        row for row in jobs
-        if int(row.get("batch_id") or 0) == batch_id
-        or (configured_ids and int(row.get("id") or 0) in configured_ids)
-    ]
+    sealed = bool(batch.get("sealed_at"))
+    if sealed:
+        # 封口后的 job_ids 是本次“开始注册”实际创建任务的权威清单。
+        # 历史版本清空批次日志后可能复用 batch_id；继续按 batch_id 聚合会把
+        # 旧任务的失败数叠加到新批次，因此这里必须只认本批明确关联的任务。
+        related = [row for row in jobs if int(row.get("id") or 0) in configured_ids]
+    else:
+        related = [
+            row for row in jobs
+            if int(row.get("batch_id") or 0) == batch_id
+            or (configured_ids and int(row.get("id") or 0) in configured_ids)
+        ]
     status_counts: dict[str, int] = {}
     for row in related:
         status = str(row.get("status") or "pending")
         status_counts[status] = status_counts.get(status, 0) + 1
 
     requested = max(0, int(batch.get("requested_count") or batch.get("submitted_count") or len(related)))
-    sealed = bool(batch.get("sealed_at"))
     missing = max(0, requested - len(related))
     success_count = int(status_counts.get("success", 0) or 0)
     failed_count = sum(int(status_counts.get(status, 0) or 0) for status in ("failed", "stopped", "cancelled"))
@@ -4009,6 +4026,7 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         "submitted_count": len(related),
         "success_count": success_count,
         "failed_count": failed_count,
+        "success_rate": _registration_success_rate(success_count, failed_count),
         "running_count": running_count,
         "pending_count": pending_count,
         "completed_count": terminal_count,
@@ -4023,9 +4041,20 @@ def create_registration_batch(*, requested_count: int, workers: int, email_sourc
     """创建一次“开始注册”操作对应的持久化批次日志。"""
     with _LOCK:
         rows = _load_registration_batches()
+        jobs = _load_jobs()
         now_iso = _now()
+        # 批次日志允许单独清空，但任务历史仍会保留。ID 必须同时避开旧任务里
+        # 已使用过的 batch_id，防止新批次再次关联到旧任务并累加历史失败数。
+        used_batch_ids = [
+            int(item.get("batch_id") or 0)
+            for item in jobs
+            if str(item.get("batch_id") or "").strip().lstrip("-").isdigit()
+        ]
+        next_batch_id = max(
+            [int(item.get("id") or 0) for item in rows] + used_batch_ids + [0]
+        ) + 1
         row = {
-            "id": _next_id(rows),
+            "id": next_batch_id,
             "started_at": now_iso,
             "completed_at": None,
             "sealed_at": None,
@@ -4036,6 +4065,7 @@ def create_registration_batch(*, requested_count: int, workers: int, email_sourc
             "job_ids": [],
             "success_count": 0,
             "failed_count": 0,
+            "success_rate": 0.0,
             "running_count": 0,
             "pending_count": max(0, int(requested_count or 0)),
             "status": "running",
@@ -4076,7 +4106,7 @@ def list_registration_batches(limit: int = 200) -> list[dict]:
             # 终态字段只需在完成时固化；执行中耗时保持实时计算，避免每秒写盘。
             if snapshot.get("status") == "completed" and any(
                 row.get(key) != snapshot.get(key)
-                for key in ("completed_at", "success_count", "failed_count", "running_count", "pending_count", "completed_count", "status", "elapsed_seconds")
+                for key in ("completed_at", "success_count", "failed_count", "success_rate", "running_count", "pending_count", "completed_count", "status", "elapsed_seconds")
             ):
                 row.update(snapshot)
                 changed = True
@@ -4931,7 +4961,7 @@ def prune_registration_jobs(
                 elif snapshot_status == "completed" and any(
                     batch.get(key) != snapshot.get(key)
                     for key in (
-                        "submitted_count", "success_count", "failed_count", "running_count",
+                        "submitted_count", "success_count", "failed_count", "success_rate", "running_count",
                         "pending_count", "completed_count", "status", "completed_at", "elapsed_seconds",
                     )
                 ):

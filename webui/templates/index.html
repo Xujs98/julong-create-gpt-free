@@ -568,6 +568,7 @@
     .registration-batch-summary .batch-summary-time { color: #7c3aed; font-weight: 700; }
     .registration-batch-summary .batch-summary-success { color: #169b76; font-weight: 700; }
     .registration-batch-summary .batch-summary-failed { color: #e64545; font-weight: 700; }
+    .registration-batch-summary .batch-summary-rate { color: #0f766e; font-weight: 700; }
     .registration-batch-summary .batch-summary-warning {
       flex-basis: 100%; color: #92600a; padding-top: 5px; border-top: 1px dashed #d8c27d;
     }
@@ -3547,7 +3548,7 @@ try {
   </div>
   <div class="registration-task-log-table-wrap">
     <table class="registration-task-log-table">
-      <thead><tr><th style="width: 170px">开始时间</th><th>注册量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>状态</th></tr></thead>
+      <thead><tr><th style="width: 170px">开始时间</th><th>注册量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>成功率</th><th>状态</th></tr></thead>
       <tbody id="registrationTaskLogBody"></tbody>
     </table>
     <div class="registration-task-log-empty hidden" id="registrationTaskLogEmpty">暂无任务日志</div>
@@ -3801,6 +3802,15 @@ function formatDurationSeconds(value) {
   return `${pad(hours)}:${pad(minutes)}:${pad(remain)}`;
 }
 
+function formatRegistrationSuccessRate(batch) {
+  const success = Math.max(0, Number(batch?.success_count || 0));
+  const failed = Math.max(0, Number(batch?.failed_count || 0));
+  const completed = success + failed;
+  const supplied = Number(batch?.success_rate);
+  const rate = Number.isFinite(supplied) ? supplied : (completed > 0 ? success * 100 / completed : 0);
+  return `${Number(Math.max(0, Math.min(100, rate)).toFixed(2))}%`;
+}
+
 // 按任务开始与完成时间计算墙钟耗时；运行中任务使用当前时间。
 function durationSecondsBetween(startedAt, completedAt='') {
   if (!startedAt) return 0;
@@ -3954,6 +3964,7 @@ function renderRegistrationBatchSummary() {
       <span class="batch-summary-time">${active ? '本次已耗时' : '本次总耗时'}：<b data-duration-start="${attrEsc(batch.started_at || '')}" data-duration-end="${attrEsc(batch.completed_at || '')}">${duration}</b></span>
       <span class="batch-summary-success">成功：${Number(batch.success_count || 0)}</span>
       <span class="batch-summary-failed">失败：${Number(batch.failed_count || 0)}</span>
+      <span class="batch-summary-rate">成功率：${formatRegistrationSuccessRate(batch)}</span>
       ${active ? `<span>运行：${running}</span><span>排队：${pending}</span>` : '<span>状态：已完成</span>'}
       ${REGISTRATION_BATCH_WARNING ? `<span class="batch-summary-warning">${esc(REGISTRATION_BATCH_WARNING)}</span>` : ''}
     </div>`;
@@ -4327,6 +4338,7 @@ function renderRegistrationTaskLogs() {
       <td data-duration-start="${attrEsc(batch.started_at || '')}" data-duration-end="${attrEsc(batch.completed_at || '')}">${esc(duration)}</td>
       <td class="log-success">${Number(batch.success_count || 0)}</td>
       <td class="log-failed">${Number(batch.failed_count || 0)}</td>
+      <td class="log-success">${formatRegistrationSuccessRate(batch)}</td>
       <td class="${active ? 'log-running' : ''}">${active ? `执行中（运行 ${Number(batch.running_count || 0)} / 排队 ${Number(batch.pending_count || 0)}）` : '已完成'}</td>
     </tr>`;
   }).join('');

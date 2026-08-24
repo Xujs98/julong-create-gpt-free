@@ -53,6 +53,7 @@ class RegistrationBatchStorageTests(unittest.TestCase):
         self.assertEqual(summary["status"], "completed")
         self.assertEqual(summary["success_count"], 1)
         self.assertEqual(summary["failed_count"], 1)
+        self.assertEqual(summary["success_rate"], 50.0)
         self.assertEqual(summary["elapsed_seconds"], 3723)
         self.assertEqual(summary["workers"], 2)
         self.assertEqual(summary["requested_count"], 2)
@@ -66,6 +67,38 @@ class RegistrationBatchStorageTests(unittest.TestCase):
         cleared = db.clear_registration_batches()
         self.assertEqual(cleared, {"cleared": 1, "kept_active": 0})
         self.assertEqual(db.list_registration_batches(), [])
+
+    def test_new_batch_does_not_reuse_cleared_batch_id_or_old_counts(self):
+        first_batch = db.create_registration_batch(requested_count=1, workers=1, email_source="icloud")
+        old_job = db.create_job("icloud", batch_id=first_batch["id"])
+        db.seal_registration_batch(first_batch["id"], [old_job["id"]])
+        db.update_job(old_job["id"], status="failed", completed_at="2026-08-24T12:00:00")
+        self.assertEqual(db.clear_registration_batches(), {"cleared": 1, "kept_active": 0})
+
+        next_batch = db.create_registration_batch(requested_count=1, workers=1, email_source="icloud")
+        new_job = db.create_job("icloud", batch_id=next_batch["id"])
+        summary = db.seal_registration_batch(next_batch["id"], [new_job["id"]])
+
+        self.assertGreater(next_batch["id"], first_batch["id"])
+        self.assertEqual(summary["success_count"], 0)
+        self.assertEqual(summary["failed_count"], 0)
+        self.assertEqual(summary["pending_count"], 1)
+        self.assertEqual(summary["success_rate"], 0.0)
+
+    def test_sealed_batch_uses_job_ids_instead_of_colliding_batch_id(self):
+        batch = db.create_registration_batch(requested_count=1, workers=1, email_source="icloud")
+        current = db.create_job("icloud", batch_id=batch["id"])
+        db.seal_registration_batch(batch["id"], [current["id"]])
+        stale = db.create_job("icloud", batch_id=batch["id"])
+        db.update_job(current["id"], status="success", completed_at="2026-08-24T12:00:00")
+        db.update_job(stale["id"], status="failed", completed_at="2026-08-24T12:00:01")
+
+        summary = db.get_registration_batch(batch["id"])
+
+        self.assertEqual(summary["submitted_count"], 1)
+        self.assertEqual(summary["success_count"], 1)
+        self.assertEqual(summary["failed_count"], 0)
+        self.assertEqual(summary["success_rate"], 100.0)
 
     def test_clear_keeps_running_batch(self):
         batch = db.create_registration_batch(requested_count=1, workers=1, email_source="icloud")
@@ -92,7 +125,10 @@ class RegistrationBatchWebUiTests(unittest.TestCase):
         self.assertIn('id="btnRegistrationTaskLogV2"', html)
         self.assertIn('id="btnClearRegistrationTaskLog"', html)
         self.assertIn('<th>总耗时</th>', html)
+        self.assertIn('<th>成功率</th>', html)
         self.assertIn('function formatDurationSeconds(value)', html)
+        self.assertIn('function formatRegistrationSuccessRate(batch)', html)
+        self.assertIn('成功率：${formatRegistrationSuccessRate(batch)}', html)
 
     @patch("webui.app.db.list_registration_batches")
     def test_batch_log_api_returns_persistent_history(self, list_batches):
