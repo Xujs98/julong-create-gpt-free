@@ -86,6 +86,39 @@ def test_explicit_empty_rebind_proxy_disables_saved_route():
     assert captured == [""]
 
 
+def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monkeypatch):
+    calls = []
+    driver = object()
+    closer = lambda: None
+    info = {"user": {"email": OLD}, "accessToken": "old-token"}
+
+    def browser_login(account, *, driver_name, proxy, **_kwargs):
+        calls.append(proxy)
+        if len(calls) == 1:
+            raise rebind_driver.RebindDriverError(
+                "roxy 登录失败：WebDriverException: net::ERR_SOCKS_CONNECTION_FAILED"
+            )
+        return driver, closer, info
+
+    monkeypatch.setattr(rebind_driver, "_browser_login_builtin", browser_login)
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL", ""])
+
+    result = rebind_driver.rebind_account(
+        {**_account(), "live_check_proxy_used": "socks5h://user:pass@dead.example:3000"},
+        _target(),
+        driver="roxy",
+        hooks={
+            "submit_browser": lambda **_kwargs: {"ok": True},
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert result["verified_email"] == TARGET
+    assert calls == ["socks5h://user:pass@dead.example:3000", "POOL"]
+
+
 def test_hooked_protocol_rebind_reads_target_otp_and_verifies_remote_session():
     calls = []
     transport = FakeTransport()

@@ -188,6 +188,48 @@ def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None
     return None
 
 
+def _browser_error_text(exc: BaseException | None) -> str:
+    """Collect short root-cause text from wrapped browser exceptions."""
+    parts: list[str] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(parts) < 4:
+        seen.add(id(current))
+        text = str(current).strip()
+        if text:
+            parts.append(text.splitlines()[0][:240])
+        current = current.__cause__ or current.__context__
+    return " | ".join(parts)
+
+
+def _is_browser_network_error(exc: BaseException | None) -> bool:
+    text = _browser_error_text(exc).lower()
+    return any(marker in text for marker in (
+        "err_socks_connection_failed", "err_proxy_connection_failed", "proxy",
+        "net::err_", "connection refused", "connection reset", "timed out",
+        "network is unreachable", "name_not_resolved",
+    ))
+
+
+def _rebind_proxy_fallbacks(failed_proxy: str | None) -> list[str]:
+    """Return at most one pool route followed by direct mode."""
+    failed = str(failed_proxy or "").strip()
+    candidates: list[str] = []
+    try:
+        from config import proxy as proxy_cfg
+
+        selected = str(proxy_cfg.pick_proxy() or "").strip()
+        if selected and selected != failed:
+            candidates.append(selected)
+    except Exception:
+        pass
+    # Empty string explicitly means direct; it prevents re-selecting the same
+    # saved account route and gives installations without a working pool a path.
+    if failed:
+        candidates.append("")
+    return candidates
+
+
 def _normalize_driver(value: Any, default: str = "protocol") -> str:
     raw = str(value or "").strip().lower() or default
     raw = _DRIVER_ALIASES.get(raw, raw)
@@ -695,7 +737,9 @@ def _browser_login_builtin(
             _close_resource(driver)
         if isinstance(exc, RebindDriverError):
             raise
-        raise RebindDriverError(f"{driver_name} 登录失败：{type(exc).__name__}") from exc
+        detail = _browser_error_text(exc)
+        suffix = f": {detail}" if detail else ""
+        raise RebindDriverError(f"{driver_name} 登录失败：{type(exc).__name__}{suffix}") from exc
     _safe_log(log, f"{driver_name} 登录：已建立原账号登录态")
     return driver, closer, dict(info)
 
@@ -1703,14 +1747,42 @@ def rebind_account(
             context.session_info = info
             context.add_closer(lambda session=session: _close_resource(session))
         else:
-            browser, closer, info = _browser_login_builtin(
-                account,
-                driver_name=login_name,
-                proxy=effective_proxy,
-                headless=selected_login_headless,
-                hooks=hook_map,
-                log=log,
-            )
+            try:
+                browser, closer, info = _browser_login_builtin(
+                    account,
+                    driver_name=login_name,
+                    proxy=effective_proxy,
+                    headless=selected_login_headless,
+                    hooks=hook_map,
+                    log=log,
+                )
+            except RebindDriverError as first_exc:
+                if not effective_proxy or not _is_browser_network_error(first_exc):
+                    raise
+                browser = closer = info = None
+                fallback_errors: list[str] = []
+                for fallback_proxy in _rebind_proxy_fallbacks(effective_proxy):
+                    _safe_log(log, f"{login_name} 登录网络失败，切换备用出口（模式={'direct' if not fallback_proxy else 'proxy_pool'}）")
+                    try:
+                        browser, closer, info = _browser_login_builtin(
+                            account,
+                            driver_name=login_name,
+                            proxy=fallback_proxy,
+                            headless=selected_login_headless,
+                            hooks=hook_map,
+                            log=log,
+                        )
+                        effective_proxy = fallback_proxy
+                        context.proxy = fallback_proxy
+                        account["rebind_proxy"] = fallback_proxy
+                        break
+                    except RebindDriverError as fallback_exc:
+                        fallback_errors.append(_browser_error_text(fallback_exc))
+                if browser is None or not isinstance(info, Mapping) or not _extract_token(info):
+                    detail = "; ".join(item for item in fallback_errors if item)[:500]
+                    raise RebindDriverError(
+                        f"{login_name} 登录网络出口均失败：{detail or _browser_error_text(first_exc)}"
+                    ) from first_exc
             context.driver = browser
             context.driver_kind = login_name
             context.add_closer(closer or (lambda browser=browser: _close_resource(browser)))
