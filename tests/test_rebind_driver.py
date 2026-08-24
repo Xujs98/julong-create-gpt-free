@@ -32,8 +32,9 @@ def _target(**extra):
     return value
 
 
-def test_rebind_prefers_latest_account_proxy_when_task_has_no_override():
+def test_rebind_uses_proxy_pool_instead_of_account_saved_route(monkeypatch):
     captured = []
+    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "socks5h://pool.example:4000")
 
     def login_protocol(account, proxy, context, **_kwargs):
         captured.append(proxy)
@@ -56,11 +57,12 @@ def test_rebind_prefers_latest_account_proxy_when_task_has_no_override():
         },
     )
 
-    assert captured == ["socks5h://user:pass@live.example:3000"]
+    assert captured == ["socks5h://pool.example:4000"]
 
 
-def test_explicit_empty_rebind_proxy_disables_saved_route():
+def test_explicit_empty_rebind_proxy_still_uses_proxy_pool(monkeypatch):
     captured = []
+    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "socks5h://pool.example:4000")
 
     def login_protocol(account, proxy, context, **_kwargs):
         captured.append(proxy)
@@ -84,7 +86,49 @@ def test_explicit_empty_rebind_proxy_disables_saved_route():
         },
     )
 
-    assert captured == [""]
+    assert captured == ["socks5h://pool.example:4000"]
+
+
+def test_explicit_rebind_proxy_overrides_pool(monkeypatch):
+    captured = []
+    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "socks5h://pool.example:4000")
+
+    def login_protocol(account, proxy, context, **_kwargs):
+        captured.append(proxy)
+        context.session = FakeTransport()
+        context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
+
+    rebind_driver.rebind_account(
+        _account(),
+        _target(),
+        driver="protocol",
+        proxy="socks5h://custom.example:5000",
+        hooks={
+            "login_protocol": login_protocol,
+            "submit_protocol": lambda **_kwargs: {"ok": True},
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert captured == ["socks5h://custom.example:5000"]
+
+
+def test_rebind_requires_non_empty_proxy_pool(monkeypatch):
+    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "")
+    monkeypatch.setattr("config.proxy.PROXY_POOL", [])
+
+    with pytest.raises(rebind_driver.RebindDriverError, match="PROXY_POOL 为空"):
+        rebind_driver.rebind_account(
+            _account(),
+            _target(),
+            driver="protocol",
+            hooks={
+                "login_protocol": lambda **_kwargs: None,
+                "submit_protocol": lambda **_kwargs: {"ok": True},
+            },
+        )
 
 
 def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monkeypatch):
@@ -102,12 +146,13 @@ def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monk
         return driver, closer, info
 
     monkeypatch.setattr(rebind_driver, "_browser_login_builtin", browser_login)
-    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL", ""])
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL"])
 
     result = rebind_driver.rebind_account(
-        {**_account(), "live_check_proxy_used": "socks5h://user:pass@dead.example:3000"},
+        _account(),
         _target(),
         driver="roxy",
+        proxy="socks5h://user:pass@dead.example:3000",
         hooks={
             "submit_browser": lambda **_kwargs: {"ok": True},
             "verify": lambda target_email, **_kwargs: {
@@ -118,6 +163,39 @@ def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monk
 
     assert result["verified_email"] == TARGET
     assert calls == ["socks5h://user:pass@dead.example:3000", "POOL"]
+
+
+def test_browser_rebind_forces_fresh_full_login_and_ignores_factory_session(monkeypatch):
+    driver = MagicMock()
+    driver._rebind_session_info = {"user": {"email": OLD}, "accessToken": "stale-token"}
+    closer = MagicMock()
+    fresh = {"user": {"email": OLD}, "accessToken": "fresh-token"}
+    monkeypatch.setattr(
+        rebind_driver,
+        "_open_browser_builtin",
+        lambda *_args, **_kwargs: (driver, closer),
+    )
+
+    with patch("core.browser_liveness._browser_login", return_value=fresh) as browser_login:
+        actual_driver, actual_closer, info = rebind_driver._browser_login_builtin(
+            _account(),
+            driver_name="roxy",
+            proxy="POOL",
+            headless=True,
+            hooks={},
+            log=None,
+        )
+
+    assert actual_driver is driver
+    assert actual_closer is closer
+    assert info == fresh
+    browser_login.assert_called_once_with(
+        driver,
+        _account(),
+        OLD,
+        headless=True,
+        restore_saved_session=False,
+    )
 
 
 def test_hooked_protocol_rebind_reads_target_otp_and_verifies_remote_session():
@@ -204,17 +282,17 @@ def test_missing_site_endpoint_fails_without_claiming_success():
         rebind_driver.rebind_account(_account(), _target(), driver="protocol", hooks={"login_protocol": login})
 
 
-def test_protocol_preflight_replaces_dead_saved_proxy(monkeypatch):
+def test_protocol_preflight_rotates_failed_proxy_within_pool(monkeypatch):
     calls = []
     logs = []
 
     def preflight(email, proxy, **kwargs):
         calls.append((email, proxy, kwargs))
-        if proxy != "":
+        if proxy == "DEAD":
             raise RuntimeError("ProxyError: curl: (97) SOCKS5 connection failed")
         return "live-session", "authorize-url"
 
-    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL", ""])
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL"])
     monkeypatch.setattr(
         "core.account_liveness._network_preflight_with_retry",
         preflight,
@@ -227,9 +305,9 @@ def test_protocol_preflight_replaces_dead_saved_proxy(monkeypatch):
     )
 
     assert result == ("live-session", "authorize-url")
-    assert [item[1] for item in calls] == ["DEAD", "POOL", ""]
+    assert [item[1] for item in calls] == ["DEAD", "POOL"]
     assert all(item[2] == {"max_attempts": 2, "rotate_proxy_on_retry": True} for item in calls)
-    assert any("切换备用出口" in line for line in logs)
+    assert any("轮换代理池出口" in line for line in logs)
 
 
 def test_browser_submission_without_endpoint_uses_account_settings_fallback(monkeypatch):

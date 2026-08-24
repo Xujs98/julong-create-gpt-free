@@ -174,18 +174,37 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
-def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None) -> str | None:
-    """Prefer the account's latest live-check route when no task override exists."""
-    if explicit_proxy is not None:
-        return str(explicit_proxy).strip() or ""
-    for key in ("live_check_proxy_used", "proxy_used"):
-        value = str((account or {}).get(key) or "").strip()
-        if not value or "***" in value or "%2a%2a%2a" in value.lower():
-            continue
-        return value
-    # Passing None preserves the existing proxy-pool behavior in BrowserSession,
-    # CloakBrowser and RoxyBrowser when the account has no usable saved route.
-    return None
+def _pick_rebind_pool_proxy(failed_proxy: str | None = None) -> str:
+    """Pick one rebind route from PROXY_POOL, preferring a different entry."""
+    from config import proxy as proxy_cfg
+
+    failed = str(failed_proxy or "").strip()
+    selected = str(proxy_cfg.pick_proxy() or "").strip()
+    if selected and selected != failed:
+        return selected
+    candidates: list[str] = []
+    for raw in list(getattr(proxy_cfg, "PROXY_POOL", []) or []):
+        value = str(raw or "").strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    for candidate in candidates:
+        if candidate != failed:
+            return candidate
+    # 单出口代理池仍允许同一入口再试一次；其上游可能会自动轮换真实出口 IP。
+    return selected or (candidates[0] if candidates else "")
+
+
+def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None) -> str:
+    """Use an explicit task proxy or select a fresh PROXY_POOL route.
+
+    Account-level ``live_check_proxy_used``/``proxy_used`` values intentionally
+    do not participate: rebind always starts from the current proxy pool rather
+    than inheriting an old account route.
+    """
+    selected = str(explicit_proxy or "").strip() or _pick_rebind_pool_proxy()
+    if not selected:
+        raise RebindDriverError("换绑需要代理池出口，但当前 PROXY_POOL 为空")
+    return selected
 
 
 def _browser_error_text(exc: BaseException | None) -> str:
@@ -212,22 +231,12 @@ def _is_browser_network_error(exc: BaseException | None) -> bool:
 
 
 def _rebind_proxy_fallbacks(failed_proxy: str | None) -> list[str]:
-    """Return at most one pool route followed by direct mode."""
-    failed = str(failed_proxy or "").strip()
-    candidates: list[str] = []
+    """Return one pool route for retry; rebind never falls back to direct."""
     try:
-        from config import proxy as proxy_cfg
-
-        selected = str(proxy_cfg.pick_proxy() or "").strip()
-        if selected and selected != failed:
-            candidates.append(selected)
+        selected = _pick_rebind_pool_proxy(failed_proxy)
     except Exception:
-        pass
-    # Empty string explicitly means direct; it prevents re-selecting the same
-    # saved account route and gives installations without a working pool a path.
-    if failed:
-        candidates.append("")
-    return candidates
+        selected = ""
+    return [selected] if selected else []
 
 
 def _protocol_preflight_with_fallback(
@@ -236,13 +245,7 @@ def _protocol_preflight_with_fallback(
     *,
     log: Callable[[str], None] | None,
 ) -> tuple[Any, str]:
-    """Run protocol preflight while replacing a dead saved route.
-
-    Rebind jobs often inherit ``live_check_proxy_used``.  That route can
-    expire between the liveness check and the rebind task, so protocol login
-    must get the same pool/direct fallback behavior as browser login instead
-    of retrying one dead SOCKS endpoint and stopping.
-    """
+    """Run protocol preflight and rotate only within the configured pool."""
     from core.account_liveness import _network_preflight_with_retry
 
     candidates: list[str | None] = [proxy]
@@ -262,8 +265,7 @@ def _protocol_preflight_with_fallback(
         if index:
             _safe_log(
                 log,
-                "协议登录网络出口失败，切换备用出口 "
-                f"（模式={'direct' if not candidate else 'proxy_pool'}）",
+                "协议登录出口连接异常，轮换代理池出口（模式=proxy_pool）",
             )
         try:
             return _network_preflight_with_retry(
@@ -759,17 +761,18 @@ def _browser_login_builtin(
                 logger.debug("浏览器驱动为空时资源关闭失败", exc_info=True)
         raise RebindDriverError("浏览器驱动工厂未返回 driver")
     try:
-        info = getattr(driver, "_rebind_session_info", None)
-        if not isinstance(info, Mapping) or not _extract_token(info):
-            from core.browser_liveness import _browser_login
+        # 换绑必须重新证明账号登录能力，不复用浏览器工厂、自身账号记录中
+        # 携带的 Session/Cookie。直接复用查活的完整登录实现：有密码时执行
+        # 邮箱 -> 密码 -> TOTP，无密码时切换到邮箱验证码登录。
+        from core.browser_liveness import _browser_login
 
-            info = _browser_login(
-                driver,
-                account,
-                _email(account.get("email"), "原账号邮箱"),
-                headless=bool(headless),
-                restore_saved_session=True,
-            )
+        info = _browser_login(
+            driver,
+            account,
+            _email(account.get("email"), "原账号邮箱"),
+            headless=bool(headless),
+            restore_saved_session=False,
+        )
         if not isinstance(info, Mapping) or not _extract_token(info):
             raise RebindDriverError("浏览器登录未返回 Access Token")
     except Exception as exc:
@@ -785,7 +788,7 @@ def _browser_login_builtin(
         detail = _browser_error_text(exc)
         suffix = f": {detail}" if detail else ""
         raise RebindDriverError(f"{driver_name} 登录失败：{type(exc).__name__}{suffix}") from exc
-    _safe_log(log, f"{driver_name} 登录：已建立原账号登录态")
+    _safe_log(log, f"{driver_name} 登录：已重新完成原账号登录流程并建立新登录态")
     return driver, closer, dict(info)
 
 
@@ -1838,6 +1841,11 @@ def rebind_account(
     hook_map = _hook_map(hooks)
     otp_getter = _make_otp_getter(hook_map.get("otp"), default_target=target, log=log)
     effective_proxy = _resolve_rebind_proxy(account, proxy)
+    _safe_log(
+        log,
+        "换绑网络出口："
+        f"使用{'指定代理' if str(proxy or '').strip() else '代理池出口'}",
+    )
     context = RebindContext(
         account=account,
         target=target,
@@ -1894,7 +1902,7 @@ def rebind_account(
                 browser = closer = info = None
                 fallback_errors: list[str] = []
                 for fallback_proxy in _rebind_proxy_fallbacks(effective_proxy):
-                    _safe_log(log, f"{login_name} 登录网络失败，切换备用出口（模式={'direct' if not fallback_proxy else 'proxy_pool'}）")
+                    _safe_log(log, f"{login_name} 登录出口连接异常，轮换代理池出口（模式=proxy_pool）")
                     try:
                         browser, closer, info = _browser_login_builtin(
                             account,
