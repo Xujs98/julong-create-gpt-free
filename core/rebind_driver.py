@@ -774,6 +774,252 @@ def _ensure_browser_transport(context: RebindContext, hooks: dict, headless: boo
         raise RebindDriverError(f"浏览器提交登录态校验失败：{type(exc).__name__}") from exc
 
 
+def _browser_page_state(driver: Any) -> dict:
+    """Return a small, secret-free snapshot used by the account-settings flow."""
+    try:
+        return driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const attrs = el => [el.type, el.name, el.id, el.placeholder, el.autocomplete,
+          el.getAttribute('data-testid'), el.getAttribute('aria-label')].filter(Boolean).join(' ').toLowerCase();
+        return {
+          url: location.href,
+          text: String(document.body?.innerText || '').replace(/\s+/g, ' ').slice(-3000),
+          inputs: [...document.querySelectorAll('input')].filter(visible).map(el => ({
+            type: el.type || '', name: el.name || '', id: el.id || '', attrs: attrs(el), valueLength: String(el.value || '').length
+          })),
+          buttons: [...document.querySelectorAll('button,[role=button],input[type=submit]')].filter(visible).map(el => ({
+            text: String(el.innerText || el.textContent || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+            attrs: attrs(el), disabled: !!el.disabled || String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true'
+          }))
+        };
+        """) or {}
+    except Exception as exc:
+        return {"url": str(getattr(driver, "current_url", "") or ""), "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _wait_browser_state(driver: Any, predicate: Callable[[dict], bool], *, timeout: float = 30.0) -> dict:
+    end = time.time() + max(1.0, float(timeout))
+    last: dict = {}
+    while time.time() < end:
+        last = _browser_page_state(driver)
+        try:
+            if predicate(last):
+                return last
+        except Exception:
+            logger.debug("浏览器换绑页面状态判断失败", exc_info=True)
+        time.sleep(0.35)
+    return last
+
+
+def _submit_browser_email_form(driver: Any) -> dict:
+    """Submit the visible new-email form without depending on localization."""
+    try:
+        return driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const enabled = el => visible(el) && !el.disabled
+          && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+        const email = [...document.querySelectorAll('input')].find(el => {
+          if (!enabled(el)) return false;
+          const attrs = [el.type, el.name, el.id, el.placeholder, el.autocomplete, el.getAttribute('aria-label')]
+            .filter(Boolean).join(' ').toLowerCase();
+          return String(el.value || '').includes('@') && /email|mail|username/.test(attrs);
+        });
+        if (!email) return {ok:false, reason:'missing_email_input'};
+        const form = email.closest('form');
+        const scope = form || document;
+        const bad = /resend|forgot|passwordless|google|apple|microsoft|facebook|github|oauth|social|cancel|back/;
+        const text = el => [el.type, el.value, el.name, el.id, el.getAttribute('data-testid'),
+          el.getAttribute('data-dd-action-name'), el.getAttribute('aria-label'), el.innerText, el.textContent]
+          .filter(Boolean).join(' ').toLowerCase();
+        const candidates = [...scope.querySelectorAll('button,input[type=submit],[role=button]')].filter(enabled);
+        const submit = candidates.find(el => {
+          const value = text(el);
+          return !bad.test(value) && /continue|next|verify|save|update|change|confirm|submit|weiter|suivant|继续|下一步|确认|保存/.test(value);
+        }) || candidates.find(el => !bad.test(text(el)) && String(el.type || '').toLowerCase() === 'submit');
+        if (!submit) return {ok:false, reason:'missing_email_submit'};
+        email.dispatchEvent(new Event('change', {bubbles:true}));
+        submit.scrollIntoView({block:'center', inline:'nearest'});
+        if (form && typeof form.requestSubmit === 'function') form.requestSubmit(submit);
+        else submit.click();
+        return {ok:true, text:String(submit.innerText || submit.value || '').trim().slice(0,80)};
+        """) or {}
+    except Exception as exc:
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _browser_ui_action(
+    context: RebindContext,
+    *,
+    otp_getter: Callable[..., str],
+    log: Callable[[str], None] | None,
+) -> dict:
+    """Change the mailbox through the ChatGPT account-settings UI.
+
+    The site endpoint is intentionally not hard-coded: the browser executes
+    the account-settings flow while the verification stage still reads a fresh
+    remote Session before local replacement.
+    """
+    driver = context.driver
+    if driver is None:
+        raise RebindDriverError("浏览器换绑缺少 driver")
+    target_email = _email(context.target.get("email"), "目标邮箱")
+    try:
+        from core.roxy_registration import (
+            _clear_otp_inputs,
+            _click_continue,
+            _click_resend_email_otp,
+            _type_email_address,
+            _type_otp,
+            _wait_after_email_otp_submit,
+        )
+        from core.browser_liveness import _fill_login_password
+    except Exception as exc:
+        raise RebindDriverError(f"浏览器换绑组件加载失败：{type(exc).__name__}") from exc
+
+    try:
+        driver.get("https://chatgpt.com/#settings/Account")
+    except Exception as exc:
+        raise RebindDriverError(f"浏览器打开账号设置失败：{type(exc).__name__}") from exc
+
+    state = _wait_browser_state(
+        driver,
+        lambda item: any("account-info-email" in str(entry.get("attrs") or "") for entry in item.get("buttons") or [])
+        or "e-mail" in str(item.get("text") or "").lower()
+        or "email address" in str(item.get("text") or "").lower()
+        or "邮箱" in str(item.get("text") or ""),
+        timeout=35,
+    )
+    try:
+        clicked = bool(driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        const button = document.querySelector('[data-testid="account-info-email"]')
+          || [...document.querySelectorAll('button,[role=button]')].find(el => visible(el)
+            && /email|e-mail|邮箱|メール/.test(String(el.innerText || el.textContent || '').toLowerCase()));
+        if (!button) return false;
+        button.scrollIntoView({block:'center'}); button.click(); return true;
+        """))
+    except Exception:
+        clicked = False
+    if not clicked:
+        raise RebindDriverError(f"账号设置中未找到邮箱变更入口：{state.get('url') or ''}")
+    _safe_log(log, "浏览器换绑：已打开账号邮箱变更入口")
+
+    def _has_email_input(item: dict) -> bool:
+        return any(
+            str(entry.get("type") or "").lower() == "email"
+            or re.search(r"email|mail|username", str(entry.get("attrs") or ""), re.I)
+            for entry in item.get("inputs") or []
+        )
+
+    password_state = _wait_browser_state(
+        driver,
+        lambda item: any(str(entry.get("type") or "").lower() == "password" for entry in item.get("inputs") or []),
+        timeout=15,
+    )
+    if any(str(entry.get("type") or "").lower() == "password" for entry in password_state.get("inputs") or []):
+        password = str(context.account.get("registration_password") or context.account.get("password") or "").strip()
+        if not password:
+            raise RebindDriverError("邮箱变更需要当前密码，请先在账号资料中保存登录密码")
+        email_state = password_state
+        for password_attempt in range(2):
+            try:
+                _fill_login_password(driver, password)
+            except Exception as exc:
+                raise RebindDriverError(f"当前密码验证失败：{type(exc).__name__}") from exc
+            _safe_log(log, "浏览器换绑：当前密码验证已提交")
+            email_state = _wait_browser_state(
+                driver,
+                lambda item: _has_email_input(item)
+                or "timed out" in str(item.get("text") or "").lower()
+                or "network error" in str(item.get("text") or "").lower()
+                or "operation timed out" in str(item.get("text") or "").lower(),
+                timeout=30,
+            )
+            if _has_email_input(email_state):
+                break
+            error_text = str(email_state.get("text") or "").lower()
+            if password_attempt == 0 and any(marker in error_text for marker in ("timed out", "network error", "operation timed out")):
+                try:
+                    retried = bool(driver.execute_script(r"""
+                    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                    const button = [...document.querySelectorAll('button,[role=button],a')].find(el => visible(el)
+                      && /retry|try again|again|erneut versuchen|wiederholen|重试|再次/.test(String(el.innerText || el.textContent || '').toLowerCase()));
+                    if (!button) return false; button.click(); return true;
+                    """))
+                except Exception:
+                    retried = False
+                if retried:
+                    password_state = _wait_browser_state(
+                        driver,
+                        lambda item: any(str(entry.get("type") or "").lower() == "password" for entry in item.get("inputs") or []),
+                        timeout=15,
+                    )
+                    if any(str(entry.get("type") or "").lower() == "password" for entry in password_state.get("inputs") or []):
+                        continue
+            if any(marker in error_text for marker in ("timed out", "network error", "operation timed out")):
+                raise RebindDriverError("当前密码验证页面网络超时，请检查浏览器代理后重试")
+            break
+    else:
+        email_state = password_state
+
+    if not _has_email_input(email_state):
+        email_state = _wait_browser_state(driver, _has_email_input, timeout=20)
+    if not _has_email_input(email_state):
+        raise RebindDriverError("当前密码验证后未出现新邮箱输入框")
+    try:
+        _type_email_address(driver, target_email, timeout=20)
+    except Exception as exc:
+        raise RebindDriverError(f"新邮箱填写失败：{type(exc).__name__}") from exc
+
+    otp_after_ts = time.time()
+    submitted = _submit_browser_email_form(driver)
+    if not submitted.get("ok"):
+        raise RebindDriverError(f"新邮箱提交按钮未找到：{submitted.get('reason') or 'unknown'}")
+    _safe_log(log, "浏览器换绑：新邮箱已提交，等待邮箱验证码")
+
+    otp_state = _wait_browser_state(
+        driver,
+        lambda item: any(
+            re.search(r"one.?time|otp|verification|numeric|code", str(entry.get("attrs") or ""), re.I)
+            for entry in item.get("inputs") or []
+        ) or "verification code" in str(item.get("text") or "").lower() or "验证码" in str(item.get("text") or ""),
+        timeout=20,
+    )
+    has_otp = any(
+        re.search(r"one.?time|otp|verification|numeric|code", str(entry.get("attrs") or ""), re.I)
+        for entry in otp_state.get("inputs") or []
+    )
+    if has_otp:
+        used: set[str] = set()
+        outcome = "stalled"
+        for attempt in range(2):
+            code = otp_getter(email=target_email, after_ts=otp_after_ts, exclude_codes=used, target=context.target)
+            used.add(code)
+            _clear_otp_inputs(driver)
+            _type_otp(driver, code, timeout=20)
+            try:
+                _click_continue(driver)
+            except Exception:
+                pass
+            outcome = _wait_after_email_otp_submit(driver, timeout=15)
+            if outcome == "accepted":
+                break
+            if attempt == 0:
+                try:
+                    _click_resend_email_otp(driver, timeout=20)
+                except Exception as exc:
+                    raise RebindDriverError("邮箱验证码校验失败且无法重新发送") from exc
+                otp_after_ts = time.time()
+        if outcome != "accepted":
+            raise RebindDriverError("邮箱验证码校验失败")
+        _safe_log(log, "浏览器换绑：目标邮箱验证码已通过")
+    else:
+        _safe_log(log, "浏览器换绑：页面未要求邮箱验证码")
+    return {"ok": True, "browser_ui": True, "submitted_email": target_email}
+
+
 def _api_spec(account: dict, target: dict) -> dict:
     for owner in (target, account):
         for key in ("rebind_api", "email_change", "email_change_spec", "rebind_endpoint"):
@@ -1208,6 +1454,12 @@ def _generic_action(
 ) -> dict:
     spec = _api_spec(context.account, context.target)
     if not spec:
+        # Browser drivers can complete the current account-settings flow even
+        # when a deployment has not supplied a site-specific API contract.
+        # Keep protocol-only callers strict so a missing endpoint is still
+        # diagnosed instead of being reported as a false success.
+        if context.driver is not None:
+            return _browser_ui_action(context, otp_getter=otp_getter, log=log)
         raise RebindDriverError("未配置邮箱变更端点或提交钩子")
     request = _protocol_request if action_driver == "protocol" else _browser_request
     transport = context.session if action_driver == "protocol" else context.driver

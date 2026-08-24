@@ -115,6 +115,37 @@ def test_missing_site_endpoint_fails_without_claiming_success():
         rebind_driver.rebind_account(_account(), _target(), driver="protocol", hooks={"login_protocol": login})
 
 
+def test_browser_submission_without_endpoint_uses_account_settings_fallback(monkeypatch):
+    calls = []
+
+    def login(context, **_kwargs):
+        context.driver = object()
+        context.driver_kind = "roxy"
+        context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
+
+    def browser_ui(context, otp_getter, log):
+        calls.append((context.target["email"], callable(otp_getter), log is None))
+        return {"ok": True, "browser_ui": True}
+
+    monkeypatch.setattr(rebind_driver, "_browser_ui_action", browser_ui)
+    result = rebind_driver.rebind_account(
+        _account(),
+        _target(),
+        login_driver="roxy",
+        action_driver="roxy",
+        hybrid=False,
+        hooks={
+            "login_browser": login,
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert result["verified_email"] == TARGET
+    assert calls == [(TARGET, True, True)]
+
+
 class FakeResponse:
     def __init__(self, status_code, data, url):
         self.status_code = status_code
