@@ -203,7 +203,7 @@ def _browser_error_text(exc: BaseException | None) -> str:
 
 
 def _is_browser_network_error(exc: BaseException | None) -> bool:
-    text = _browser_error_text(exc).lower()
+    text = f"{type(exc).__name__} {_browser_error_text(exc)}".lower()
     return any(marker in text for marker in (
         "err_socks_connection_failed", "err_proxy_connection_failed", "proxy",
         "net::err_", "connection refused", "connection reset", "timed out",
@@ -228,6 +228,57 @@ def _rebind_proxy_fallbacks(failed_proxy: str | None) -> list[str]:
     if failed:
         candidates.append("")
     return candidates
+
+
+def _protocol_preflight_with_fallback(
+    email: str,
+    proxy: str | None,
+    *,
+    log: Callable[[str], None] | None,
+) -> tuple[Any, str]:
+    """Run protocol preflight while replacing a dead saved route.
+
+    Rebind jobs often inherit ``live_check_proxy_used``.  That route can
+    expire between the liveness check and the rebind task, so protocol login
+    must get the same pool/direct fallback behavior as browser login instead
+    of retrying one dead SOCKS endpoint and stopping.
+    """
+    from core.account_liveness import _network_preflight_with_retry
+
+    candidates: list[str | None] = [proxy]
+    if proxy:
+        candidates.extend(_rebind_proxy_fallbacks(proxy))
+    unique: list[str | None] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = "<none>" if candidate is None else str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+
+    errors: list[str] = []
+    for index, candidate in enumerate(unique):
+        if index:
+            _safe_log(
+                log,
+                "协议登录网络出口失败，切换备用出口 "
+                f"（模式={'direct' if not candidate else 'proxy_pool'}）",
+            )
+        try:
+            return _network_preflight_with_retry(
+                email,
+                candidate,
+                max_attempts=2,
+                rotate_proxy_on_retry=True,
+            )
+        except Exception as exc:
+            if not _is_browser_network_error(exc):
+                raise
+            errors.append(_browser_error_text(exc) or type(exc).__name__)
+
+    detail = "; ".join(item for item in errors if item)[:500]
+    raise RebindDriverError(f"协议登录网络出口均失败：{detail or '代理连接失败'}")
 
 
 def _normalize_driver(value: Any, default: str = "protocol") -> str:
@@ -554,7 +605,6 @@ def _protocol_login_builtin(
         _auth_payload_value,
         _is_email_verification_state,
         _navigate_auth_step,
-        _network_preflight_with_retry,
     )
     from core.openai_auth import (
         continue_authorize_with_email,
@@ -599,12 +649,7 @@ def _protocol_login_builtin(
 
     login_password = str(account.get("registration_password") or "").strip()
     try:
-        session, authorize_url = _network_preflight_with_retry(
-            email,
-            proxy,
-            max_attempts=2,
-            rotate_proxy_on_retry=False,
-        )
+        session, authorize_url = _protocol_preflight_with_fallback(email, proxy, log=log)
         final_url = follow_authorize(session, authorize_url, allow_password_page=bool(login_password))
 
         if login_password:
@@ -1826,6 +1871,12 @@ def rebind_account(
             session, info = _protocol_login_builtin(account, proxy=effective_proxy, otp_getter=otp_getter, log=log, hooks=hook_map)
             context.session = session
             context.session_info = info
+            actual_proxy = str(getattr(session, "proxy", "") or "").strip()
+            if actual_proxy and actual_proxy != str(effective_proxy or "").strip():
+                effective_proxy = actual_proxy
+                context.proxy = actual_proxy
+                account["rebind_proxy"] = actual_proxy
+                _safe_log(log, "协议登录：已切换到可用网络出口，提交阶段复用该 Session")
             context.add_closer(lambda session=session: _close_resource(session))
         else:
             try:

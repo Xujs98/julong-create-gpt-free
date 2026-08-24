@@ -204,6 +204,34 @@ def test_missing_site_endpoint_fails_without_claiming_success():
         rebind_driver.rebind_account(_account(), _target(), driver="protocol", hooks={"login_protocol": login})
 
 
+def test_protocol_preflight_replaces_dead_saved_proxy(monkeypatch):
+    calls = []
+    logs = []
+
+    def preflight(email, proxy, **kwargs):
+        calls.append((email, proxy, kwargs))
+        if proxy != "":
+            raise RuntimeError("ProxyError: curl: (97) SOCKS5 connection failed")
+        return "live-session", "authorize-url"
+
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL", ""])
+    monkeypatch.setattr(
+        "core.account_liveness._network_preflight_with_retry",
+        preflight,
+    )
+
+    result = rebind_driver._protocol_preflight_with_fallback(
+        OLD,
+        "DEAD",
+        log=logs.append,
+    )
+
+    assert result == ("live-session", "authorize-url")
+    assert [item[1] for item in calls] == ["DEAD", "POOL", ""]
+    assert all(item[2] == {"max_attempts": 2, "rotate_proxy_on_retry": True} for item in calls)
+    assert any("切换备用出口" in line for line in logs)
+
+
 def test_browser_submission_without_endpoint_uses_account_settings_fallback(monkeypatch):
     calls = []
 
