@@ -31,6 +31,61 @@ def _target(**extra):
     return value
 
 
+def test_rebind_prefers_latest_account_proxy_when_task_has_no_override():
+    captured = []
+
+    def login_protocol(account, proxy, context, **_kwargs):
+        captured.append(proxy)
+        context.session = FakeTransport()
+        context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
+
+    rebind_driver.rebind_account(
+        {
+            **_account(),
+            "live_check_proxy_used": "socks5h://user:pass@live.example:3000",
+        },
+        _target(),
+        driver="protocol",
+        hooks={
+            "login_protocol": login_protocol,
+            "submit_protocol": lambda **_kwargs: {"ok": True},
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert captured == ["socks5h://user:pass@live.example:3000"]
+
+
+def test_explicit_empty_rebind_proxy_disables_saved_route():
+    captured = []
+
+    def login_protocol(account, proxy, context, **_kwargs):
+        captured.append(proxy)
+        context.session = FakeTransport()
+        context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
+
+    rebind_driver.rebind_account(
+        {
+            **_account(),
+            "live_check_proxy_used": "socks5h://user:pass@live.example:3000",
+        },
+        _target(),
+        driver="protocol",
+        proxy="",
+        hooks={
+            "login_protocol": login_protocol,
+            "submit_protocol": lambda **_kwargs: {"ok": True},
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert captured == [""]
+
+
 def test_hooked_protocol_rebind_reads_target_otp_and_verifies_remote_session():
     calls = []
     transport = FakeTransport()

@@ -16,35 +16,110 @@ from core.session_state import build_saved_session, capture_browser_cookies, ext
 logger = logging.getLogger(__name__)
 
 
-def _browser_session_once(driver) -> tuple[int, dict]:
-    """在 ChatGPT 页面内读取 Session，返回 HTTP 状态与 JSON。"""
-    result = driver.execute_async_script(r"""
-    const done = arguments[0];
-    fetch('/api/auth/session', {credentials:'include', cache:'no-store'})
-      .then(async r => {
-        const text = await r.text();
-        let data = {};
-        try { data = JSON.parse(text); } catch (_) {}
-        done({status:r.status, data, body:text.slice(0,500)});
-      })
-      .catch(e => done({status:0, error:String(e)}));
-    """) or {}
+_BROWSER_FETCH_TIMEOUT_MS = 15_000
+_BROWSER_SCRIPT_TIMEOUT_SECONDS = 25
+
+
+def _set_browser_script_timeout(driver, timeout_ms: int) -> None:
+    """Keep Selenium's async-script deadline above the page fetch deadline."""
+    setter = getattr(driver, "set_script_timeout", None)
+    if not callable(setter):
+        return
+    try:
+        setter(max(_BROWSER_SCRIPT_TIMEOUT_SECONDS, int(timeout_ms or 0) // 1000 + 5))
+    except Exception:
+        logger.debug("[查活][浏览器] 设置异步脚本超时失败", exc_info=True)
+
+
+def _is_browser_script_timeout(exc: Exception) -> bool:
+    """Recognize Selenium/Cloak timeout variants without importing eagerly."""
+    try:
+        from selenium.common.exceptions import TimeoutException
+
+        if isinstance(exc, TimeoutException):
+            return True
+    except Exception:
+        pass
+    text = f"{type(exc).__name__} {exc}".lower()
+    return "script timeout" in text or "execute_async_script timeout" in text or "timed out" in text
+
+
+def _browser_session_once(driver, *, timeout_ms: int = _BROWSER_FETCH_TIMEOUT_MS) -> tuple[int, dict]:
+    """在 ChatGPT 页面内读取 Session，返回 HTTP 状态与 JSON。
+
+    页面内请求自行 Abort，驱动超时只作为可恢复的“未读取到 Session”处理，
+    让调用方继续清理旧 Cookie 并进入重新登录分支。
+    """
+    timeout_ms = max(1_000, int(timeout_ms or _BROWSER_FETCH_TIMEOUT_MS))
+    _set_browser_script_timeout(driver, timeout_ms)
+    try:
+        result = driver.execute_async_script(r"""
+        const timeoutMs = Math.max(1000, Number(arguments[0] || 15000));
+        const done = arguments[arguments.length - 1];
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort('session_fetch_timeout'), timeoutMs);
+        fetch('/api/auth/session', {
+          credentials:'include', cache:'no-store', signal:controller.signal,
+          headers:{'accept':'application/json','cache-control':'no-cache'}
+        }).then(async r => {
+          const text = await r.text();
+          let data = {};
+          try { data = JSON.parse(text); } catch (_) {}
+          clearTimeout(timer);
+          done({status:r.status, data, body:text.slice(0,500)});
+        }).catch(e => {
+          clearTimeout(timer);
+          const timedOut = e && (e.name === 'AbortError' || String(e).includes('session_fetch_timeout'));
+          done({status:0, timedOut, error:String(e)});
+        });
+        """, timeout_ms) or {}
+    except Exception as exc:
+        if _is_browser_script_timeout(exc):
+            logger.warning("[查活][浏览器] /api/auth/session 异步请求超时，转入重新登录")
+        else:
+            logger.debug("[查活][浏览器] /api/auth/session 读取异常：%s", exc, exc_info=True)
+        return 0, {}
+    if isinstance(result, dict) and result.get("timedOut"):
+        logger.warning("[查活][浏览器] /api/auth/session 页面请求超时，转入重新登录")
+        return 0, {}
     data = result.get("data") if isinstance(result, dict) else {}
     return int(result.get("status") or 0), data if isinstance(data, dict) else {}
 
 
-def _browser_token_status(driver, access_token: str) -> int:
+def _browser_token_status(driver, access_token: str, *, timeout_ms: int = _BROWSER_FETCH_TIMEOUT_MS) -> int:
     """在真实浏览器网络栈中校验 AT，避免协议请求因 CF 403 误判账号。"""
-    result = driver.execute_async_script(r"""
-    const token = String(arguments[0] || '');
-    const done = arguments[arguments.length - 1];
-    fetch('/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-', {
-      method:'GET', credentials:'include',
-      headers:{'accept':'application/json','authorization':'Bearer ' + token}
-    }).then(async r => done({status:r.status, body:(await r.text()).slice(0,500)}))
-      .catch(e => done({status:0, error:String(e)}));
-    """, access_token) or {}
-    return int(result.get("status") or 0)
+    timeout_ms = max(1_000, int(timeout_ms or _BROWSER_FETCH_TIMEOUT_MS))
+    _set_browser_script_timeout(driver, timeout_ms)
+    try:
+        result = driver.execute_async_script(r"""
+        const token = String(arguments[0] || '');
+        const timeoutMs = Math.max(1000, Number(arguments[1] || 15000));
+        const done = arguments[arguments.length - 1];
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort('token_fetch_timeout'), timeoutMs);
+        fetch('/backend-api/accounts/check/v4-2023-04-27?timezone_offset_min=-', {
+          method:'GET', credentials:'include', signal:controller.signal,
+          headers:{'accept':'application/json','authorization':'Bearer ' + token}
+        }).then(async r => {
+          const body = (await r.text()).slice(0,500);
+          clearTimeout(timer);
+          done({status:r.status, body});
+        }).catch(e => {
+          clearTimeout(timer);
+          const timedOut = e && (e.name === 'AbortError' || String(e).includes('token_fetch_timeout'));
+          done({status:0, timedOut, error:String(e)});
+        });
+        """, access_token, timeout_ms) or {}
+    except Exception as exc:
+        if _is_browser_script_timeout(exc):
+            logger.warning("[查活][浏览器] AT 在线校验异步请求超时")
+        else:
+            logger.debug("[查活][浏览器] AT 在线校验读取异常：%s", exc, exc_info=True)
+        return 0
+    if isinstance(result, dict) and result.get("timedOut"):
+        logger.warning("[查活][浏览器] AT 在线校验页面请求超时")
+        return 0
+    return int(result.get("status") or 0) if isinstance(result, dict) else 0
 
 
 def _saved_cookies(account: dict) -> list[dict]:
@@ -521,19 +596,19 @@ def _open_cloak(proxy: str | None, headless: bool) -> tuple[Any, str | None, Cal
 
 def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[[], None]]:
     """启动查活专用 RoxyBrowser，并使用本次独立无头参数。"""
-    del proxy  # Roxy 环境代理由 Roxy 配置管理，保持与其环境创建逻辑一致。
     from config import roxybrowser as roxy_cfg
     from core.roxy_registration import _build_driver
     from core.roxybrowser_client import RoxyBrowserClient
 
     client = RoxyBrowserClient()
-    opened = client.open_profile(headless=headless)
+    opened = client.open_profile(headless=headless, proxy=proxy)
     driver = _build_driver(opened)
     driver._registration_log_prefix = "[查活][Roxy]"
     try:
         driver.set_page_load_timeout(int(getattr(roxy_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90))
     except Exception:
         pass
+    _set_browser_script_timeout(driver, _BROWSER_FETCH_TIMEOUT_MS)
 
     def _close() -> None:
         try:
@@ -548,7 +623,7 @@ def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Call
         ):
             client.delete_profile(opened.profile_id)
 
-    return driver, None, _close
+    return driver, client.last_proxy_url or proxy, _close
 
 
 def check_account_liveness_browser(

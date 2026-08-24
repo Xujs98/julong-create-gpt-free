@@ -5,6 +5,9 @@ import pytest
 
 from core.browser_liveness import (
     _browser_login,
+    _open_roxy,
+    _browser_session_once,
+    _browser_token_status,
     _clear_browser_auth_state,
     _fill_login_password,
     _login_with_email_otp,
@@ -12,6 +15,56 @@ from core.browser_liveness import (
     _wait_after_password,
     check_account_liveness_browser,
 )
+
+
+def test_browser_session_timeout_is_recoverable_and_rearms_script_deadline():
+    from selenium.common.exceptions import TimeoutException
+
+    driver = MagicMock()
+    driver.execute_async_script.side_effect = TimeoutException("script timeout")
+
+    assert _browser_session_once(driver) == (0, {})
+    driver.set_script_timeout.assert_called_once_with(25)
+
+
+def test_browser_token_timeout_returns_zero_instead_of_aborting_login():
+    from selenium.common.exceptions import TimeoutException
+
+    driver = MagicMock()
+    driver.execute_async_script.side_effect = TimeoutException("script timeout")
+
+    assert _browser_token_status(driver, "TOKEN") == 0
+    driver.set_script_timeout.assert_called_once_with(25)
+
+
+def test_browser_session_abort_response_is_recoverable():
+    driver = MagicMock()
+    driver.execute_async_script.return_value = {"status": 0, "timedOut": True}
+
+    assert _browser_session_once(driver) == (0, {})
+
+
+def test_roxy_opener_passes_explicit_proxy_to_profile_creation():
+    opened = type("Opened", (), {"profile_id": "PROFILE", "created_by_run": True})()
+    client = MagicMock()
+    client.open_profile.return_value = opened
+    client.last_proxy_url = "socks5h://user:pass@proxy.example:3000"
+    driver = MagicMock()
+
+    with patch("core.roxybrowser_client.RoxyBrowserClient", return_value=client), patch(
+        "core.roxy_registration._build_driver", return_value=driver
+    ):
+        actual_driver, proxy_used, closer = _open_roxy(
+            "socks5h://user:pass@proxy.example:3000", True
+        )
+
+    assert actual_driver is driver
+    assert proxy_used == client.last_proxy_url
+    client.open_profile.assert_called_once_with(
+        headless=True, proxy="socks5h://user:pass@proxy.example:3000"
+    )
+    closer()
+    client.close_profile.assert_called_once_with("PROFILE")
 
 
 def test_fill_login_password_uses_marked_form_controls_and_verified_value():
@@ -134,6 +187,23 @@ def test_browser_login_retries_when_existing_session_token_is_rejected():
     assert browser_login.call_count == 2
     assert browser_login.call_args_list[-1].kwargs["restore_saved_session"] is False
     assert browser_login.call_args_list[-1].kwargs["stale_session_retry"] is True
+
+
+def test_browser_login_restarts_after_session_fetch_timeout():
+    driver = MagicMock(current_url="https://chatgpt.example/")
+    session = {"accessToken": "NEW_TOKEN"}
+    with patch("core.roxy_registration._safe_get"), patch(
+        "core.browser_liveness._restore_cookies", return_value=16
+    ), patch("core.browser_liveness._browser_session_once", return_value=(0, {})), patch(
+        "core.browser_liveness._clear_browser_auth_state"
+    ) as clear_state, patch("core.roxy_registration._wait_for_cloudflare_challenge"), patch(
+        "core.roxy_registration._maybe_accept"
+    ), patch("core.roxy_registration._submit_email_and_wait_next", return_value="logged_in"), patch(
+        "core.roxy_registration._fetch_chatgpt_session", return_value=session
+    ), patch("core.browser_liveness._browser_token_status", return_value=200):
+        assert _browser_login(driver, {}, "user@example.com", headless=True) == session
+
+    clear_state.assert_called_once_with(driver)
 
 
 def test_browser_liveness_forces_fresh_login_without_saved_session_reuse():

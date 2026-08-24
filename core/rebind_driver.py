@@ -174,6 +174,20 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None) -> str | None:
+    """Prefer the account's latest live-check route when no task override exists."""
+    if explicit_proxy is not None:
+        return str(explicit_proxy).strip() or ""
+    for key in ("live_check_proxy_used", "proxy_used"):
+        value = str((account or {}).get(key) or "").strip()
+        if not value or "***" in value or "%2a%2a%2a" in value.lower():
+            continue
+        return value
+    # Passing None preserves the existing proxy-pool behavior in BrowserSession,
+    # CloakBrowser and RoxyBrowser when the account has no usable saved route.
+    return None
+
+
 def _normalize_driver(value: Any, default: str = "protocol") -> str:
     raw = str(value or "").strip().lower() or default
     raw = _DRIVER_ALIASES.get(raw, raw)
@@ -1653,17 +1667,18 @@ def rebind_account(
     selected_headless = _as_bool(headless, False)
     hook_map = _hook_map(hooks)
     otp_getter = _make_otp_getter(hook_map.get("otp"), default_target=target, log=log)
+    effective_proxy = _resolve_rebind_proxy(account, proxy)
     context = RebindContext(
         account=account,
         target=target,
         login_driver=login_name,
         action_driver=action_name,
         hybrid=mixed,
-        proxy=proxy,
+        proxy=effective_proxy,
     )
     # The task service passes proxy separately; browser action transport uses it
     # when it has to open a second browser after protocol login.
-    account.setdefault("rebind_proxy", proxy)
+    account.setdefault("rebind_proxy", effective_proxy)
     try:
         login_hook = hook_map.get("login_protocol" if login_name == "protocol" else "login_browser")
         if login_hook:
@@ -1673,7 +1688,7 @@ def rebind_account(
                 target=target,
                 target_email=target_email,
                 context=context,
-                proxy=proxy,
+                proxy=effective_proxy,
                 driver=login_name,
                 driver_name=login_name,
                 headless=selected_login_headless,
@@ -1683,7 +1698,7 @@ def rebind_account(
             _normalize_hook_result(context, raw_login)
             _require_stage_success(raw_login, "登录")
         elif login_name == "protocol":
-            session, info = _protocol_login_builtin(account, proxy=proxy, otp_getter=otp_getter, log=log, hooks=hook_map)
+            session, info = _protocol_login_builtin(account, proxy=effective_proxy, otp_getter=otp_getter, log=log, hooks=hook_map)
             context.session = session
             context.session_info = info
             context.add_closer(lambda session=session: _close_resource(session))
@@ -1691,7 +1706,7 @@ def rebind_account(
             browser, closer, info = _browser_login_builtin(
                 account,
                 driver_name=login_name,
-                proxy=proxy,
+                proxy=effective_proxy,
                 headless=selected_login_headless,
                 hooks=hook_map,
                 log=log,
@@ -1740,7 +1755,7 @@ def rebind_account(
                 hybrid=mixed,
                 headless=selected_headless,
                 login_headless=selected_login_headless,
-                proxy=proxy,
+                proxy=effective_proxy,
                 get_otp=otp_getter,
                 otp_provider=otp_getter,
                 log=log,
