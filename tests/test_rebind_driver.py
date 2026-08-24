@@ -399,3 +399,44 @@ def test_browser_settings_totp_gate_is_completed_before_new_email_form():
     assert [call.args[1] for call in type_otp.call_args_list] == ["123456", "654321"]
     assert clear_otp.call_count == 2
     assert click_continue.call_count == 2
+
+
+def test_browser_settings_reopens_after_totp_returns_to_logged_in_shell():
+    """A successful re-auth can land on the ChatGPT shell before settings reloads."""
+    context = rebind_driver.RebindContext(
+        account={**_account(), "totp_secret": "JBSWY3DPEHPK3PXP"},
+        target=_target(),
+        login_driver="roxy",
+        action_driver="roxy",
+        hybrid=False,
+        driver=MagicMock(),
+    )
+    states = [
+        {"buttons": [{"attrs": "account-info-email"}]},
+        {"inputs": [{"type": "password", "attrs": "current password"}]},
+        {
+            "text": "Check your authenticator app Enter the one-time authentication code",
+            "inputs": [{"type": "text", "attrs": "numeric code"}],
+        },
+        {"url": "https://chatgpt.com/", "text": "Skip to content Open sidebar New chat", "buttons": []},
+        {"buttons": [{"attrs": "account-info-email"}]},
+        {"inputs": [{"type": "email", "attrs": "new email"}]},
+        {"text": "Enter verification code", "inputs": [{"type": "text", "attrs": "verification code"}]},
+    ]
+    with patch("core.rebind_driver._wait_browser_state", side_effect=states), patch(
+        "core.rebind_driver._submit_browser_email_form", return_value={"ok": True}
+    ), patch("core.browser_liveness._fill_login_password"), patch(
+        "core.roxy_registration._clear_otp_inputs"
+    ), patch("core.roxy_registration._type_otp") as type_otp, patch(
+        "core.roxy_registration._click_continue"
+    ), patch("core.roxy_registration._wait_after_email_otp_submit", return_value="accepted"), patch(
+        "core.account_export._totp_code_with_margin", return_value="123456"
+    ), patch("core.roxy_registration._type_email_address"):
+        result = rebind_driver._browser_ui_action(
+            context,
+            otp_getter=lambda **_kwargs: "654321",
+            log=None,
+        )
+
+    assert result["submitted_email"] == TARGET
+    assert [call.args[1] for call in type_otp.call_args_list] == ["123456", "654321"]

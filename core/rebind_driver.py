@@ -932,37 +932,13 @@ def _browser_ui_action(
             _type_otp,
             _wait_after_email_otp_submit,
         )
-        from core.browser_liveness import _fill_login_password
+        from core.browser_liveness import (
+            _fill_login_password,
+            _is_totp_page,
+            _submit_totp_with_stable_window,
+        )
     except Exception as exc:
         raise RebindDriverError(f"浏览器换绑组件加载失败：{type(exc).__name__}") from exc
-
-    try:
-        driver.get("https://chatgpt.com/#settings/Account")
-    except Exception as exc:
-        raise RebindDriverError(f"浏览器打开账号设置失败：{type(exc).__name__}") from exc
-
-    state = _wait_browser_state(
-        driver,
-        lambda item: any("account-info-email" in str(entry.get("attrs") or "") for entry in item.get("buttons") or [])
-        or "e-mail" in str(item.get("text") or "").lower()
-        or "email address" in str(item.get("text") or "").lower()
-        or "邮箱" in str(item.get("text") or ""),
-        timeout=35,
-    )
-    try:
-        clicked = bool(driver.execute_script(r"""
-        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-        const button = document.querySelector('[data-testid="account-info-email"]')
-          || [...document.querySelectorAll('button,[role=button]')].find(el => visible(el)
-            && /email|e-mail|邮箱|メール/.test(String(el.innerText || el.textContent || '').toLowerCase()));
-        if (!button) return false;
-        button.scrollIntoView({block:'center'}); button.click(); return true;
-        """))
-    except Exception:
-        clicked = False
-    if not clicked:
-        raise RebindDriverError(f"账号设置中未找到邮箱变更入口：{state.get('url') or ''}")
-    _safe_log(log, "浏览器换绑：已打开账号邮箱变更入口")
 
     def _has_email_input(item: dict) -> bool:
         return any(
@@ -971,11 +947,60 @@ def _browser_ui_action(
             for entry in item.get("inputs") or []
         )
 
+    def _is_logged_in_page(item: dict) -> bool:
+        """Recognize the post-MFA ChatGPT shell before reopening settings."""
+        url = str(item.get("url") or "").lower()
+        button_text = " ".join(
+            " ".join(str(entry.get(key) or "") for key in ("text", "attrs"))
+            for entry in item.get("buttons") or []
+        ).lower()
+        text = f"{item.get('text') or ''} {button_text}".lower()
+        return "chatgpt.com" in url and any(marker in text for marker in (
+            "new chat", "skip to content", "open sidebar", "新建聊天", "跳转到内容",
+        ))
+
+    def _open_email_settings_entry() -> dict:
+        try:
+            driver.get("https://chatgpt.com/#settings/Account")
+        except Exception as exc:
+            raise RebindDriverError(f"浏览器打开账号设置失败：{type(exc).__name__}") from exc
+        state = _wait_browser_state(
+            driver,
+            lambda item: any("account-info-email" in str(entry.get("attrs") or "") for entry in item.get("buttons") or [])
+            or "e-mail" in str(item.get("text") or "").lower()
+            or "email address" in str(item.get("text") or "").lower()
+            or "邮箱" in str(item.get("text") or ""),
+            timeout=35,
+        )
+        try:
+            clicked = bool(driver.execute_script(r"""
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+            const button = document.querySelector('[data-testid="account-info-email"]')
+              || [...document.querySelectorAll('button,[role=button]')].find(el => visible(el)
+                && /email|e-mail|邮箱|メール/.test(String(el.innerText || el.textContent || '').toLowerCase()));
+            if (!button) return false;
+            button.scrollIntoView({block:'center'}); button.click(); return true;
+            """))
+        except Exception:
+            clicked = False
+        if not clicked:
+            raise RebindDriverError(f"账号设置中未找到邮箱变更入口：{state.get('url') or ''}")
+        _safe_log(log, "浏览器换绑：已打开账号邮箱变更入口")
+        return state
+
+    _open_email_settings_entry()
+
     def _has_totp_challenge(item: dict) -> bool:
         attrs = " ".join(str(entry.get("attrs") or "") for entry in item.get("inputs") or []).lower()
         text = f"{item.get('url') or ''} {item.get('text') or ''} {attrs}".lower()
         if not re.search(r"one.?time|otp|mfa|2fa|totp|verification|numeric|code|tel", attrs):
-            return False
+            # Auth pages can render the input with only a generic type and
+            # expose the MFA semantics through the live DOM/body text.  Reuse
+            # the liveness detector instead of relying on a snapshot alone.
+            try:
+                return bool(_is_totp_page(driver, expect_totp=bool(context.account.get("totp_secret"))))
+            except Exception:
+                return False
         if any(marker in text for marker in (
             "email-verification", "email verification", "code sent to", "check your email",
             "verify your email", "邮箱验证码", "邮件验证码",
@@ -988,36 +1013,30 @@ def _browser_ui_action(
 
     def _submit_current_password_totp(secret: str) -> dict:
         """Complete the account-settings MFA gate, then return the next page state."""
-        import pyotp
+        def _wait_after_submit(_code: str) -> dict:
+            state = _wait_browser_state(
+                driver,
+                lambda item: _has_email_input(item)
+                or _is_logged_in_page(item)
+                or _has_totp_challenge(item),
+                timeout=20,
+            )
+            if _has_email_input(state) or _is_logged_in_page(state):
+                _safe_log(log, "浏览器换绑：当前密码后的 TOTP 验证已通过")
+                return state
+            raise RuntimeError(str(state.get("text") or "TOTP 页面未进入下一步")[:240])
 
-        from core.account_export import _totp_code_with_margin
-
-        totp = pyotp.TOTP(str(secret or "").replace(" ", "").strip())
-        last_state: dict = {}
-        last_error: Exception | None = None
-        for attempt in range(2):
-            try:
-                code = _totp_code_with_margin(totp, force_next=attempt > 0)
-                _clear_otp_inputs(driver)
-                _type_otp(driver, code, timeout=20)
-                try:
-                    _click_continue(driver)
-                except Exception:
-                    pass
-                last_state = _wait_browser_state(
-                    driver,
-                    lambda item: _has_email_input(item) or _has_totp_challenge(item),
-                    timeout=20,
-                )
-                if _has_email_input(last_state):
-                    _safe_log(log, "浏览器换绑：当前密码后的 TOTP 验证已通过")
-                    return last_state
-                last_error = RuntimeError(str(last_state.get("text") or "TOTP 页面未进入下一步")[:240])
-            except Exception as exc:
-                last_error = exc
-            if attempt == 0:
-                _safe_log(log, "浏览器换绑：当前密码后的 TOTP 未完成，切换下一时间窗口")
-        raise RebindDriverError(f"当前密码后的 TOTP 验证失败：{str(last_error or 'unknown')[:400]}") from last_error
+        try:
+            return _submit_totp_with_stable_window(
+                driver,
+                secret,
+                on_submitted=_wait_after_submit,
+                max_attempts=2,
+            )
+        except Exception as exc:
+            raise RebindDriverError(
+                f"当前密码后的 TOTP 验证失败：{str(exc or 'unknown')[:400]}"
+            ) from exc
 
     password_state = _wait_browser_state(
         driver,
@@ -1049,6 +1068,14 @@ def _browser_ui_action(
                 if not totp_secret:
                     raise RebindDriverError("当前密码验证要求认证器验证码，但账号没有保存 2FA secret")
                 email_state = _submit_current_password_totp(totp_secret)
+                if _is_logged_in_page(email_state) and not _has_email_input(email_state):
+                    # Auth may finish by returning to the main ChatGPT shell.
+                    # Reopen Account settings now that the fresh login is
+                    # established instead of trying to type another OTP into
+                    # the already-authenticated page.
+                    _safe_log(log, "浏览器换绑：TOTP 登录已完成，重新打开账号邮箱变更入口")
+                    _open_email_settings_entry()
+                    email_state = _wait_browser_state(driver, _has_email_input, timeout=25)
             if _has_email_input(email_state):
                 break
             error_text = str(email_state.get("text") or "").lower()

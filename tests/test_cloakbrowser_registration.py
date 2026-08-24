@@ -333,6 +333,27 @@ def test_otp_falls_back_to_plain_six_visible_inputs():
         box.send_keys.assert_called_once_with(char)
 
 
+def test_otp_single_generic_input_uses_accessible_code_label():
+    from core.roxy_registration import _type_otp
+
+    driver = Mock()
+    otp_input = Mock()
+    otp_input.is_displayed.return_value = True
+    otp_input.is_enabled.return_value = True
+    otp_input.get_attribute.side_effect = lambda key: {
+        "aria-label": "Numeric code",
+        "type": "text",
+    }.get(key, "")
+    # The page has no stable name/inputmode; only the accessible label marks it.
+    driver.find_elements.side_effect = [[], [], [], [], [otp_input]]
+    driver.execute_script.return_value = "603241"
+
+    with patch("core.roxy_registration._human_type_text") as type_text:
+        _type_otp(driver, "603241", timeout=1)
+
+    type_text.assert_called_once_with(driver, otp_input, "603241", clear=True)
+
+
 def test_wait_for_email_otp_page_classifies_login_password_before_typing():
     from core.roxy_registration import _wait_for_email_otp_page
 

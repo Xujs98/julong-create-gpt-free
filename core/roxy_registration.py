@@ -1416,12 +1416,32 @@ def _type_otp(driver, code: str, timeout: int = 15) -> None:
             try:
                 attrs = " ".join(
                     str(e.get_attribute(k) or "")
-                    for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type", "data-index", "tabindex")
+                    for k in (
+                        "inputmode", "autocomplete", "aria-label", "placeholder",
+                        "name", "id", "type", "data-testid", "data-index", "tabindex",
+                    )
                 ).lower()
             except Exception:
                 attrs = ""
             if any(x in attrs for x in ("numeric", "one-time", "code", "otp", "tel", "data-index")):
                 numeric_boxes.append(e)
+        if len(numeric_boxes) == 1:
+            target = numeric_boxes[0]
+            try:
+                _human_type_text(driver, target, expected, clear=True)
+                observed = str(driver.execute_script("return String(arguments[0].value || '');", target) or "")
+            except Exception:
+                observed = ""
+            if observed == expected:
+                return
+            try:
+                _set_element_value(driver, target, expected)
+                observed = str(driver.execute_script("return String(arguments[0].value || '');", target) or "")
+            except Exception:
+                observed = ""
+            if observed == expected:
+                return
+            raise RuntimeError(f"OTP 输入值校验失败：expected={expected!r}, observed={observed!r}")
         if len(numeric_boxes) < len(expected) and len(boxes) == len(expected):
             numeric_boxes = boxes
         if len(numeric_boxes) >= len(expected):
@@ -1539,7 +1559,8 @@ def _clear_otp_inputs(driver) -> None:
         driver.execute_script(r"""
         const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
         const inputs = [...document.querySelectorAll('input')].filter(visible).filter(el => {
-          const attrs = [el.type, el.name, el.id, el.autocomplete, el.inputMode, el.getAttribute('aria-label')].join(' ').toLowerCase();
+          const attrs = [el.type, el.name, el.id, el.autocomplete, el.inputMode,
+            el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-testid')].join(' ').toLowerCase();
           return /one-time|otp|code|numeric|tel/.test(attrs);
         });
         for (const el of inputs) {

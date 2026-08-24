@@ -446,15 +446,24 @@ def _wait_after_password(
     raise RuntimeError(f"提交密码后未进入登录态/MFA/邮箱验证码页，诊断: {diagnostic}")
 
 
-def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") -> dict:
+def _submit_code_and_fetch_session(
+    driver,
+    code: str,
+    *,
+    code_kind: str = "",
+    code_filled: bool = False,
+    already_submitted: bool = False,
+) -> dict:
     """填写 TOTP/邮箱 OTP，提交后读取 ChatGPT Session。"""
     from core.roxy_registration import _click_continue, _fetch_chatgpt_session, _type_otp, _wait_after_email_otp_submit
 
-    _type_otp(driver, code, timeout=20)
-    try:
-        _click_continue(driver)
-    except Exception as exc:
-        logger.info("[查活][浏览器] 未找到显式验证码提交按钮，继续等待页面跳转：%s", str(exc)[:160])
+    if not code_filled:
+        _type_otp(driver, code, timeout=20)
+    if not already_submitted:
+        try:
+            _click_continue(driver)
+        except Exception as exc:
+            logger.info("[查活][浏览器] 未找到显式验证码提交按钮，继续等待页面跳转：%s", str(exc)[:160])
     if code_kind == "email_otp":
         outcome = _wait_after_email_otp_submit(driver, timeout=12)
         if outcome != "accepted":
@@ -462,9 +471,23 @@ def _submit_code_and_fetch_session(driver, code: str, *, code_kind: str = "") ->
     return _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=12)
 
 
-def _submit_totp_and_fetch_session(driver, secret: str, *, max_attempts: int = 2) -> dict:
-    """Submit the saved authenticator code using the same stable-window logic as liveness."""
+def _submit_totp_with_stable_window(
+    driver,
+    secret: str,
+    *,
+    on_submitted: Callable[[str], Any],
+    max_attempts: int = 2,
+    fill_input: bool = True,
+    click_submit: bool = True,
+) -> Any:
+    """Submit a saved TOTP and run a caller-specific post-submit waiter.
+
+    The liveness and rebind flows both encounter the same Auth MFA page.  Keep
+    code generation, input clearing, submit and next-window retry in one place
+    so a page transition is handled consistently by both flows.
+    """
     from core.account_export import _totp_code_with_margin
+    from core.roxy_registration import _clear_otp_inputs, _click_continue, _type_otp
 
     totp = pyotp.TOTP(str(secret or "").replace(" ", "").strip())
     last_error: Exception | None = None
@@ -473,14 +496,37 @@ def _submit_totp_and_fetch_session(driver, secret: str, *, max_attempts: int = 2
         try:
             code = _totp_code_with_margin(totp, force_next=attempt > 0)
             logger.info("[查活][浏览器][TOTP] 提交动态验证码（%s/%s）", attempt + 1, attempts)
-            return _submit_code_and_fetch_session(driver, code, code_kind="totp")
+            if fill_input:
+                _clear_otp_inputs(driver)
+                _type_otp(driver, code, timeout=20)
+            if click_submit:
+                try:
+                    _click_continue(driver)
+                except Exception as exc:
+                    logger.info("[查活][浏览器][TOTP] 未找到显式提交按钮，继续等待页面推进：%s", str(exc)[:160])
+            return on_submitted(code)
         except Exception as exc:
             last_error = exc
             if attempt + 1 >= attempts:
                 break
-            logger.warning("[查活][浏览器][TOTP] 当前验证码提交未完成，切换下一时间窗口：%s", str(exc)[:240])
+            logger.warning(
+                "[查活][浏览器][TOTP] 当前验证码提交未完成，切换下一时间窗口：%s",
+                str(exc)[:240],
+            )
             time.sleep(0.5)
-    raise RuntimeError(f"TOTP 登录连续失败：{str(last_error or 'unknown')[:400]}") from last_error
+    raise RuntimeError(f"TOTP 验证连续失败：{str(last_error or 'unknown')[:400]}") from last_error
+
+
+def _submit_totp_and_fetch_session(driver, secret: str, *, max_attempts: int = 2) -> dict:
+    """Submit the saved authenticator code using the same stable-window logic as liveness."""
+    return _submit_totp_with_stable_window(
+        driver,
+        secret,
+        max_attempts=max_attempts,
+        fill_input=False,
+        click_submit=False,
+        on_submitted=lambda code: _submit_code_and_fetch_session(driver, code, code_kind="totp"),
+    )
 
 
 def _login_with_email_otp(driver, email: str, *, after_ts: float, max_attempts: int = 3) -> dict:
