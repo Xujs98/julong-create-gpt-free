@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -355,3 +356,46 @@ def test_non_hybrid_stage_config_uses_one_action_driver_for_login_and_submit():
     assert result["action_driver"] == "protocol"
     assert result["hybrid"] is False
     assert calls == ["protocol-login", "protocol-submit"]
+
+
+def test_browser_settings_totp_gate_is_completed_before_new_email_form():
+    context = rebind_driver.RebindContext(
+        account={**_account(), "totp_secret": "JBSWY3DPEHPK3PXP"},
+        target=_target(),
+        login_driver="roxy",
+        action_driver="roxy",
+        hybrid=False,
+        driver=MagicMock(),
+    )
+    states = [
+        {"buttons": [{"attrs": "account-info-email"}]},
+        {"inputs": [{"type": "password", "attrs": "current password"}]},
+        {
+            "text": "Check your authenticator app Enter the one-time authentication code",
+            "inputs": [{"type": "text", "attrs": "numeric code"}],
+        },
+        {"inputs": [{"type": "email", "attrs": "new email"}]},
+        {"text": "Enter verification code", "inputs": [{"type": "text", "attrs": "verification code"}]},
+    ]
+    with patch("core.rebind_driver._wait_browser_state", side_effect=states), patch(
+        "core.rebind_driver._submit_browser_email_form", return_value={"ok": True}
+    ), patch("core.browser_liveness._fill_login_password"), patch(
+        "core.roxy_registration._clear_otp_inputs"
+    ) as clear_otp, patch("core.roxy_registration._type_otp") as type_otp, patch(
+        "core.roxy_registration._click_continue"
+    ) as click_continue, patch(
+        "core.roxy_registration._wait_after_email_otp_submit", return_value="accepted"
+    ), patch("core.account_export._totp_code_with_margin", return_value="123456") as totp_code, patch(
+        "core.roxy_registration._type_email_address"
+    ):
+        result = rebind_driver._browser_ui_action(
+            context,
+            otp_getter=lambda **_kwargs: "654321",
+            log=None,
+        )
+
+    assert result["submitted_email"] == TARGET
+    totp_code.assert_called_once_with(ANY, force_next=False)
+    assert [call.args[1] for call in type_otp.call_args_list] == ["123456", "654321"]
+    assert clear_otp.call_count == 2
+    assert click_continue.call_count == 2

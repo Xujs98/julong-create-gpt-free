@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import random
+import threading
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -15,6 +17,11 @@ from config import roxybrowser as _cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
 
 logger = logging.getLogger(__name__)
+
+
+# Roxy 本地服务在异步创建 Profile 时不接受并发 /browser/create 请求。
+# 进程内所有客户端共享这把锁，避免注册/查活/换绑任务同时创建环境。
+_ROXY_CREATE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -170,55 +177,79 @@ class RoxyBrowserClient:
             or "http 429" in text
         )
 
+    @staticmethod
+    def _is_create_busy_error(exc: Exception) -> bool:
+        """识别 Roxy 创建接口的异步占用提示。"""
+        text = str(exc or "").lower()
+        return any(marker in text for marker in (
+            "正在创建中",
+            "creating, please wait",
+            "creating please wait",
+            "create in progress",
+            "creation in progress",
+            "currently creating",
+            "正在创建",
+        ))
+
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
         url = _join_url(self.api_base, path)
         method_u = method.upper()
-        # create 超时后服务端可能已创建环境，直接重试可能产生孤儿环境；默认不重试 create。
+        # create 超时后服务端可能已创建环境，普通网络错误仍不重试，
+        # 但 Roxy 明确返回“正在创建中”时，说明请求未开始，需要串行退避重试。
         is_create = str(path or "").rstrip("/").endswith("/create") or "browser/create" in str(path or "")
-        max_attempts = 1 if is_create else max(1, int(getattr(_cfg, "ROXY_API_RETRIES", 3) or 3))
+        if is_create:
+            max_attempts = max(
+                1,
+                int(getattr(_cfg, "ROXY_CREATE_RETRIES", getattr(_cfg, "ROXY_API_RETRIES", 3)) or 3),
+            )
+        else:
+            max_attempts = max(1, int(getattr(_cfg, "ROXY_API_RETRIES", 3) or 3))
         base_delay = max(0.5, float(getattr(_cfg, "ROXY_API_RETRY_DELAY", 2) or 2))
         last_exc: Exception | None = None
-        for attempt in range(1, max_attempts + 1):
-            try:
-                logger.debug(
-                    "[Roxy] %s %s params=%s body=%s attempt=%s/%s",
-                    method, url, params, json_body, attempt, max_attempts,
-                )
-                resp = self.http.request(
-                    method_u,
-                    url,
-                    params=params or None,
-                    json=json_body if json_body is not None else None,
-                    timeout=max(5, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
-                )
-                text = resp.text or ""
+        # 锁覆盖完整的创建请求与退避等待，确保下一个线程不会在 Roxy 仍处于
+        # “正在创建中”状态时抢先发起第二个 create。
+        with (_ROXY_CREATE_LOCK if is_create else nullcontext()):
+            for attempt in range(1, max_attempts + 1):
                 try:
-                    payload = resp.json()
-                except Exception:
-                    payload = {"raw": text}
-                if not (200 <= resp.status_code < 300):
-                    raise RuntimeError(f"Roxy API 请求失败 {method_u} {path} HTTP {resp.status_code}: {text[:500]}")
-                if isinstance(payload, dict):
-                    code = payload.get("code")
-                    ok = payload.get("ok")
-                    success = payload.get("success")
-                    if code not in (None, 0, 200, "0", "200") and ok is not True and success is not True:
-                        msg = payload.get("msg") or payload.get("message") or payload.get("error") or json.dumps(payload, ensure_ascii=False)[:500]
-                        raise RuntimeError(f"Roxy API 返回失败 {method_u} {path}: {msg}")
-                if attempt > 1:
-                    logger.info("[Roxy] API 重试成功：%s %s attempt=%s/%s", method_u, path, attempt, max_attempts)
-                return payload if isinstance(payload, dict) else {"data": payload}
-            except Exception as exc:
-                last_exc = exc
-                retryable = self._is_retryable_error(exc)
-                if attempt >= max_attempts or not retryable:
-                    raise
-                delay = base_delay * attempt
-                logger.warning(
-                    "[Roxy] API 请求失败，将在 %.1fs 后重试：%s %s attempt=%s/%s error=%s",
-                    delay, method_u, path, attempt, max_attempts, exc,
-                )
-                time.sleep(delay)
+                    logger.debug(
+                        "[Roxy] %s %s params=%s body=%s attempt=%s/%s",
+                        method, url, params, json_body, attempt, max_attempts,
+                    )
+                    resp = self.http.request(
+                        method_u,
+                        url,
+                        params=params or None,
+                        json=json_body if json_body is not None else None,
+                        timeout=max(5, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
+                    )
+                    text = resp.text or ""
+                    try:
+                        payload = resp.json()
+                    except Exception:
+                        payload = {"raw": text}
+                    if not (200 <= resp.status_code < 300):
+                        raise RuntimeError(f"Roxy API 请求失败 {method_u} {path} HTTP {resp.status_code}: {text[:500]}")
+                    if isinstance(payload, dict):
+                        code = payload.get("code")
+                        ok = payload.get("ok")
+                        success = payload.get("success")
+                        if code not in (None, 0, 200, "0", "200") and ok is not True and success is not True:
+                            msg = payload.get("msg") or payload.get("message") or payload.get("error") or json.dumps(payload, ensure_ascii=False)[:500]
+                            raise RuntimeError(f"Roxy API 返回失败 {method_u} {path}: {msg}")
+                    if attempt > 1:
+                        logger.info("[Roxy] API 重试成功：%s %s attempt=%s/%s", method_u, path, attempt, max_attempts)
+                    return payload if isinstance(payload, dict) else {"data": payload}
+                except Exception as exc:
+                    last_exc = exc
+                    retryable = self._is_create_busy_error(exc) if is_create else self._is_retryable_error(exc)
+                    if attempt >= max_attempts or not retryable:
+                        raise
+                    delay = base_delay * attempt
+                    logger.warning(
+                        "[Roxy] API 请求失败，将在 %.1fs 后重试：%s %s attempt=%s/%s error=%s",
+                        delay, method_u, path, attempt, max_attempts, exc,
+                    )
+                    time.sleep(delay)
         raise last_exc or RuntimeError(f"Roxy API 请求失败 {method_u} {path}")
 
     def try_request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> tuple[bool, dict | str]:

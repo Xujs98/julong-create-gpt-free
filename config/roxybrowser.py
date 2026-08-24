@@ -59,9 +59,12 @@ ROXY_OPEN_EXTRA_PARAMS: dict = {}
 ROXY_SELENIUM_TIMEOUT: int = 90
 ROXY_KEEP_BROWSER_OPEN: bool = False
 
-# Roxy API transient 错误重试。create 接口默认不重试，避免超时后重复创建孤儿环境；open/close/delete 会重试。
+# Roxy API transient 错误重试。create 仅对“正在创建中”占用提示重试，
+# 普通超时仍不重试，避免服务端已创建环境后产生孤儿 Profile。
 ROXY_API_RETRIES: int = 3
 ROXY_API_RETRY_DELAY: int = 2
+# 同一进程内的 /browser/create 已串行化；占用提示最多重试此次数。
+ROXY_CREATE_RETRIES: int = 3
 
 # 环境生命周期：
 #   True  = 一号一环境：每个账号强制创建新 Profile，用完关闭并删除，不允许复用 ROXY_PROFILE_ID

@@ -971,6 +971,54 @@ def _browser_ui_action(
             for entry in item.get("inputs") or []
         )
 
+    def _has_totp_challenge(item: dict) -> bool:
+        attrs = " ".join(str(entry.get("attrs") or "") for entry in item.get("inputs") or []).lower()
+        text = f"{item.get('url') or ''} {item.get('text') or ''} {attrs}".lower()
+        if not re.search(r"one.?time|otp|mfa|2fa|totp|verification|numeric|code|tel", attrs):
+            return False
+        if any(marker in text for marker in (
+            "email-verification", "email verification", "code sent to", "check your email",
+            "verify your email", "邮箱验证码", "邮件验证码",
+        )):
+            return False
+        return any(marker in text for marker in (
+            "authenticator", "authentication app", "verification app", "one-time password",
+            "security code", "/mfa", "mfa", "2fa", "totp", "双重验证", "验证器",
+        ))
+
+    def _submit_current_password_totp(secret: str) -> dict:
+        """Complete the account-settings MFA gate, then return the next page state."""
+        import pyotp
+
+        from core.account_export import _totp_code_with_margin
+
+        totp = pyotp.TOTP(str(secret or "").replace(" ", "").strip())
+        last_state: dict = {}
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                code = _totp_code_with_margin(totp, force_next=attempt > 0)
+                _clear_otp_inputs(driver)
+                _type_otp(driver, code, timeout=20)
+                try:
+                    _click_continue(driver)
+                except Exception:
+                    pass
+                last_state = _wait_browser_state(
+                    driver,
+                    lambda item: _has_email_input(item) or _has_totp_challenge(item),
+                    timeout=20,
+                )
+                if _has_email_input(last_state):
+                    _safe_log(log, "浏览器换绑：当前密码后的 TOTP 验证已通过")
+                    return last_state
+                last_error = RuntimeError(str(last_state.get("text") or "TOTP 页面未进入下一步")[:240])
+            except Exception as exc:
+                last_error = exc
+            if attempt == 0:
+                _safe_log(log, "浏览器换绑：当前密码后的 TOTP 未完成，切换下一时间窗口")
+        raise RebindDriverError(f"当前密码后的 TOTP 验证失败：{str(last_error or 'unknown')[:400]}") from last_error
+
     password_state = _wait_browser_state(
         driver,
         lambda item: any(str(entry.get("type") or "").lower() == "password" for entry in item.get("inputs") or []),
@@ -990,11 +1038,17 @@ def _browser_ui_action(
             email_state = _wait_browser_state(
                 driver,
                 lambda item: _has_email_input(item)
+                or _has_totp_challenge(item)
                 or "timed out" in str(item.get("text") or "").lower()
                 or "network error" in str(item.get("text") or "").lower()
                 or "operation timed out" in str(item.get("text") or "").lower(),
                 timeout=30,
             )
+            if _has_totp_challenge(email_state):
+                totp_secret = str(context.account.get("totp_secret") or "").replace(" ", "").strip()
+                if not totp_secret:
+                    raise RebindDriverError("当前密码验证要求认证器验证码，但账号没有保存 2FA secret")
+                email_state = _submit_current_password_totp(totp_secret)
             if _has_email_input(email_state):
                 break
             error_text = str(email_state.get("text") or "").lower()
