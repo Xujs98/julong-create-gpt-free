@@ -235,6 +235,41 @@ def test_browser_submission_without_endpoint_uses_account_settings_fallback(monk
     assert calls == [(TARGET, True, True)]
 
 
+def test_protocol_action_without_endpoint_reuses_browser_login_without_bridge(monkeypatch):
+    calls = []
+
+    def login(context, **_kwargs):
+        context.driver = object()
+        context.driver_kind = "roxy"
+        context.session_info = {"user": {"email": OLD}, "accessToken": "old-token"}
+
+    def browser_ui(context, otp_getter, log):
+        calls.append((context.action_driver, context.target["email"], callable(otp_getter), log is None))
+        return {"ok": True, "browser_ui": True}
+
+    def unexpected_protocol_bridge(*_args, **_kwargs):
+        raise AssertionError("protocol bridge should not run without a protocol endpoint")
+
+    monkeypatch.setattr(rebind_driver, "_browser_ui_action", browser_ui)
+    monkeypatch.setattr(rebind_driver, "_ensure_protocol_transport", unexpected_protocol_bridge)
+    result = rebind_driver.rebind_account(
+        _account(),
+        _target(),
+        login_driver="roxy",
+        action_driver="protocol",
+        hybrid=True,
+        hooks={
+            "login_browser": login,
+            "verify": lambda target_email, **_kwargs: {
+                "session": {"user": {"email": target_email}, "accessToken": "fresh-token"}
+            },
+        },
+    )
+
+    assert result["verified_email"] == TARGET
+    assert calls == [("protocol", TARGET, True, True)]
+
+
 class FakeResponse:
     def __init__(self, status_code, data, url):
         self.status_code = status_code

@@ -1881,7 +1881,15 @@ def rebind_account(
         # browser/protocol conversion before invoking that hook.
         if not submit_hook:
             if action_name == "protocol":
-                _ensure_protocol_transport(context, hook_map, log)
+                # When no protocol endpoint is configured, the generic
+                # submitter intentionally falls back to the account-settings
+                # browser UI.  Do not create a curl session just to validate a
+                # browser login; CF can reject that duplicate /api/auth/session
+                # request even though the browser session is already valid.
+                if _api_spec(account, target) or context.driver is None:
+                    _ensure_protocol_transport(context, hook_map, log)
+                else:
+                    _safe_log(log, "协议端点未配置，复用已建立的浏览器登录态执行账号设置换绑")
             else:
                 _ensure_browser_transport(context, hook_map, selected_headless, log)
 
