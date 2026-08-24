@@ -2471,38 +2471,46 @@
     }
 
 
-    /* ---- 新版配置布局（追加在概览下方） ---- */
+    /* ---- 商业化配置中心 ---- */
     .config-layout-v2 {
-      margin-top: 16px;
+      --config-ink: #172033;
+      --config-muted: #718096;
+      --config-line: #e7ebf3;
+      --config-brand: #4f6bff;
+      --config-brand-dark: #3d52d5;
+      --config-soft: #f5f7ff;
+      margin-top: 18px;
       display: grid;
-      grid-template-columns: 220px minmax(0, 1fr);
-      gap: 16px;
+      grid-template-columns: 228px minmax(0, 1fr);
+      gap: 20px;
       align-items: start;
     }
     .config-nav-v2 {
       position: sticky; top: 16px; z-index: 2;
       align-self: start;
-      border: 1px solid #ebeef5; border-radius: 10px; background: #fff;
-      box-shadow: 0 0 12px rgba(0,0,0,.04); padding: 14px 10px;
+      border: 1px solid var(--config-line); border-radius: 16px; background: rgba(255,255,255,.94);
+      box-shadow: 0 12px 34px rgba(27,39,94,.07); padding: 14px 10px;
       box-sizing: border-box;
     }
     .config-nav-v2-title {
-      margin: 0 8px 10px; font-size: 13px; font-weight: 600; color: #909399;
+      margin: 0 10px 12px; font-size: 11px; font-weight: 800; color: #9aa4b7;
+      letter-spacing: .12em; text-transform: uppercase;
     }
     .config-nav-v2-list {
-      display: flex; flex-direction: column; gap: 2px;
+      display: flex; flex-direction: column; gap: 4px;
     }
     .config-nav-v2-item {
       display: flex; align-items: center; gap: 10px;
-      width: 100%; margin: 0; padding: 10px 12px;
-      border: none; border-radius: 8px; background: transparent;
-      color: #606266; font: inherit; font-size: 14px; font-weight: 500;
+      width: 100%; min-height: 42px; margin: 0; padding: 10px 12px;
+      border: 1px solid transparent; border-radius: 10px; background: transparent;
+      color: #667085; font: inherit; font-size: 13px; font-weight: 600;
       text-align: left; cursor: pointer; box-sizing: border-box;
-      transition: background .12s ease, color .12s ease;
+      transition: background .16s ease, color .16s ease, border-color .16s ease, transform .16s ease;
     }
-    .config-nav-v2-item:hover { background: #f5f7fa; color: #303133; }
+    .config-nav-v2-item:hover { background: #f7f8fc; color: var(--config-ink); transform: translateX(2px); }
     .config-nav-v2-item.is-active {
-      background: #ecf5ff; color: #377DFF;
+      border-color: #dfe4ff; background: linear-gradient(135deg, #f0f3ff, #f7f9ff); color: var(--config-brand);
+      box-shadow: inset 3px 0 0 var(--config-brand);
     }
     .config-nav-v2-item svg {
       width: 18px; height: 18px; flex-shrink: 0;
@@ -2512,56 +2520,107 @@
     .config-nav-v2-item span {
       min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .config-main-v2 { min-width: 0; display: grid; gap: 16px; }
+    .config-main-v2 { min-width: 0; display: grid; gap: 18px; }
+    .config-command-v2 {
+      position: relative; overflow: hidden;
+      display: flex; align-items: center; justify-content: space-between; gap: 24px;
+      min-height: 104px; padding: 22px 24px;
+      border: 1px solid #dfe4ff; border-radius: 18px;
+      background:
+        radial-gradient(circle at 88% 18%, rgba(94,234,212,.24), transparent 26%),
+        linear-gradient(135deg, #f7f9ff 0%, #eef2ff 52%, #f8fbff 100%);
+      box-shadow: 0 18px 44px rgba(46,61,140,.10);
+      box-sizing: border-box;
+    }
+    .config-command-v2::after {
+      content: ''; position: absolute; width: 170px; height: 170px; right: -75px; bottom: -105px;
+      border: 28px solid rgba(79,107,255,.07); border-radius: 50%; pointer-events: none;
+    }
+    .config-command-v2-copy { position: relative; z-index: 1; min-width: 0; }
+    .config-command-v2-kicker {
+      display: inline-flex; align-items: center; gap: 7px; margin-bottom: 7px;
+      color: var(--config-brand); font-size: 11px; font-weight: 800; letter-spacing: .13em;
+    }
+    .config-command-v2-kicker::before {
+      content: ''; width: 7px; height: 7px; border-radius: 50%; background: #20b486;
+      box-shadow: 0 0 0 5px rgba(32,180,134,.10);
+    }
+    .config-command-v2 h2 { margin: 0; color: var(--config-ink); font-size: 21px; line-height: 1.25; letter-spacing: -.02em; }
+    .config-command-v2 p { margin: 6px 0 0; max-width: 650px; color: var(--config-muted); font-size: 13px; line-height: 1.55; }
+    .config-command-v2-actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .config-command-v2-button {
+      min-height: 40px; margin: 0; padding: 0 16px; border-radius: 10px;
+      border: 1px solid #d8deed; background: rgba(255,255,255,.82); color: #586174;
+      font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      box-shadow: 0 5px 14px rgba(31,45,96,.06);
+    }
+    .config-command-v2-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .config-command-v2-button:hover:not(:disabled) { border-color: #b9c3dc; color: var(--config-ink); background: #fff; }
+    .config-command-v2-button.primary { border-color: var(--config-brand); background: var(--config-brand); color: #fff; box-shadow: 0 8px 20px rgba(79,107,255,.24); }
+    .config-command-v2-button.primary:hover:not(:disabled) { border-color: var(--config-brand-dark); background: var(--config-brand-dark); color: #fff; }
+    .config-command-v2-button:disabled { opacity: .48; cursor: default; box-shadow: none; }
     .config-cards-v2 {
-      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px;
     }
     .config-card-v2 {
-      min-height: 108px; padding: 16px;
-      border: 1px solid #ebeef5; border-radius: 10px; background: #fff;
-      box-shadow: 0 0 12px rgba(0,0,0,.04);
-      display: flex; flex-direction: column; gap: 8px;
-      position: relative;
+      --card-accent: #4f6bff; --card-accent-soft: #edf0ff;
+      min-height: 134px; padding: 17px 18px 16px;
+      border: 1px solid var(--config-line); border-radius: 16px; background: #fff;
+      box-shadow: 0 10px 28px rgba(26,38,87,.065);
+      display: flex; flex-direction: column; gap: 7px; position: relative; overflow: hidden;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
     }
+    .config-card-v2::before { content: ''; position: absolute; inset: 0 0 auto; height: 3px; background: var(--card-accent); opacity: .88; }
+    .config-card-v2:hover { transform: translateY(-2px); border-color: #d9deec; box-shadow: 0 15px 34px rgba(26,38,87,.10); }
+    .config-card-v2[data-tone="mint"] { --card-accent: #18a77b; --card-accent-soft: #eaf9f4; }
+    .config-card-v2[data-tone="amber"] { --card-accent: #e79a2f; --card-accent-soft: #fff6e8; }
+    .config-card-v2[data-tone="violet"] { --card-accent: #8b5cf6; --card-accent-soft: #f3efff; }
     .config-card-v2-top {
-      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
     }
     .config-card-v2-label {
-      font-size: 12px; color: #909399; line-height: 1.3;
+      font-size: 11px; font-weight: 750; color: #8a94a7; line-height: 1.3; letter-spacing: .05em;
     }
     .config-card-v2-icon {
-      width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
-      color: #409eff; background: color-mix(in srgb, #409eff 12%, transparent);
+      width: 34px; height: 34px; border-radius: 11px; flex-shrink: 0;
+      color: var(--card-accent); background: var(--card-accent-soft);
       display: inline-flex; align-items: center; justify-content: center;
     }
     .config-card-v2-icon svg {
-      width: 15px; height: 15px; stroke: currentColor; fill: none;
+      width: 17px; height: 17px; stroke: currentColor; fill: none;
       stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
     }
     .config-card-v2-value {
-      font-size: 18px; font-weight: 700; color: #303133; line-height: 1.25;
+      margin-top: 2px; font-size: 22px; font-weight: 760; color: var(--config-ink); line-height: 1.2; letter-spacing: -.025em;
     }
     .config-card-v2-value.is-placeholder { color: #c0c4cc; }
     .config-card-v2-hint {
-      margin-top: auto; font-size: 12px; color: #909399; line-height: 1.4;
+      margin-top: auto; font-size: 11px; color: var(--config-muted); line-height: 1.45;
+    }
+    .config-card-v2-badge {
+      display: inline-flex; align-items: center; width: fit-content; min-height: 22px; padding: 0 8px;
+      border-radius: 999px; background: var(--card-accent-soft); color: var(--card-accent);
+      font-size: 10px; font-weight: 800;
     }
     .config-ep-select {
       position: relative; display: block; width: 100%; margin-top: 2px;
     }
     .config-ep-select-btn {
-      width: 100%; min-height: 36px; margin: 0; padding: 0 28px 0 12px;
-      border: 1px solid #dcdfe6; border-radius: 4px; background: #fff;
-      color: #303133; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+      width: 100%; min-height: 44px; margin: 0; padding: 0 36px 0 14px;
+      border: 1px solid #dce2ee; border-radius: 10px; background: #fff;
+      color: var(--config-ink); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: flex-start;
       box-sizing: border-box; position: relative; text-align: left;
     }
     .config-ep-select-btn:hover,
     .config-ep-select-btn:focus,
     .config-ep-select.open .config-ep-select-btn {
-      color: #303133 !important; border-color: #dcdfe6 !important; background: #fff !important;
+      color: var(--config-ink) !important; border-color: #9eacf8 !important; background: #fff !important;
+      box-shadow: 0 0 0 3px rgba(79,107,255,.10);
     }
     .config-ep-select-btn::after {
-      content: ""; position: absolute; right: 10px; top: 50%;
+      content: ""; position: absolute; right: 14px; top: 50%;
       width: 0; height: 0; margin-top: -2px;
       border-left: 4px solid transparent; border-right: 4px solid transparent;
       border-top: 5px solid #909399;
@@ -2571,40 +2630,42 @@
     }
     .config-ep-select-menu {
       display: none; position: absolute; left: 0; top: calc(100% + 8px);
-      min-width: 100%; width: max-content; max-width: 280px; padding: 6px;
-      border-radius: 8px; background: #fff;
-      box-shadow: 0 8px 24px rgba(15,23,42,.12), 0 0 0 1px rgba(15,23,42,.04);
+      min-width: 100%; width: max-content; max-width: 320px; padding: 7px;
+      border: 1px solid #e4e8f1; border-radius: 12px; background: #fff;
+      box-shadow: 0 18px 40px rgba(15,23,42,.16);
       z-index: 40; box-sizing: border-box;
     }
     .config-ep-select.open .config-ep-select-menu { display: block; }
     .config-ep-select-item {
       width: 100%; min-height: 34px; height: auto; margin: 0; padding: 8px 12px;
-      border: none; border-radius: 6px; background: transparent;
-      color: #606266; font: inherit; font-size: 14px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
+      border: none; border-radius: 8px; background: transparent;
+      color: #667085; font: inherit; font-size: 13px; cursor: pointer;
+      display: flex; align-items: center; justify-content: flex-start;
       box-sizing: border-box; white-space: nowrap;
     }
-    .config-ep-select-item:hover { background: #f5f7fa; color: #377DFF; }
-    .config-ep-select-item.is-active { background: #f0f2f5; color: #303133; font-weight: 500; }
+    .config-ep-select-item:hover { background: #f4f6ff; color: var(--config-brand); }
+    .config-ep-select-item.is-active { background: #eef1ff; color: var(--config-brand); font-weight: 700; }
     .config-select-v2-field .config-ep-select { margin-top: 6px; }
     .config-select-v2-field .config-ep-select-btn { font-weight: 500; color: #606266; }
-    .config-sections-v2 { display: grid; gap: 16px; }
+    .config-sections-v2 { display: grid; gap: 18px; }
     .config-section-v2 {
       scroll-margin-top: 20px;
-      border: 1px solid #ebeef5; border-radius: 10px; background: #fff;
-      box-shadow: 0 0 12px rgba(0,0,0,.04); padding: 20px 22px; min-height: 120px;
+      border: 1px solid var(--config-line); border-radius: 18px; background: #fff;
+      box-shadow: 0 12px 34px rgba(27,39,94,.065); padding: 0; min-height: 120px; overflow: hidden;
+      transition: border-color .18s ease, box-shadow .18s ease;
     }
+    .config-section-v2.is-dirty { border-color: #c9d1ff; box-shadow: 0 14px 38px rgba(79,107,255,.11); }
     .config-section-v2 h3 {
-      margin: 0; font-size: 18px; font-weight: 700; color: #303133;
+      margin: 0; font-size: 18px; font-weight: 760; color: var(--config-ink); letter-spacing: -.015em;
     }
     .config-section-v2 > p {
       margin: 8px 0 0; font-size: 13px; color: #909399; line-height: 1.5;
     }
     .config-section-v2-body {
-      margin-top: 18px;
+      margin: 0; padding: 20px 24px 22px;
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-      gap: 12px 18px;
+      gap: 14px;
       min-width: 0;
     }
     .config-section-v2-body--single {
@@ -2614,31 +2675,65 @@
       max-width: 100%;
     }
     .config-section-v2-body label.fld {
-      margin-bottom: 0;
+      margin: 0; padding: 15px 16px 16px;
       min-width: 0; max-width: 100%; overflow: visible;
+      border: 1px solid #edf0f5; border-radius: 13px; background: #fafbfe;
+      box-sizing: border-box; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
     }
+    .config-section-v2-body label.fld:focus-within { border-color: #c9d1ff; background: #fff; box-shadow: 0 0 0 3px rgba(79,107,255,.07); }
+    .config-field-v2-copy { min-width: 0; }
+    .config-field-v2-label { display: block; color: #2b3548; font-size: 13px; font-weight: 720; line-height: 1.4; }
+    .config-field-v2-control { margin-top: 11px; }
     .config-section-v2-body label.fld > input,
     .config-section-v2-body label.fld > select,
     .config-section-v2-body label.fld > textarea {
-      width: 100%; max-width: 100%;
+      width: 100%; max-width: 100%; min-height: 42px; margin-top: 0;
+      border-color: #dfe4ec; border-radius: 9px; background: #fff; color: #263146; font-size: 13px;
+      box-shadow: inset 0 1px 1px rgba(20,30,55,.02);
     }
+    .config-section-v2-body label.fld > textarea,
+    .config-section-v2-body .config-field-v2-control > textarea { min-height: 108px; line-height: 1.55; }
+    .config-field-v2-control > input,
+    .config-field-v2-control > select,
+    .config-field-v2-control > textarea { width: 100%; max-width: 100%; min-height: 42px; margin-top: 0; border-color: #dfe4ec; border-radius: 9px; background: #fff; color: #263146; font-size: 13px; }
+    .config-field-v2-control > input:focus,
+    .config-field-v2-control > select:focus,
+    .config-field-v2-control > textarea:focus { border-color: #8798ff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); outline: none; }
     .config-section-v2-body label.fld .hint {
-      line-height: 1.45; white-space: normal; overflow: visible;
+      display: block; margin-top: 4px; color: #8a94a7; font-size: 11px; font-weight: 450;
+      line-height: 1.5; white-space: normal; overflow: visible;
       overflow-wrap: anywhere; word-break: break-word;
     }
     .config-section-v2-actions {
-      margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px;
+      margin: 0; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      border-top: 1px solid #edf0f5; background: #fbfcfe;
     }
+    .config-section-v2-save-state { display: inline-flex; align-items: center; gap: 8px; color: #8791a3; font-size: 11px; font-weight: 650; }
+    .config-section-v2-save-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #20b486; box-shadow: 0 0 0 4px rgba(32,180,134,.09); }
+    .config-section-v2.is-dirty .config-section-v2-save-state { color: #6b5bd2; }
+    .config-section-v2.is-dirty .config-section-v2-save-state::before { background: #8b5cf6; box-shadow: 0 0 0 4px rgba(139,92,246,.10); }
+    .config-save-v2-button {
+      min-height: 38px; min-width: 108px; margin: 0; padding: 0 16px;
+      border: 1px solid var(--config-brand); border-radius: 9px; background: var(--config-brand); color: #fff;
+      font: inherit; font-size: 12px; font-weight: 750; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      box-shadow: 0 7px 18px rgba(79,107,255,.20); transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
+    }
+    .config-save-v2-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .config-save-v2-button:hover:not(:disabled) { background: var(--config-brand-dark); transform: translateY(-1px); box-shadow: 0 9px 20px rgba(79,107,255,.27); }
+    .config-save-v2-button:disabled { opacity: .6; cursor: default; transform: none; box-shadow: none; }
     .config-section-v2-placeholder {
       margin: 8px 0 0; font-size: 13px; color: #c0c4cc; line-height: 1.5;
     }
     .config-section-v2-head {
-      display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 20px 24px; border-bottom: 1px solid #edf0f5;
+      background: linear-gradient(180deg, #fff, #fcfdff);
     }
     .config-section-v2-head-main { min-width: 0; }
     .config-section-v2-head-icon {
-      width: 40px; height: 40px; flex-shrink: 0; border-radius: 10px;
-      color: #377DFF; background: color-mix(in srgb, #377DFF 12%, transparent);
+      width: 42px; height: 42px; flex-shrink: 0; border-radius: 13px;
+      color: var(--config-brand); background: #eef1ff; border: 1px solid #e1e6ff;
       display: inline-flex; align-items: center; justify-content: center;
     }
     .config-section-v2-head-icon svg {
@@ -2646,41 +2741,42 @@
       stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
     }
     .config-section-v2-meta {
-      margin: 6px 0 0; font-size: 13px; color: #909399; line-height: 1.4;
+      margin: 6px 0 0; font-size: 12px; color: #8791a3; line-height: 1.5;
     }
     .config-switches-v2 {
-      margin-top: 18px;
+      margin: 20px 24px 22px;
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 18px 28px;
+      gap: 12px;
     }
     .config-subtabs-v2 {
-      margin-top: 16px;
-      display: flex; gap: 8px; flex-wrap: wrap;
-      padding: 6px; border: 1px solid #ebeef5; border-radius: 10px; background: #fafbfc;
+      margin: 18px 24px 0; display: flex; gap: 6px; flex-wrap: wrap;
+      padding: 5px; border: 1px solid #e8ebf2; border-radius: 11px; background: #f6f7fa;
     }
     .config-subtabs-v2 button {
       border: none; background: transparent; color: #606266;
       border-radius: 8px; min-height: 34px; padding: 0 14px;
-      cursor: pointer; font: inherit; font-size: 13px; font-weight: 500;
+      cursor: pointer; font: inherit; font-size: 12px; font-weight: 650;
     }
     .config-subtabs-v2 button:hover { background: #f5f7fa; color: #303133; }
-    .config-subtabs-v2 button.active { background: #ecf5ff; color: #377DFF; font-weight: 600; }
+    .config-subtabs-v2 button.active { background: #fff; color: var(--config-brand); font-weight: 750; box-shadow: 0 4px 12px rgba(25,38,85,.08); }
     .config-section-v2-subhelp {
-      margin: 12px 0 0; font-size: 13px; color: #909399; line-height: 1.5;
+      margin: 14px 24px 0; padding: 11px 13px; border-left: 3px solid #b8c2ff; border-radius: 0 8px 8px 0;
+      background: #f7f8ff; font-size: 11px; color: #768097; line-height: 1.55;
     }
     .config-switches-v2 + .config-section-v2-body {
 
-      margin-top: 20px;
-      padding-top: 18px;
-      border-top: 1px solid #ebeef5;
+      margin-top: 0; padding-top: 20px; border-top: 1px solid #edf0f5;
     }
     .config-switch-v2 {
-      min-width: 0; display: grid; gap: 12px; align-content: start;
+      min-width: 0; min-height: 122px; padding: 15px 16px;
+      display: grid; grid-template-rows: auto 1fr; gap: 10px; align-content: start;
+      border: 1px solid #edf0f5; border-radius: 13px; background: #fafbfe; box-sizing: border-box;
     }
     .config-switch-v2-top {
-      display: flex; align-items: center; gap: 10px; min-width: 0;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0;
     }
+    .config-switch-v2-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .config-switch-v2-icon {
       width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
       display: inline-flex; align-items: center; justify-content: center;
@@ -2694,12 +2790,12 @@
     .config-switch-v2-icon--flow { color: #e6a23c; background: color-mix(in srgb, #e6a23c 12%, transparent); }
     .config-switch-v2-icon--default { color: #909399; background: #f5f7fa; }
     .config-switch-v2-label {
-      min-width: 0; font-size: 14px; font-weight: 600; color: #303133; line-height: 1.4;
+      min-width: 0; font-size: 13px; font-weight: 720; color: #2b3548; line-height: 1.4;
     }
     .config-switch-v2-toggle {
-      position: relative; width: 40px !important; height: 22px !important;
-      min-width: 40px !important; max-width: 40px !important;
-      min-height: 22px !important; max-height: 22px !important;
+      position: relative; width: 42px !important; height: 24px !important;
+      min-width: 42px !important; max-width: 42px !important;
+      min-height: 24px !important; max-height: 24px !important;
       margin: 0 !important; padding: 0 !important;
       border: none !important; background: transparent !important;
       cursor: pointer; box-sizing: border-box;
@@ -2713,31 +2809,63 @@
     }
     .config-switch-v2-toggle::after {
       content: ''; position: absolute; top: 2px; left: 2px;
-      width: 18px; height: 18px; border-radius: 50%; background: #fff;
+      width: 20px; height: 20px; border-radius: 50%; background: #fff;
       box-shadow: 0 1px 3px rgba(0,0,0,.18);
       transition: transform .15s ease;
     }
-    .config-switch-v2-toggle:checked::before { background: #377DFF; }
+    .config-switch-v2-toggle:checked::before { background: var(--config-brand); }
     .config-switch-v2-toggle:checked::after { transform: translateX(18px); }
     .config-switch-v2-toggle:focus-visible {
       outline: 2px solid color-mix(in srgb, #377DFF 45%, transparent);
       outline-offset: 2px; border-radius: 999px;
     }
     .config-switch-v2-help {
-      margin: 0; font-size: 12px; color: #909399; line-height: 1.55;
+      margin: 0; font-size: 11px; color: #8791a3; line-height: 1.55;
     }
-    @media (max-width: 1100px) {
-      .config-switches-v2 { grid-template-columns: 1fr; gap: 16px; }
+    .config-switch-v2-status { display: inline-flex; margin-left: auto; color: #9aa4b7; font-size: 10px; font-weight: 750; }
+    .config-switch-v2-status.is-on { color: #16966f; }
+    #tab-config .roxy-workspace-box {
+      margin: 18px 24px 0 !important; padding: 16px 18px;
+      border: 1px solid #e1e6ff; border-radius: 13px; background: linear-gradient(135deg, #f7f8ff, #fbfcff);
+      box-shadow: none;
     }
-    @media (max-width: 1100px) {
+    #tab-config .roxy-workspace-box b { color: #2b3548; font-size: 13px; }
+    #tab-config .roxy-workspace-box .hint { color: #7d8799; font-size: 11px; line-height: 1.5; }
+    .config-service-v2-list { display: grid; gap: 9px; margin: 14px 24px 0; }
+    .config-service-v2-card { display: flex; align-items: center; gap: 10px; padding: 12px 13px; border: 1px solid #e6eaf2; border-radius: 11px; background: #fbfcfe; }
+    .config-service-v2-card.is-active { border-color: #bdc7ff; background: #f4f6ff; box-shadow: inset 3px 0 0 var(--config-brand); }
+    .config-service-v2-card-main { flex: 1; border: 0; background: transparent; text-align: left; cursor: pointer; color: #2b3548; }
+    .config-service-v2-card-main .hint { margin-top: 3px; color: #8490a3; font-size: 11px; }
+    .config-mode-v2 { display: flex; gap: 8px; margin: 16px 24px 12px; }
+    .config-mode-v2 .config-ep-select-item { width: auto; min-width: 96px; border: 1px solid #e0e5ef; background: #fff; justify-content: center; }
+    .config-mode-v2 .config-ep-select-item.is-active { border-color: #bdc7ff; background: #eef1ff; }
+    .config-inline-action-v2 { margin: 12px 24px 0; }
+    .config-field-stat { margin-top: 7px; color: #7d8799; font-size: 11px; }
+    @media (max-width: 1250px) {
       .config-cards-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .config-switches-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 1100px) {
+      .config-command-v2 { align-items: flex-start; flex-direction: column; }
+      .config-command-v2-actions { width: 100%; justify-content: flex-end; }
     }
     @media (max-width: 900px) {
       .config-layout-v2 { grid-template-columns: 1fr; }
       .config-nav-v2 { position: static; }
+      .config-nav-v2-list { flex-direction: row; overflow-x: auto; padding-bottom: 3px; }
+      .config-nav-v2-item { width: auto; flex: 0 0 auto; }
+      .config-nav-v2-item.is-active { box-shadow: inset 0 -3px 0 var(--config-brand); }
     }
     @media (max-width: 600px) {
       .config-cards-v2 { grid-template-columns: 1fr; }
+      .config-switches-v2 { grid-template-columns: 1fr; }
+      .config-command-v2 { padding: 19px 17px; }
+      .config-command-v2-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .config-command-v2-button { width: 100%; padding: 0 10px; }
+      .config-section-v2-head, .config-section-v2-body { padding-left: 17px; padding-right: 17px; }
+      .config-switches-v2, .config-subtabs-v2, .config-section-v2-subhelp, #tab-config .roxy-workspace-box,
+      .config-service-v2-list, .config-mode-v2, .config-inline-action-v2 { margin-left: 17px !important; margin-right: 17px !important; }
+      .config-section-v2-actions { padding-left: 17px; padding-right: 17px; }
     }
 
     /* ---- 配置页概览 ---- */
@@ -3307,33 +3435,24 @@ try {
         <div class="config-nav-v2-list" id="configNavV2"></div>
       </aside>
       <div class="config-main-v2">
-        <div class="config-cards-v2" id="configCardsV2" aria-label="配置概览卡片">
-          <div class="config-card-v2" id="configCardRegistrationV2">
-            <div class="config-card-v2-top">
-              <div class="config-card-v2-label">注册方式</div>
-              <span class="config-card-v2-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M4 6h7"/><path d="M4 12h7"/><path d="M4 18h7"/><path d="M15 6l5 6-5 6"/></svg>
-              </span>
-            </div>
-            <div class="config-card-v2-value" id="configCardRegistrationLabelV2">—</div>
-            <div class="config-card-v2-hint" id="configCardRegistrationHintV2">驱动标识: —</div>
+        <div class="config-command-v2" aria-label="配置操作台">
+          <div class="config-command-v2-copy">
+            <div class="config-command-v2-kicker">OPERATIONS CONTROL</div>
+            <h2>工作流控制台</h2>
+            <p>集中管理注册、授权、邮箱与浏览器策略。更改会被实时追踪，保存后按运行时能力自动生效。</p>
           </div>
-          <div class="config-card-v2">
-            <div class="config-card-v2-label">占位卡片 2</div>
-            <div class="config-card-v2-value is-placeholder">—</div>
-            <div class="config-card-v2-hint">内容稍后完善</div>
-          </div>
-          <div class="config-card-v2">
-            <div class="config-card-v2-label">占位卡片 3</div>
-            <div class="config-card-v2-value is-placeholder">—</div>
-            <div class="config-card-v2-hint">内容稍后完善</div>
-          </div>
-          <div class="config-card-v2">
-            <div class="config-card-v2-label">占位卡片 4</div>
-            <div class="config-card-v2-value is-placeholder">—</div>
-            <div class="config-card-v2-hint">内容稍后完善</div>
+          <div class="config-command-v2-actions">
+            <button type="button" class="config-command-v2-button" id="configDiscardV2" data-config-discard-v2 disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/></svg>
+              撤销更改
+            </button>
+            <button type="button" class="config-command-v2-button primary" id="configSaveAllV2" data-save-config-v2>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4"/><path d="M8 20v-6h8v6"/></svg>
+              保存全部
+            </button>
           </div>
         </div>
+        <div class="config-cards-v2" id="configCardsV2" aria-label="配置概览卡片"></div>
         <div class="config-sections-v2" id="configSectionsV2"></div>
       </div>
     </div>
@@ -8197,6 +8316,101 @@ function renderConfigSectionHead(name, meta = '') {
     </div>
   `;
 }
+function configFieldValueV2(field) {
+  if (!field) return '';
+  return Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, field.key)
+    ? CONFIG_PENDING_UPDATES[field.key]
+    : field.value;
+}
+function configValuesEqualV2(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  return String(a == null ? '' : a) === String(b == null ? '' : b);
+}
+function setConfigPendingValueV2(key, value) {
+  const field = (CONFIG || []).find(item => item.key === key);
+  if (field && configValuesEqualV2(value, field.value)) delete CONFIG_PENDING_UPDATES[key];
+  else CONFIG_PENDING_UPDATES[key] = value;
+}
+function configValueConfiguredV2(field) {
+  const value = configFieldValueV2(field);
+  if (field.type === 'bool') return true;
+  if (field.readonly) return true;
+  if (Array.isArray(value)) return value.length > 0;
+  return String(value == null ? '' : value).trim() !== '' && !isPlaceholderEmpty(value);
+}
+function renderConfigSectionActionsV2() {
+  return `
+    <div class="config-section-v2-actions">
+      <span class="config-section-v2-save-state" data-config-state-v2>配置已同步</span>
+      <button type="button" class="config-save-v2-button" data-save-config-v2>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8V4"/><path d="M8 20v-6h8v6"/></svg>
+        保存设置
+      </button>
+    </div>
+  `;
+}
+function renderConfigOverviewCardsV2() {
+  const mount = document.getElementById('configCardsV2');
+  if (!mount) return;
+  const editable = (CONFIG || []).filter(field => !field.readonly);
+  const bools = editable.filter(field => field.type === 'bool');
+  const enabled = bools.filter(field => !!configFieldValueV2(field)).length;
+  const configured = editable.filter(configValueConfiguredV2).length;
+  const completion = editable.length ? Math.round((configured / editable.length) * 100) : 100;
+  const pending = Object.keys(CONFIG_PENDING_UPDATES).filter(key => editable.some(field => field.key === key)).length;
+  const driver = getRegistrationDriverValue();
+  const driverLabel = registrationDriverLabel(driver);
+  const cards = [
+    {
+      tone: '', label: '当前注册策略', value: driverLabel, badge: '运行中',
+      hint: `驱动标识 · ${driver}`,
+      icon: '<path d="M4 6h7"/><path d="M4 12h7"/><path d="M4 18h7"/><path d="M15 6l5 6-5 6"/>'
+    },
+    {
+      tone: 'mint', label: '自动化能力', value: `${enabled} / ${bools.length}`, badge: enabled ? '已启用' : '待配置',
+      hint: '已开启的功能开关 / 全部功能开关',
+      icon: '<path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.9 4.9l2.9 2.9"/><path d="M16.2 16.2l2.9 2.9"/><circle cx="12" cy="12" r="3"/>'
+    },
+    {
+      tone: 'amber', label: '配置完整度', value: `${completion}%`, badge: completion >= 80 ? '状态良好' : '继续完善',
+      hint: `${configured} / ${editable.length} 个可编辑项已配置`,
+      icon: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>'
+    },
+    {
+      tone: 'violet', label: '变更状态', value: pending ? `${pending} 项待保存` : '已同步', badge: pending ? '有更改' : '实时同步',
+      hint: pending ? '更改已保留在当前页面' : '当前表单与运行配置一致',
+      icon: '<path d="M20 6L9 17l-5-5"/><path d="M20 12a8 8 0 1 1-4-6.9"/>'
+    }
+  ];
+  mount.innerHTML = cards.map((card, index) => `
+    <article class="config-card-v2"${card.tone ? ` data-tone="${card.tone}"` : ''}${index === 0 ? ' id="configCardRegistrationV2"' : ''}>
+      <div class="config-card-v2-top">
+        <div class="config-card-v2-label">${esc(card.label)}</div>
+        <span class="config-card-v2-icon" aria-hidden="true"><svg viewBox="0 0 24 24">${card.icon}</svg></span>
+      </div>
+      <div class="config-card-v2-value"${index === 0 ? ' id="configCardRegistrationLabelV2"' : ''}>${esc(card.value)}</div>
+      <span class="config-card-v2-badge">${esc(card.badge)}</span>
+      <div class="config-card-v2-hint"${index === 0 ? ' id="configCardRegistrationHintV2"' : ''}>${esc(card.hint)}</div>
+    </article>
+  `).join('');
+}
+function syncConfigDirtyIndicatorsV2() {
+  const pendingKeys = new Set(Object.keys(CONFIG_PENDING_UPDATES));
+  document.querySelectorAll('#configSectionsV2 .config-section-v2').forEach(section => {
+    const name = section.dataset.configSection || '';
+    const dirty = (CONFIG || []).some(field => (field.group || '其他') === name && pendingKeys.has(field.key));
+    section.classList.toggle('is-dirty', dirty);
+    const state = section.querySelector('[data-config-state-v2]');
+    if (state) state.textContent = dirty ? '有未保存的更改' : '配置已同步';
+  });
+  const discard = document.getElementById('configDiscardV2');
+  if (discard) discard.disabled = pendingKeys.size === 0;
+  renderConfigOverviewCardsV2();
+}
 function registrationDriverChoices() {
   return [
     { value: 'protocol', label: '纯协议注册' },
@@ -8236,13 +8450,14 @@ function toggleConfigEpSelect(wrapId, e) {
 }
 function setRegistrationDriverValue(value) {
   const cur = String(value || 'protocol').trim().toLowerCase() || 'protocol';
-  CONFIG_PENDING_UPDATES.REGISTRATION_DRIVER = cur;
+  setConfigPendingValueV2('REGISTRATION_DRIVER', cur);
   closeConfigEpSelects();
   renderRegistrationDriverCard();
   const sectionMount = document.getElementById('configRegistrationSelectV2');
   if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
   bindCloudMailToolsV2();
+  syncConfigDirtyIndicatorsV2();
 }
 function renderRegistrationEpSelect(mount, wrapId) {
   if (!mount) return;
@@ -8260,22 +8475,16 @@ function renderRegistrationEpSelect(mount, wrapId) {
   `;
 }
 function renderRegistrationDriverCard() {
-  const cur = getRegistrationDriverValue();
-  const label = registrationDriverLabel(cur);
-  const labelEl = document.getElementById('configCardRegistrationLabelV2');
-  const hintEl = document.getElementById('configCardRegistrationHintV2');
-  if (labelEl) {
-    labelEl.textContent = label;
-    labelEl.classList.toggle('is-placeholder', !label || label === '—');
-  }
-  if (hintEl) hintEl.textContent = `驱动标识: ${cur}`;
+  renderConfigOverviewCardsV2();
 }
 function renderRegistrationDriverField(f) {
   return `
     <label class="fld config-select-v2-field">
-      注册方式
-      <span class="hint">选择注册所用的自动化方式</span>
-      <div class="config-ep-select" id="configRegistrationSelectV2"></div>
+      <span class="config-field-v2-copy">
+        <span class="config-field-v2-label">注册方式</span>
+        <span class="hint">选择注册所用的自动化方式</span>
+      </span>
+      <div class="config-field-v2-control"><div class="config-ep-select" id="configRegistrationSelectV2"></div></div>
     </label>
   `;
 }
@@ -8291,14 +8500,16 @@ function renderFeatureSwitchField(f, opts = {}) {
   const agentReady = !f.requires_agent || !!(CONFIG.find(x => x.key === 'PAGE_AGENT_STATUS') || {}).status_ok;
   return `
     <div class="config-switch-v2">
-      ${withIcon ? `
       <div class="config-switch-v2-top">
-        <span class="config-switch-v2-icon ${icon.cls}" aria-hidden="true">
-          <svg viewBox="0 0 24 24">${icon.svg}</svg>
-        </span>
-        <div class="config-switch-v2-label">${esc(displayLabel)}</div>
-      </div>` : `<div class="config-switch-v2-label">${esc(displayLabel)}</div>`}
-      <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(f.key)}"${on ? ' checked' : ''}${agentReady ? '' : ' disabled aria-disabled="true"'} aria-label="${attrEsc(displayLabel)}">
+        <div class="config-switch-v2-heading">
+          ${withIcon ? `<span class="config-switch-v2-icon ${icon.cls}" aria-hidden="true"><svg viewBox="0 0 24 24">${icon.svg}</svg></span>` : ''}
+          <div>
+            <div class="config-switch-v2-label">${esc(displayLabel)}</div>
+            <span class="config-switch-v2-status${on ? ' is-on' : ''}" data-config-switch-status-v2>${on ? '已开启' : '已关闭'}</span>
+          </div>
+        </div>
+        <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(f.key)}"${on ? ' checked' : ''}${agentReady ? '' : ' disabled aria-disabled="true"'} aria-label="${attrEsc(displayLabel)}">
+      </div>
       <p class="config-switch-v2-help">${esc(displayHelp || '')}</p>
       ${f.requires_agent && !agentReady ? '<p class="config-switch-v2-help" style="color:var(--orange);">请先在“页面 Agent”中完成配置并点击测试</p>' : ''}
     </div>
@@ -8334,9 +8545,11 @@ function renderConfigPlainFieldV2(f) {
   }
   return `
     <label class="fld">
-      ${esc(f.label)}
-      <span class="hint"${f.key === 'BROWSER_LOCALE_PROFILE' ? ' data-region-profile-hint' : ''}>${esc(f.help || '')}</span>
-      ${control}
+      <span class="config-field-v2-copy">
+        <span class="config-field-v2-label">${esc(f.label)}</span>
+        <span class="hint"${f.key === 'BROWSER_LOCALE_PROFILE' ? ' data-region-profile-hint' : ''}>${esc(f.help || '')}</span>
+      </span>
+      <div class="config-field-v2-control">${control}</div>
     </label>
   `;
 }
@@ -8386,8 +8599,8 @@ function renderExtractLinkSectionV2(fields) {
   const cards = services.length ? services.map(item => {
     const active = String(item.id) === provider;
     const meta = item.mode === 'protocol' ? (item.description || '内置协议提链') : `${item.api_base || ''} · ${item.link_type || 'pix'} · 并发 ${item.workers || 1}`;
-    return `<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid ${active ? '#377DFF' : '#e4e7ed'};border-radius:8px;background:${active ? '#f1f6ff' : '#fff'};">
-      <button type="button" data-extract-provider="${attrEsc(item.id)}" data-extract-provider-mode="${attrEsc(item.mode)}" style="flex:1;border:0;background:transparent;text-align:left;cursor:pointer;color:#303133;"><b>${esc(item.name)}</b><div class="hint">${esc(meta)}</div></button>
+    return `<div class="config-service-v2-card${active ? ' is-active' : ''}">
+      <button type="button" class="config-service-v2-card-main" data-extract-provider="${attrEsc(item.id)}" data-extract-provider-mode="${attrEsc(item.mode)}"><b>${esc(item.name)}</b><div class="hint">${esc(meta)}</div></button>
       ${item.mode === 'api' && !item.legacy ? `<button type="button" class="btn" data-delete-extract-api="${attrEsc(item.id)}">删除</button>` : ''}
     </div>`;
   }).join('') : '<div class="muted" style="padding:12px 0;">还没有已保存的 API 提链服务，请点击“添加提链 API”。</div>';
@@ -8398,15 +8611,15 @@ function renderExtractLinkSectionV2(fields) {
     ${renderConfigSectionHead('提链', '通用提链可选择 API 提链或项目内置协议提链；PP提链无需 CDK 配额。')}
     <div class="config-subtabs-v2"><button type="button" class="config-subtab-v2 is-active">通用提链</button></div>
     <input type="hidden" data-key="EXTRACT_LINK_MODE" value="${attrEsc(mode)}"><input type="hidden" data-key="EXTRACT_LINK_PROVIDER" value="${attrEsc(provider)}">
-    <div class="config-ep-select" style="display:flex;gap:8px;margin:18px 0 12px;">
+    <div class="config-mode-v2">
       <button type="button" class="config-ep-select-item${mode === 'api' ? ' is-active' : ''}" data-extract-mode="api">API提链</button>
       <button type="button" class="config-ep-select-item${mode === 'protocol' ? ' is-active' : ''}" data-extract-mode="protocol">协议提链</button>
     </div>
-    <div style="display:grid;gap:8px;margin-bottom:14px;">${cards}</div>
-    ${mode === 'api' ? '<button type="button" class="btn" id="btnAddExtractLinkApiV2">添加提链 API</button>' : ''}
-    ${switches.length ? `<div class="config-switches-v2" style="margin-top:18px;">${switches.map(f => renderFeatureSwitchField(f, {withIcon:false})).join('')}</div>` : ''}
+    <div class="config-service-v2-list">${cards}</div>
+    ${mode === 'api' ? '<div class="config-inline-action-v2"><button type="button" class="btn" id="btnAddExtractLinkApiV2">添加提链 API</button></div>' : ''}
+    ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, {withIcon:false})).join('')}</div>` : ''}
     ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
-    <div class="config-section-v2-actions"><button type="button" class="btn primary" data-save-config-v2>保存</button></div>
+    ${renderConfigSectionActionsV2()}
   </section>`;
 }
 function openExtractLinkApiModal() {
@@ -8499,9 +8712,7 @@ function renderMixedConfigSectionV2(name, fields, intro) {
       ${extra}
       ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
       ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
-      <div class="config-section-v2-actions">
-        <button type="button" class="btn primary" data-save-config-v2>保存</button>
-      </div>
+      ${renderConfigSectionActionsV2()}
     </section>
   `;
 }
@@ -8779,7 +8990,7 @@ function codexOauthDriverLabel(value) {
 }
 function setCodexOauthDriverValue(value) {
   const cur = String(value || 'protocol').trim().toLowerCase() || 'protocol';
-  CONFIG_PENDING_UPDATES.CODEX_OAUTH_DRIVER = cur;
+  setConfigPendingValueV2('CODEX_OAUTH_DRIVER', cur);
   closeConfigEpSelects();
   renderConfigLayoutV2();
 }
@@ -8792,12 +9003,16 @@ function renderCodexOauthDriverField() {
   `).join('');
   return `
     <label class="fld config-select-v2-field">
-      Codex 授权驱动
-      <span class="hint">选择 Codex 授权所用的自动化方式</span>
-      <div class="config-ep-select" id="${wrapId}">
-        <button type="button" class="config-ep-select-btn" data-ep-toggle="${wrapId}">${esc(label)}</button>
-        <div class="config-ep-select-menu" role="listbox">${items}</div>
-        <input type="hidden" data-key="CODEX_OAUTH_DRIVER" value="${attrEsc(cur)}">
+      <span class="config-field-v2-copy">
+        <span class="config-field-v2-label">Codex 授权驱动</span>
+        <span class="hint">选择 Codex 授权所用的自动化方式</span>
+      </span>
+      <div class="config-field-v2-control">
+        <div class="config-ep-select" id="${wrapId}">
+          <button type="button" class="config-ep-select-btn" data-ep-toggle="${wrapId}">${esc(label)}</button>
+          <div class="config-ep-select-menu" role="listbox">${items}</div>
+          <input type="hidden" data-key="CODEX_OAUTH_DRIVER" value="${attrEsc(cur)}">
+        </div>
       </div>
     </label>
   `;
@@ -8843,9 +9058,7 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
       ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
       ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
       ${extra}
-      <div class="config-section-v2-actions">
-        <button type="button" class="btn primary" data-save-config-v2>保存</button>
-      </div>
+      ${renderConfigSectionActionsV2()}
     </section>
   `;
 }
@@ -8977,9 +9190,7 @@ function renderCodexSectionV2(fields) {
       ${current.help ? `<p class="config-section-v2-subhelp">${esc(current.help)}</p>` : ''}
       ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
       ${orderedInputs.length ? `<div class="config-section-v2-body">${orderedInputs.map(renderCodexFieldV2).join('')}</div>` : ''}
-      <div class="config-section-v2-actions">
-        <button type="button" class="btn primary" data-save-config-v2>保存</button>
-      </div>
+      ${renderConfigSectionActionsV2()}
     </section>
   `;
 }
@@ -8993,9 +9204,7 @@ function renderConfigSectionV2(name, fields) {
         <div class="config-section-v2-body">
           ${fields.map(renderConfigPlainFieldV2).join('')}
         </div>
-        <div class="config-section-v2-actions">
-          <button type="button" class="btn primary" data-save-config-v2>保存</button>
-        </div>
+        ${renderConfigSectionActionsV2()}
       </section>
     `;
   }
@@ -9011,9 +9220,7 @@ function renderConfigSectionV2(name, fields) {
         <div class="config-switches-v2">
           ${ordered.map(f => renderFeatureSwitchField(f, { withIcon: true })).join('')}
         </div>
-        <div class="config-section-v2-actions">
-          <button type="button" class="btn primary" data-save-config-v2>保存</button>
-        </div>
+        ${renderConfigSectionActionsV2()}
       </section>
     `;
   }
@@ -9025,9 +9232,7 @@ function renderConfigSectionV2(name, fields) {
         <div class="config-section-v2-body config-section-v2-body--single">
           ${field ? renderRegistrationDriverField(field) : '<div class="banner warn">未找到注册方式配置项</div>'}
         </div>
-        <div class="config-section-v2-actions">
-          <button type="button" class="btn primary" data-save-config-v2>保存</button>
-        </div>
+        ${renderConfigSectionActionsV2()}
       </section>
     `;
   }
@@ -9086,6 +9291,7 @@ function renderConfigLayoutV2() {
   bindPageAgentToolsV2();
   bindExtractLinkToolsV2();
   syncRegionProfileControlV2();
+  syncConfigDirtyIndicatorsV2();
 }
 function scrollToConfigSection(slug) {
   const el = document.getElementById(slug);
@@ -9112,6 +9318,14 @@ function bindConfigLayoutV2() {
   if (layout && !layout.dataset.epBound) {
     layout.dataset.epBound = '1';
     layout.addEventListener('click', (e) => {
+      const discard = e.target.closest('[data-config-discard-v2]');
+      if (discard) {
+        e.preventDefault();
+        Object.keys(CONFIG_PENDING_UPDATES).forEach(key => { delete CONFIG_PENDING_UPDATES[key]; });
+        renderConfigLayoutV2();
+        showToast('已撤销未保存的配置更改');
+        return;
+      }
       const codexTab = e.target.closest('[data-codex-section-v2]');
       if (codexTab) {
         e.preventDefault();
@@ -9263,9 +9477,17 @@ function trackConfigFieldChange(e) {
   if (!el || !el.closest('#tab-config')) return;
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
-  CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
+  setConfigPendingValueV2(f.key, readConfigElementValue(el, f));
   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
+  if (f.type === 'bool') {
+    const status = el.closest('.config-switch-v2')?.querySelector('[data-config-switch-status-v2]');
+    if (status) {
+      status.textContent = el.checked ? '已开启' : '已关闭';
+      status.classList.toggle('is-on', !!el.checked);
+    }
+  }
+  syncConfigDirtyIndicatorsV2();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);
