@@ -816,7 +816,9 @@ EDITABLE_FIELDS = [
 
     {
         "key": "SMS_PROVIDER", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "接码通道", "help": "grizzly / l / h；l 使用 L_API.md，h 使用 H_API.md 定义的本地取号服务",
+        "label": "接码平台", "help": "选择已经适配的接码平台；GrizzlySMS 使用兼容 API，H/L 使用项目内置本地取号服务",
+        "choices": ["grizzly", "h", "l"],
+        "choice_labels": {"grizzly": "GrizzlySMS", "h": "H 接码", "l": "L 接码"},
     },
     {
         "key": "SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
@@ -825,6 +827,10 @@ EDITABLE_FIELDS = [
     {
         "key": "SMS_SERVICE", "file": "codex.py", "type": "str", "group": "接码平台",
         "label": "服务/项目代码", "help": "GrizzlySMS/L 作为 service；H 通道作为 H_API.md 的 projectId",
+    },
+    {
+        "key": "SMS_MAX_PRICE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "价格预设（最高价）", "help": "可选，填写单个号码愿意支付的最高价格；留空时不传价格限制，支持该参数的平台按此值取号",
     },
     {
         "key": "SMS_MAX_RETRIES", "file": "codex.py", "type": "int", "group": "接码平台",

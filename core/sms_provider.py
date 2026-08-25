@@ -515,8 +515,10 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
     own_http = http is None
     http = http or _http()
     try:
-        if _provider() == "l":
-            logger.debug(f"[SMS:L] 忽略状态设置 id={activation_id}, status={status}")
+        if _provider() in {"l", "h"}:
+            # L/H 本地管理接口没有 GrizzlySMS 的 setStatus 语义；取号服务
+            # 自己维护激活状态，成功/释放分别由 complete()/cancel() 处理。
+            logger.debug(f"[SMS:{_provider().upper()}] 忽略状态设置 id={activation_id}, status={status}")
             return "OK"
         return _request_grizzly(http, {"action": "setStatus", "status": str(status), "id": activation_id})
     finally:

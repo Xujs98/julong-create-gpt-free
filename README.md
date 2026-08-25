@@ -464,6 +464,7 @@ SMS_PROVIDER = "l"        # 可选 grizzly / l / h
 SMS_API_KEY = "你的 GrizzlySMS key"  # 仅 GrizzlySMS 需要
 SMS_SERVICE = "openai"
 SMS_COUNTRY = "国家代码"
+SMS_MAX_PRICE = ""      # 可选最高价；留空不传 maxPrice，支持该参数的平台按此值取号
 SMS_MAX_RETRIES = 10
 SMS_CODE_WAIT = 120
 SMS_POLL_INTERVAL = 5

@@ -81,6 +81,12 @@ class HSmsProviderTests(unittest.TestCase):
         self.assertTrue(http.calls[0]["url"].endswith("/api/admin/h/release"))
         self.assertIn('"id": "hid-1"', http.calls[0]["data"])
 
+    def test_set_status_does_not_call_grizzly_for_h(self):
+        http = _Http([])
+        with patch.object(codex_config, "SMS_PROVIDER", "h"):
+            self.assertEqual(sms_provider.set_status("hid-1", 1, http=http), "OK")
+        self.assertEqual(http.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()
