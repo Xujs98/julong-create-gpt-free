@@ -74,3 +74,11 @@ def test_commercial_theme_covers_global_navigation_panels_tables_and_dialogs() -
     assert ".outlook-panel-v2" in source
     assert ".ui-select-trigger-v3" in source
     assert ".ui-select-menu-v3" in source
+
+
+def test_accounts_page_keeps_only_the_toolbar_live_check_action() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+
+    assert "btnCheckSelectedLiveTopV2" not in source
+    assert source.count('id="btnCheckSelectedLiveV2"') == 1
+    assert "套餐/提链" in source
