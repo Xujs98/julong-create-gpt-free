@@ -42,6 +42,18 @@ def test_all_native_selects_are_progressively_enhanced() -> None:
     assert "new MutationObserver" in source
 
 
+def test_commercial_select_keeps_open_while_its_menu_scrolls() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+
+    assert "function handleCommercialSelectScrollV3(event)" in source
+    assert "target === menu || menu.contains(target)" in source
+    assert (
+        "window.addEventListener('scroll', handleCommercialSelectScrollV3, true)"
+        in source
+    )
+    assert "window.addEventListener('scroll', () => closeCommercialSelectV3(), true)" not in source
+
+
 def test_registration_and_codex_drivers_use_the_unified_select_system() -> None:
     source = INDEX.read_text(encoding="utf-8")
 

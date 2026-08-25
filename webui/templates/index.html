@@ -4035,6 +4035,15 @@ function closeCommercialSelectV3(options = {}) {
   if (options.restoreFocus) trigger?.focus();
 }
 
+function handleCommercialSelectScrollV3(event) {
+  const menu = UI_SELECT_STATE_V3.menu;
+  const target = event?.target;
+  // scroll 事件会在捕获阶段到达 window。菜单自身滚动时必须保持展开，
+  // 只有页面或其它滚动容器移动时才关闭，避免 Portal 菜单与触发器错位。
+  if (menu && target instanceof Node && (target === menu || menu.contains(target))) return;
+  closeCommercialSelectV3();
+}
+
 function openCommercialSelectV3(select) {
   if (!select || select.disabled) return;
   const wrap = select.closest('.ui-select-v3');
@@ -4112,7 +4121,7 @@ function installCommercialSelectsV3() {
     if (event.key === 'Escape' && UI_SELECT_STATE_V3.select) closeCommercialSelectV3({ restoreFocus: true });
   });
   window.addEventListener('resize', positionCommercialSelectMenuV3);
-  window.addEventListener('scroll', () => closeCommercialSelectV3(), true);
+  window.addEventListener('scroll', handleCommercialSelectScrollV3, true);
   window.syncCommercialSelectV3 = syncCommercialSelectV3;
 }
 
