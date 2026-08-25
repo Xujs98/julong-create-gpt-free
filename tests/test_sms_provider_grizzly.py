@@ -33,10 +33,16 @@ class GrizzlySmsProviderTests(unittest.TestCase):
         provider = fields["SMS_PROVIDER"]
         self.assertEqual(provider["choices"], ["grizzly", "h", "l"])
         self.assertEqual(provider["choice_labels"]["grizzly"], "GrizzlySMS")
+        country = fields["SMS_COUNTRY"]
+        self.assertTrue(country["searchable"])
+        self.assertIn("187", country["choices"])
+        self.assertEqual(country["choice_labels"]["187"], "美国（187）")
         self.assertEqual(fields["SMS_MAX_PRICE"]["type"], "str")
         template = config_editor._PROJECT_ROOT.joinpath("webui/templates/index.html").read_text(encoding="utf-8")
         self.assertIn("SMS_MAX_PRICE", template)
         self.assertIn("smsConfigSectionForKey", template)
+        self.assertIn("ui-select-search-v3", template)
+        self.assertIn("data-searchable=\"true\"", template)
 
     def test_acquire_number_uses_grizzly_handler_and_max_price(self):
         http = _Http(["ACCESS_NUMBER:activation-1:15551234567"])

@@ -3155,6 +3155,14 @@
       overflow-y: auto; overscroll-behavior: contain; backdrop-filter: blur(16px);
     }
     .ui-select-menu-v3.is-open { display: grid; gap: 3px; animation: uiSelectInV3 .14s ease-out; }
+    .ui-select-search-v3 {
+      width: 100%; min-height: 36px; box-sizing: border-box; padding: 0 10px;
+      border: 1px solid #e1e6f0; border-radius: 9px; background: #f8f9fc; color: #2c374c;
+      font: inherit; font-size: 12px; outline: none;
+    }
+    .ui-select-search-v3:focus { border-color: #8798ff; background: #fff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); }
+    .ui-select-options-v3 { display: grid; gap: 3px; min-width: 0; }
+    .ui-select-empty-v3 { padding: 14px 10px; color: #9aa4b7; font-size: 12px; text-align: center; }
     .ui-select-option-v3 {
       position: relative; width: 100%; min-height: 38px; margin: 0; padding: 8px 34px 8px 12px;
       border: 0; border-radius: 9px; background: transparent; color: #59657a;
@@ -3945,13 +3953,38 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 // 全站统一商业化下拉组件：原生 select 保留数据、表单与 change 语义，可见菜单使用 body portal 避免被容器裁切。
-const UI_SELECT_STATE_V3 = { select: null, wrap: null, trigger: null, menu: null };
+const UI_SELECT_STATE_V3 = { select: null, wrap: null, trigger: null, menu: null, searchInput: null, query: '' };
 
 function ensureCommercialSelectMenuV3() {
   if (UI_SELECT_STATE_V3.menu?.isConnected) return UI_SELECT_STATE_V3.menu;
   const menu = document.createElement('div');
   menu.className = 'ui-select-menu-v3';
   menu.setAttribute('role', 'listbox');
+  const searchInput = document.createElement('input');
+  searchInput.type = 'search';
+  searchInput.className = 'ui-select-search-v3';
+  searchInput.placeholder = '搜索名称或国家代码';
+  searchInput.setAttribute('aria-label', '搜索名称或国家代码');
+  searchInput.autocomplete = 'off';
+  searchInput.spellcheck = false;
+  searchInput.addEventListener('input', () => {
+    UI_SELECT_STATE_V3.query = searchInput.value;
+    if (UI_SELECT_STATE_V3.select) renderCommercialSelectMenuV3(UI_SELECT_STATE_V3.select);
+  });
+  searchInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeCommercialSelectV3({ restoreFocus: true });
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const first = UI_SELECT_STATE_V3.menu?.querySelector('.ui-select-option-v3:not(:disabled)');
+      first?.click();
+    }
+  });
+  const options = document.createElement('div');
+  options.className = 'ui-select-options-v3';
   menu.addEventListener('click', (event) => {
     const optionButton = event.target.closest('[data-ui-select-index-v3]');
     const select = UI_SELECT_STATE_V3.select;
@@ -3964,8 +3997,10 @@ function ensureCommercialSelectMenuV3() {
     syncCommercialSelectV3(select);
     closeCommercialSelectV3({ restoreFocus: true });
   });
+  menu.append(searchInput, options);
   document.body.appendChild(menu);
   UI_SELECT_STATE_V3.menu = menu;
+  UI_SELECT_STATE_V3.searchInput = searchInput;
   return menu;
 }
 
@@ -4007,7 +4042,21 @@ function positionCommercialSelectMenuV3() {
 
 function renderCommercialSelectMenuV3(select) {
   const menu = ensureCommercialSelectMenuV3();
-  const buttons = Array.from(select.options || []).map((option, index) => {
+  const searchInput = UI_SELECT_STATE_V3.searchInput;
+  const options = menu.querySelector('.ui-select-options-v3');
+  const searchable = select.dataset.searchable === 'true';
+  const query = searchable ? String(UI_SELECT_STATE_V3.query || '').trim().toLocaleLowerCase() : '';
+  if (searchInput) {
+    searchInput.hidden = !searchable;
+    searchInput.value = searchable ? UI_SELECT_STATE_V3.query : '';
+  }
+  const visibleOptions = Array.from(select.options || []).filter(option => {
+    if (!query) return true;
+    const haystack = `${option.textContent || ''} ${option.value || ''}`.toLocaleLowerCase();
+    return haystack.includes(query);
+  });
+  const buttons = visibleOptions.map(option => {
+    const index = Array.from(select.options || []).indexOf(option);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `ui-select-option-v3${index === select.selectedIndex ? ' is-selected' : ''}`;
@@ -4018,19 +4067,28 @@ function renderCommercialSelectMenuV3(select) {
     button.textContent = String(option.textContent || option.value || '请选择').trim();
     return button;
   });
-  menu.replaceChildren(...buttons);
+  if (options) {
+    options.replaceChildren(...buttons);
+    if (!buttons.length) {
+      const empty = document.createElement('div');
+      empty.className = 'ui-select-empty-v3';
+      empty.textContent = '没有匹配的国家';
+      options.appendChild(empty);
+    }
+  }
   positionCommercialSelectMenuV3();
 }
 
 function closeCommercialSelectV3(options = {}) {
-  const { wrap, trigger, menu } = UI_SELECT_STATE_V3;
+  const { wrap, trigger, menu, searchInput } = UI_SELECT_STATE_V3;
   wrap?.classList.remove('is-open');
   trigger?.setAttribute('aria-expanded', 'false');
   menu?.classList.remove('is-open');
-  if (menu) menu.innerHTML = '';
+  if (searchInput) searchInput.value = '';
   UI_SELECT_STATE_V3.select = null;
   UI_SELECT_STATE_V3.wrap = null;
   UI_SELECT_STATE_V3.trigger = null;
+  UI_SELECT_STATE_V3.query = '';
   if (options.restoreFocus) trigger?.focus();
 }
 
@@ -4057,11 +4115,18 @@ function openCommercialSelectV3(select) {
   UI_SELECT_STATE_V3.select = select;
   UI_SELECT_STATE_V3.wrap = wrap;
   UI_SELECT_STATE_V3.trigger = trigger;
+  UI_SELECT_STATE_V3.query = '';
   wrap.classList.add('is-open');
   trigger.setAttribute('aria-expanded', 'true');
   menu.classList.add('is-open');
   renderCommercialSelectMenuV3(select);
-  requestAnimationFrame(positionCommercialSelectMenuV3);
+  requestAnimationFrame(() => {
+    positionCommercialSelectMenuV3();
+    if (select.dataset.searchable === 'true') {
+      UI_SELECT_STATE_V3.searchInput?.focus();
+      UI_SELECT_STATE_V3.searchInput?.select();
+    }
+  });
 }
 
 function enhanceCommercialSelectV3(select) {
@@ -8919,7 +8984,15 @@ function renderConfigPlainFieldV2(f) {
     control = `<div class="config-agent-status ${f.status_ok ? 'is-ok' : 'is-failed'}">${esc(fv == null ? '' : fv)}</div>`;
   } else if (Array.isArray(f.choices) && f.choices.length) {
     // option value 保留后端机器值，只把页面展示文本替换为中文标签。
-    control = `<select data-key="${attrEsc(f.key)}">${f.choices.map(x => `<option value="${attrEsc(x)}"${String(x) === String(fv) ? ' selected' : ''}>${esc((f.choice_labels || {})[x] || x)}</option>`).join('')}</select>`;
+    const searchable = f.searchable ? ' data-searchable="true" data-placeholder="搜索名称或国家代码"' : '';
+    const choices = searchable && fv != null && String(fv).trim() && !f.choices.some(x => String(x) === String(fv))
+      ? [String(fv), ...f.choices]
+      : f.choices;
+    const labels = f.choice_labels || {};
+    control = `<select data-key="${attrEsc(f.key)}"${searchable}>${choices.map(x => {
+      const label = labels[x] || (String(x) === String(fv) && searchable ? `当前值（${x}）` : x);
+      return `<option value="${attrEsc(x)}"${String(x) === String(fv) ? ' selected' : ''}>${esc(label)}</option>`;
+    }).join('')}</select>`;
   } else if (f.type === 'int') {
     control = `<input type="number" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'float') {
