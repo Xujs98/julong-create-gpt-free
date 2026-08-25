@@ -8988,9 +8988,11 @@ function renderConfigPlainFieldV2(f) {
     const choices = searchable && fv != null && String(fv).trim() && !f.choices.some(x => String(x) === String(fv))
       ? [String(fv), ...f.choices]
       : f.choices;
-    const labels = f.choice_labels || {};
+    const choiceLabel = x => (f.choice_labels || {})[x] || x;
     control = `<select data-key="${attrEsc(f.key)}"${searchable}>${choices.map(x => {
-      const label = labels[x] || (String(x) === String(fv) && searchable ? `当前值（${x}）` : x);
+      const label = String(x) === String(fv) && searchable && !(f.choice_labels || {})[x]
+        ? `当前值（${x}）`
+        : choiceLabel(x);
       return `<option value="${attrEsc(x)}"${String(x) === String(fv) ? ' selected' : ''}>${esc(label)}</option>`;
     }).join('')}</select>`;
   } else if (f.type === 'int') {
