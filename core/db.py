@@ -1701,18 +1701,25 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
             row["plus_trial_duration_num_periods"] = result.get("plus_trial_duration_num_periods")
             row["plus_trial_duration_period"] = result.get("plus_trial_duration_period")
             row["eligible_offer_ids"] = result.get("eligible_offer_ids") or []
-            row["oaics_check_status"] = result.get("oaics_check_status") or "skipped"
-            row["oaics_checked_at"] = result.get("oaics_checked_at")
-            row["oaics_check_http_status"] = result.get("oaics_check_http_status")
-            row["oaics_check_error"] = result.get("oaics_check_error")
-            if result.get("oaics_check_status") == "success":
-                row["oaics_eligible"] = bool(result.get("oaics_eligible"))
-                row["oaics_session_kind"] = result.get("oaics_session_kind")
-                row["oaics_processor_entity"] = result.get("oaics_processor_entity")
-            elif result.get("oaics_check_status") == "skipped":
-                row["oaics_eligible"] = False
-                row["oaics_session_kind"] = None
-                row["oaics_processor_entity"] = None
+            # 套餐查询可按配置关闭 OAICS 请求；此时结果中不带 oaics_check_status，
+            # 保留账号上一次已确认的资格，避免“关闭自动查询”误清空历史状态。
+            if "oaics_check_status" in result:
+                row["oaics_check_status"] = result.get("oaics_check_status") or "skipped"
+                row["oaics_checked_at"] = result.get("oaics_checked_at")
+                row["oaics_check_http_status"] = result.get("oaics_check_http_status")
+                row["oaics_check_error"] = result.get("oaics_check_error")
+                if "oaics_country_results" in result:
+                    row["oaics_country_results"] = result.get("oaics_country_results") or []
+                if "oaics_query_count" in result:
+                    row["oaics_query_count"] = result.get("oaics_query_count")
+                if result.get("oaics_check_status") == "success":
+                    row["oaics_eligible"] = bool(result.get("oaics_eligible"))
+                    row["oaics_session_kind"] = result.get("oaics_session_kind")
+                    row["oaics_processor_entity"] = result.get("oaics_processor_entity")
+                elif result.get("oaics_check_status") == "skipped":
+                    row["oaics_eligible"] = False
+                    row["oaics_session_kind"] = None
+                    row["oaics_processor_entity"] = None
             row["plan_last_success_at"] = result.get("checked_at") or _now()
             row["plan_last_success_result_json"] = json.dumps(result, ensure_ascii=False)
         row["plan_check_proxy_mode"] = result.get("proxy_mode")
@@ -2096,7 +2103,7 @@ def list_account_plan_check_statuses(
         "id", "email", "archived", "link_completed", "payment_completed", "sms_completed",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_checked_at",
-        "oaics_session_kind", "oaics_processor_entity",
+        "oaics_session_kind", "oaics_processor_entity", "oaics_country_results", "oaics_query_count",
         "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
@@ -2178,6 +2185,8 @@ def list_account_plan_check_statuses(
                     "oaics_check_status": row.get("oaics_check_status"),
                     "oaics_check_error": row.get("oaics_check_error"),
                     "oaics_checked_at": row.get("oaics_checked_at"),
+                    "oaics_country_results": row.get("oaics_country_results"),
+                    "oaics_query_count": row.get("oaics_query_count"),
                     "twofa_status": row.get("twofa_status"),
                     "twofa_error": row.get("twofa_error"),
                     "twofa_queued_at": row.get("twofa_queued_at"),

@@ -21,7 +21,13 @@ def test_registration_auto_oaics_query_respects_disabled_switch():
     insert.assert_called_once()
     archive.assert_called_once()
     geo.assert_called_once()
-    enqueue.assert_not_called()
+    enqueue.assert_called_once_with(
+        account_id=42,
+        email="user@example.test",
+        access_token="TOKEN",
+        trigger="registration_auto",
+        check_oaics=False,
+    )
 
 
 def test_registration_auto_oaics_query_is_enqueued_when_enabled():
@@ -38,4 +44,5 @@ def test_registration_auto_oaics_query_is_enqueued_when_enabled():
         "email": "user@example.test",
         "access_token": "TOKEN",
         "trigger": "registration_auto",
+        "check_oaics": True,
     }

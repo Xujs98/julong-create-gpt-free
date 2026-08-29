@@ -130,6 +130,24 @@ def test_plan_query_enables_oaics_check_with_account_country():
     assert query.call_args.kwargs["billing_country"] == "US"
 
 
+def test_plan_query_can_skip_oaics_while_refreshing_plan():
+    account = {
+        "id": 1,
+        "email": "user@example.com",
+        "proxy_country_code": "US",
+    }
+    with patch("core.plan_check_service.check_account_plan", return_value={"ok": True}) as query:
+        plan_check_service._check_plan_with_account_context(
+            account,
+            "TOKEN",
+            proxy="PROXY",
+            timezone_offset_min="-",
+            check_oaics=False,
+        )
+
+    assert query.call_args.kwargs["check_oaics"] is False
+
+
 def test_failed_plan_protocol_refresh_does_not_overwrite_live_status():
     account = {
         "id": 1,

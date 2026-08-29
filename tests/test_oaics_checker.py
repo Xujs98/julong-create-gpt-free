@@ -1,4 +1,11 @@
-from core.oaics_checker import detect_oaics_checkout, extract_checkout_session_id
+from unittest.mock import MagicMock
+
+from core.oaics_checker import (
+    check_oaics_protocol,
+    detect_oaics_checkout,
+    extract_checkout_session_id,
+    parse_oaics_protocol_response,
+)
 
 
 def test_detects_direct_oaics_session():
@@ -14,3 +21,32 @@ def test_detects_stripe_session_nested_in_checkout_url():
     payload = {"url": "https://checkout.example.test/c/pay/cs_demo#fragment"}
     assert extract_checkout_session_id(payload) == "cs_demo"
     assert detect_oaics_checkout(payload, billing_country="DE")["is_oaics"] is False
+
+
+def test_parses_country_results_from_oaics_protocol():
+    result = parse_oaics_protocol_response({
+        "query_count": 7,
+        "results": [
+            {"country": "JP", "country_name": "日本", "status": "eligible", "eligible": True, "message": "有资格"},
+            {"country": "PH", "country_name": "菲律宾", "status": "not_eligible", "eligible": False, "message": "无资格"},
+        ],
+    })
+    assert result["oaics_eligible"] is True
+    assert result["oaics_query_count"] == 7
+    assert result["oaics_country_results"][1]["status"] == "not_eligible"
+
+
+def test_check_oaics_protocol_posts_token_and_turnstile_header():
+    response = MagicMock(status_code=200)
+    response.json.return_value = {
+        "results": [{"country": "JP", "country_name": "日本", "status": "eligible", "eligible": True, "message": "ok"}]
+    }
+    session = MagicMock()
+    session.post.return_value = response
+
+    result = check_oaics_protocol(session, "TOKEN", turnstile_token="TURNSTILE")
+
+    assert result["oaics_eligible"] is True
+    kwargs = session.post.call_args.kwargs
+    assert kwargs["json"] == {"access_token": "TOKEN"}
+    assert kwargs["headers"]["X-Turnstile-Token"] == "TURNSTILE"

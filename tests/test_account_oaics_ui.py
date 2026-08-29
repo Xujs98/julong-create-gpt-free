@@ -21,6 +21,7 @@ def test_qualification_cell_renders_country_state_and_query_icon():
     assert "function _oaicsQualificationCell(r)" in source
     assert "OAICS_COUNTRY_LABELS" in source
     assert "JP: '日本'" in source
+    assert "IN: '印度'" in source
     assert 'data-oaics-check="${esc(r.id)}"' in source
     assert "accountV2Icons().search" in source
     assert "qualification-state" in source

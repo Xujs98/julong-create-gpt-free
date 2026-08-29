@@ -14,7 +14,7 @@ from urllib.parse import quote, urlparse
 
 from core.session import BrowserSession
 from core.proxy_utils import rotate_proxy_session
-from core.oaics_checker import detect_oaics_checkout
+from core.oaics_checker import check_oaics_protocol, detect_oaics_checkout, oaics_result_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -235,8 +235,26 @@ def check_oaics_eligibility(
     promo_campaign_id: str | None = None,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
-    """创建结账会话，并根据 OAICS/Stripe 会话前缀记录资格。"""
+    """查询各国 OAICS 资格，失败时回退到原生结账会话检测。"""
     checked_at = now_iso()
+    # tools.oai9.com 返回网站展示的逐国结果；复用当前 BrowserSession 的
+    # 底层 HTTP session（代理、Cookie 与 UA 相同），绕开 ChatGPT 会话自身
+    # 的 403 熔断器。若服务端要求 Turnstile 或暂时不可达，再回退到
+    # ChatGPT checkout 前缀检测，至少保留总体资格状态。
+    try:
+        protocol_session = getattr(env, "session", None)
+        if not callable(getattr(protocol_session, "post", None)):
+            protocol_session = env
+        protocol_result = check_oaics_protocol(protocol_session, token, timeout=timeout)
+        protocol_result.update({
+            "oaics_check_status": "success",
+            "oaics_checked_at": protocol_result.get("oaics_checked_at") or oaics_result_timestamp(),
+            "oaics_check_http_status": 200,
+            "oaics_check_error": None,
+        })
+        return protocol_result
+    except Exception as protocol_exc:
+        logger.info("OAICS 网站协议查询失败，回退结账会话检测：%s", str(protocol_exc)[:180])
     payload = {
         "plan_name": "chatgptplusplan",
         "team_plan_data": None,
@@ -276,6 +294,7 @@ def check_oaics_eligibility(
             "oaics_session_kind": detected["session_kind"],
             "oaics_processor_entity": detected["processor_entity"],
             "oaics_check_error": None,
+            "oaics_country_results": [],
         }
     except Exception as exc:
         return {
@@ -283,6 +302,7 @@ def check_oaics_eligibility(
             "oaics_checked_at": checked_at,
             "oaics_check_http_status": int(resp.status_code) if resp is not None else None,
             "oaics_check_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+            "oaics_country_results": [],
         }
 
 

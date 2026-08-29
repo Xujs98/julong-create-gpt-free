@@ -225,6 +225,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_check_error", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
         "oaics_check_error", "oaics_checked_at", "oaics_session_kind", "oaics_processor_entity",
+        "oaics_country_results", "oaics_query_count",
         "subscription_plan", "has_active_subscription", "is_delinquent",
         "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
         "billing_period", "billing_currency", "last_purchase_origin_platform", "last_will_renew",

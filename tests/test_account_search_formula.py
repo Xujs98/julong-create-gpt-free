@@ -169,3 +169,25 @@ def test_plan_update_persists_oaics_qualification(monkeypatch):
     assert accounts[0]["oaics_eligible"] is True
     assert accounts[0]["oaics_session_kind"] == "oaics"
     assert json.loads(accounts[0]["plan_check_result_json"])["oaics_eligible"] is True
+
+
+def test_plan_update_without_oaics_result_preserves_previous_qualification(monkeypatch):
+    accounts = [_row(
+        oaics_eligible=True,
+        oaics_check_status="success",
+        oaics_checked_at="2026-08-13T12:00:01",
+        oaics_session_kind="oaics",
+    )]
+    monkeypatch.setattr(db, "_load_accounts", lambda: accounts)
+    monkeypatch.setattr(db, "_save_accounts", lambda rows: None)
+
+    assert db.update_account_plan_check(acc_id=1, result={
+        "ok": True,
+        "checked_at": "2026-08-13T12:01:00",
+        "current_plan_type": "free",
+        "plus_trial_eligible": False,
+    })
+
+    assert accounts[0]["oaics_eligible"] is True
+    assert accounts[0]["oaics_check_status"] == "success"
+    assert accounts[0]["oaics_checked_at"] == "2026-08-13T12:00:01"

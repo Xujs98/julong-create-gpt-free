@@ -65,6 +65,7 @@ def _check_plan_with_account_context(
     *,
     proxy: str | None,
     timezone_offset_min: str,
+    check_oaics: bool = True,
     max_attempts: int | None = None,
 ) -> dict:
     """使用账号保存的 device_id 与 Session Cookie 查询套餐，避免随机新环境触发 401。"""
@@ -78,7 +79,7 @@ def _check_plan_with_account_context(
         device_id=str(account.get("device_id") or "") or None,
         session_cookies=list(saved_session.get("cookies") or []),
         billing_country=str(account.get("proxy_country_code") or ""),
-        check_oaics=True,
+        check_oaics=bool(check_oaics),
     )
 
 
@@ -111,6 +112,7 @@ def _run_plan_check(
     trigger: str,
     proxy: str | None,
     timezone_offset_min: str,
+    check_oaics: bool = True,
 ) -> dict:
     try:
         if not db.mark_account_plan_check_running(account_id):
@@ -125,6 +127,7 @@ def _run_plan_check(
             current_token,
             proxy=proxy,
             timezone_offset_min=timezone_offset_min,
+            check_oaics=check_oaics,
         )
 
         if result.get("needs_live_check") or result.get("token_expired") is True:
@@ -139,6 +142,7 @@ def _run_plan_check(
                     latest_token,
                     proxy=proxy,
                     timezone_offset_min=timezone_offset_min,
+                    check_oaics=check_oaics,
                     max_attempts=1,
                 )
                 current_token = latest_token
@@ -161,6 +165,7 @@ def _run_plan_check(
                     str(live_result.get("access_token") or ""),
                     proxy=proxy,
                     timezone_offset_min=timezone_offset_min,
+                    check_oaics=check_oaics,
                     max_attempts=1,
                 )
                 result["live_refresh_performed"] = True
@@ -197,7 +202,7 @@ def _run_plan_check(
                 device_id=str(account.get("device_id") or "") or None,
                 session_cookies=list((extract_saved_session(account) or {}).get("cookies") or []),
                 billing_country=str(account.get("proxy_country_code") or ""),
-                check_oaics=True,
+                check_oaics=bool(check_oaics),
             )
             if recheck_result.get("ok"):
                 result = recheck_result
@@ -249,6 +254,7 @@ def enqueue_account_plan_check(
     trigger: str,
     proxy: str | None = None,
     timezone_offset_min: str = "-",
+    check_oaics: bool = True,
 ) -> dict:
     """把查询放入统一线程池；重复查询或队列满时不提交。"""
     account_id = int(account_id)
@@ -272,6 +278,7 @@ def enqueue_account_plan_check(
             trigger=str(trigger or "manual"),
             proxy=proxy,
             timezone_offset_min=str(timezone_offset_min or "-"),
+            check_oaics=bool(check_oaics),
         )
     except Exception as exc:
         _QUEUE_SLOTS.release()

@@ -1288,32 +1288,28 @@ def save_account_data(
     except Exception:
         # 配置模块异常时保留历史默认行为，避免影响注册结果保存。
         auto_check = True
-    if not auto_check:
-        logger.info(
-            "[Plan] 已跳过注册后套餐/OAICS 自动查询（OAICS_CHECK_AFTER_REGISTRATION=False）: "
-            "id=%s, email=%s",
-            row_id,
-            email,
-        )
-    else:
-        try:
-            from core.plan_check_service import enqueue_account_plan_check
+    try:
+        from core.plan_check_service import enqueue_account_plan_check
 
-            queued = enqueue_account_plan_check(
-                account_id=row_id,
-                email=email,
-                access_token=access_token,
-                trigger="registration_auto",
-            )
-            if queued.get("accepted"):
+        queued = enqueue_account_plan_check(
+            account_id=row_id,
+            email=email,
+            access_token=access_token,
+            trigger="registration_auto",
+            check_oaics=auto_check,
+        )
+        if queued.get("accepted"):
+            if auto_check:
                 logger.info(f"[Plan] 注册后自动查询套餐及 OAICS 已入队: id={row_id}, email={email}")
-            elif queued.get("busy"):
-                logger.info(f"[Plan] 账号已有套餐/OAICS 查询，注册流程不重复入队: id={row_id}, email={email}")
             else:
-                logger.warning(f"[Plan] 注册后自动查询套餐/OAICS 入队失败（不影响注册结果）: {email}, {queued.get('error')}")
-        except Exception as exc:
-            logger.warning(
-                f"[Plan] 注册后自动查询入队异常（不影响注册结果）: "
-                f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
-            )
+                logger.info(f"[Plan] 注册后自动查询套餐已入队，按开关跳过 OAICS: id={row_id}, email={email}")
+        elif queued.get("busy"):
+            logger.info(f"[Plan] 账号已有套餐/OAICS 查询，注册流程不重复入队: id={row_id}, email={email}")
+        else:
+            logger.warning(f"[Plan] 注册后自动查询套餐/OAICS 入队失败（不影响注册结果）: {email}, {queued.get('error')}")
+    except Exception as exc:
+        logger.warning(
+            f"[Plan] 注册后自动查询入队异常（不影响注册结果）: "
+            f"{email}, {type(exc).__name__}: {str(exc)[:180]}"
+        )
     return row_id

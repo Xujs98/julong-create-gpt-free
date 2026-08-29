@@ -127,7 +127,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "OAICS_CHECK_AFTER_REGISTRATION", "file": "register.py", "type": "bool", "group": "注册方式",
-        "label": "注册完成查询 OAICS", "help": "开启后注册成功并保存账号后自动查询套餐与 OAICS 资格；关闭后跳过自动查询，可在账号页手动查询",
+        "label": "注册完成查询各国资格", "help": "开启后注册成功并保存账号后自动调用 OAICS 协议查询各国资格；关闭后仍查询套餐，可在账号页手动查询资格",
     },
     # ---- 账号查活 ----
     {

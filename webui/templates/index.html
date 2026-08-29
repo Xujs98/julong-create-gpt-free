@@ -5806,7 +5806,7 @@ function _hidePlanHoverCard() {
 })();
 // OAICS 国家资格结果统一归一化，兼容后端返回数组、映射或 JSON 字符串。
 const OAICS_COUNTRY_LABELS = Object.freeze({
-  JP: '日本', PH: '菲律宾', GB: '英国', ID: '印度尼西亚', NL: '荷兰',
+  JP: '日本', PH: '菲律宾', GB: '英国', ID: '印度尼西亚', NL: '荷兰', IN: '印度',
   US: '美国', CA: '加拿大', AU: '澳大利亚', DE: '德国', FR: '法国',
   IE: '爱尔兰', IT: '意大利', ES: '西班牙', SG: '新加坡', KR: '韩国',
 });
@@ -9023,7 +9023,7 @@ function configSectionIntro(name) {
   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
   if (name === '账号查活') return '分别配置查活、换绑登录和换绑提交方式；混合模式支持指纹浏览器登录后由协议完成邮箱变更。';
   if (name === '功能开关') return '';
-  if (name === '注册方式') return '选择账号注册时使用的自动化方式，并控制注册完成后的 OAICS 资格查询。';
+  if (name === '注册方式') return '选择账号注册时使用的自动化方式，并控制注册完成后的 OAICS 各国资格查询。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
   if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
   if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
