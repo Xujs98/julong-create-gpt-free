@@ -59,6 +59,8 @@ CODEX_OAUTH_DRIVER: str = "same_as_registration"
 CODEX_RETRY_FOLLOW_LIVE_CHECK: bool = True
 # 可选：same_as_live_check / protocol / roxy / cloak / browser_use / skyvern
 CODEX_RETRY_DRIVER: str = "same_as_live_check"
+# RoxyBrowser 服务未启动时的自动降级驱动；留空则保留原驱动并显示具体连接错误。
+CODEX_RETRY_FALLBACK_DRIVER: str = "cloak"
 # 仅对需要浏览器的补跑驱动生效；protocol 会忽略此项。
 CODEX_RETRY_HEADLESS: bool = False
 
@@ -190,4 +192,4 @@ CODEX_SMS_CHECK_BEFORE_USE: bool = True
 CODEX_SMS_DELETE_USED_CDK: bool = False
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_RETRY_FOLLOW_LIVE_CHECK': 'bool', 'CODEX_RETRY_DRIVER': 'str', 'CODEX_RETRY_HEADLESS': 'bool', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str', 'CODEX_SMS_API_BASE': 'str', 'CODEX_SMS_CDKS': 'list_str_multiline', 'CODEX_SMS_NUMBER_TYPE': 'str', 'CODEX_SMS_CHECK_BEFORE_USE': 'bool', 'CODEX_SMS_DELETE_USED_CDK': 'bool'})
+apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_RETRY_FOLLOW_LIVE_CHECK': 'bool', 'CODEX_RETRY_DRIVER': 'str', 'CODEX_RETRY_FALLBACK_DRIVER': 'str', 'CODEX_RETRY_HEADLESS': 'bool', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str', 'CODEX_SMS_API_BASE': 'str', 'CODEX_SMS_CDKS': 'list_str_multiline', 'CODEX_SMS_NUMBER_TYPE': 'str', 'CODEX_SMS_CHECK_BEFORE_USE': 'bool', 'CODEX_SMS_DELETE_USED_CDK': 'bool'})

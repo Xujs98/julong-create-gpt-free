@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import socket
 from urllib.parse import urlsplit
 
 
@@ -38,6 +39,73 @@ def _valid_url(value: str, schemes: set[str]) -> bool:
         return parsed.scheme.lower() in schemes and bool(parsed.hostname)
     except ValueError:
         return False
+
+
+def roxy_api_runtime_check(value: str | None = None, *, timeout: float = 0.8) -> dict:
+    """探测 RoxyBrowser API 端点是否有服务监听。
+
+    这里只建立一个很短的 TCP 连接，不发送任何 API 请求，因此不会创建环境、
+    消耗浏览器资源或触发服务端业务。返回值包含 ``reachable`` 和 ``error``，
+    供补跑任务在真正调用 ``/browser/create`` 前选择降级驱动。
+    """
+    if value is None:
+        from config import roxybrowser as cfg
+        value = getattr(cfg, "ROXY_API_BASE", "")
+    raw = str(value or "").strip()
+    result = {
+        "reachable": False,
+        "host": "",
+        "port": None,
+        "error": None,
+        "api_base": raw,
+    }
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            result["error"] = "ROXY_API_BASE 不是有效 HTTP 地址"
+            return result
+        # urlsplit.port 在端口非法时抛 ValueError，转换成可读错误而不是让补跑
+        # 在真正请求阶段才出现难以定位的异常。
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        host = parsed.hostname
+        result["host"] = host
+        result["port"] = port
+        with socket.create_connection((host, port), timeout=max(0.1, float(timeout))):
+            pass
+        result["reachable"] = True
+    except ValueError as exc:
+        result["error"] = f"Roxy API 地址解析失败: {exc}"
+    except OSError as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    except Exception as exc:  # pragma: no cover - 防止探测影响主流程
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+# 语义化别名，便于其他任务/旧调用方复用同一探测实现。
+check_roxy_api_reachable = roxy_api_runtime_check
+
+
+def registration_driver_runtime_preflight(value: str | None = None, *, timeout: float = 0.8) -> dict:
+    """在静态配置检查基础上，补充 Roxy 本地 API 的运行时连通性检查。"""
+    result = registration_driver_preflight(value)
+    if result["driver"] != "roxy":
+        result["details"]["runtime_checked"] = False
+        return result
+
+    probe = roxy_api_runtime_check(result["details"].get("api_base"), timeout=timeout)
+    result["details"].update({
+        "runtime_checked": True,
+        "reachable": probe.get("reachable", False),
+        "host": probe.get("host", ""),
+        "port": probe.get("port"),
+        "error": probe.get("error"),
+    })
+    if not probe.get("reachable"):
+        error = str(probe.get("error") or "未知连接错误")
+        result["errors"].append(f"Roxy API 不可达: {error}")
+        result["ok"] = False
+    return result
 
 
 def registration_driver_preflight(value: str | None = None) -> dict:

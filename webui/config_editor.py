@@ -193,6 +193,12 @@ EDITABLE_FIELDS = [
         "choice_labels": {"same_as_live_check": "跟随查活", "protocol": "纯协议", "roxy": "RoxyBrowser", "cloak": "CloakBrowser", "browser_use": "Browser Use", "skyvern": "Skyvern"},
     },
     {
+        "key": "CODEX_RETRY_FALLBACK_DRIVER", "file": "codex.py", "type": "str", "group": "账号查活",
+        "label": "Codex补跑降级方式", "help": "RoxyBrowser 本地服务不可用时自动切换的方式；留空则保留 Roxy 并返回连接错误",
+        "choices": ["", "cloak", "protocol"],
+        "choice_labels": {"": "不降级", "cloak": "CloakBrowser", "protocol": "纯协议"},
+    },
+    {
         "key": "CODEX_RETRY_HEADLESS", "file": "codex.py", "type": "bool", "group": "账号查活",
         "label": "Codex补跑浏览器无头", "help": "仅影响 Codex 补跑使用的 Cloak/Roxy 浏览器；纯协议和云端浏览器忽略此项",
     },

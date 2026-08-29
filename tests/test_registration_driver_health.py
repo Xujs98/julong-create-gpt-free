@@ -6,6 +6,8 @@ from config import browser_use, roxybrowser, skyvern
 from core.registration_driver_health import (
     normalize_registration_driver,
     registration_driver_preflight,
+    registration_driver_runtime_preflight,
+    roxy_api_runtime_check,
 )
 from core.roxybrowser_client import _proxy_url_to_roxy_info
 from core.session import BrowserSession
@@ -49,6 +51,26 @@ class RegistrationDriverHealthTests(unittest.TestCase):
             self.assertTrue(registration_driver_preflight("roxy")["ok"])
             self.assertTrue(registration_driver_preflight("browser_use")["ok"])
             self.assertTrue(registration_driver_preflight("skyvern")["ok"])
+
+    @patch("core.registration_driver_health.socket.create_connection")
+    def test_roxy_runtime_check_reports_reachable_endpoint(self, create_connection):
+        create_connection.return_value.__enter__.return_value = object()
+        result = roxy_api_runtime_check("http://127.0.0.1:50000")
+        self.assertTrue(result["reachable"], result)
+        self.assertEqual(result["host"], "127.0.0.1")
+        self.assertEqual(result["port"], 50000)
+        create_connection.assert_called_once_with(("127.0.0.1", 50000), timeout=0.8)
+
+    @patch(
+        "core.registration_driver_health.socket.create_connection",
+        side_effect=ConnectionRefusedError(61, "Connection refused"),
+    )
+    def test_roxy_runtime_preflight_reports_connection_failure(self, _create_connection):
+        with patch.object(roxybrowser, "ROXY_API_TOKEN", "key"):
+            result = registration_driver_runtime_preflight("roxy")
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["details"]["reachable"])
+        self.assertIn("Roxy API 不可达", result["errors"][-1])
 
     @patch("core.proxy_utils._endpoint_supports_socks5", return_value=True)
     def test_protocol_session_normalizes_four_part_proxy(self, _supports_socks5):

@@ -222,6 +222,53 @@ def run_worker(
             retry_driver = None
             retry_headless = None
 
+        # RoxyBrowser API 是本机可选组件。批量补跑时若服务未启动，旧流程会
+        # 直接在 /browser/create 处抛 ConnectionRefusedError，所有账号立即失败。
+        # 在真正创建环境前做短连接探测，并按配置自动降级到 Cloak/纯协议驱动。
+        if retry_driver:
+            from core.registration_driver_health import (
+                normalize_registration_driver,
+                registration_driver_preflight,
+                registration_driver_runtime_preflight,
+            )
+
+            retry_driver = normalize_registration_driver(retry_driver)
+            if retry_driver == "roxy":
+                runtime = registration_driver_runtime_preflight("roxy")
+                runtime_details = runtime.get("details") or {}
+                if runtime_details.get("reachable") is False:
+                    fallback_driver = normalize_registration_driver(
+                        getattr(codex_cfg, "CODEX_RETRY_FALLBACK_DRIVER", "")
+                    )
+                    fallback_driver = "" if fallback_driver == "protocol" and not str(
+                        getattr(codex_cfg, "CODEX_RETRY_FALLBACK_DRIVER", "") or ""
+                    ).strip() else fallback_driver
+                    fallback_result = (
+                        registration_driver_preflight(fallback_driver)
+                        if fallback_driver and fallback_driver != "roxy"
+                        else None
+                    )
+                    if fallback_result and fallback_result.get("ok"):
+                        error = runtime_details.get("error") or "未知连接错误"
+                        logger.warning(
+                            "[Codex 补跑] Roxy API 不可达（%s），自动切换到 %s",
+                            error,
+                            fallback_result.get("label", fallback_driver),
+                        )
+                        retry_driver = fallback_driver
+                    else:
+                        error = runtime_details.get("error") or "未知连接错误"
+                        if fallback_driver and fallback_driver != "roxy":
+                            fallback_errors = "；".join(
+                                str(item) for item in (fallback_result or {}).get("errors", [])
+                            ) or "降级驱动未就绪"
+                            raise RuntimeError(
+                                f"Roxy API 不可达（{error}），降级驱动 {fallback_driver} 未就绪：{fallback_errors}"
+                            )
+                        raise RuntimeError(
+                            f"Roxy API 不可达（{error}），请启动 RoxyBrowser 或配置 CODEX_RETRY_FALLBACK_DRIVER"
+                        )
+
         if batch_label:
             logger.info("[Codex 补跑] 批量任务：%s", batch_label)
         logger.info("[Codex 补跑] 开始：%s", email)
