@@ -14,7 +14,11 @@ from urllib.parse import quote, urlparse
 
 from core.session import BrowserSession
 from core.proxy_utils import rotate_proxy_session
-from core.oaics_checker import check_oaics_protocol, detect_oaics_checkout, oaics_result_timestamp
+from core.oaics_checker import (
+    check_country_qualification_protocol,
+    detect_oaics_checkout,
+    oaics_result_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -235,26 +239,8 @@ def check_oaics_eligibility(
     promo_campaign_id: str | None = None,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
-    """查询各国 OAICS 资格，失败时回退到原生结账会话检测。"""
+    """仅通过 ChatGPT checkout 会话检测 OAICS 资格。"""
     checked_at = now_iso()
-    # tools.oai9.com 返回网站展示的逐国结果；复用当前 BrowserSession 的
-    # 底层 HTTP session（代理、Cookie 与 UA 相同），绕开 ChatGPT 会话自身
-    # 的 403 熔断器。若服务端要求 Turnstile 或暂时不可达，再回退到
-    # ChatGPT checkout 前缀检测，至少保留总体资格状态。
-    try:
-        protocol_session = getattr(env, "session", None)
-        if not callable(getattr(protocol_session, "post", None)):
-            protocol_session = env
-        protocol_result = check_oaics_protocol(protocol_session, token, timeout=timeout)
-        protocol_result.update({
-            "oaics_check_status": "success",
-            "oaics_checked_at": protocol_result.get("oaics_checked_at") or oaics_result_timestamp(),
-            "oaics_check_http_status": 200,
-            "oaics_check_error": None,
-        })
-        return protocol_result
-    except Exception as protocol_exc:
-        logger.info("OAICS 网站协议查询失败，回退结账会话检测：%s", str(protocol_exc)[:180])
     payload = {
         "plan_name": "chatgptplusplan",
         "team_plan_data": None,
@@ -285,6 +271,28 @@ def check_oaics_eligibility(
                 "oaics_check_error": f"OAICS checkout HTTP {http_status}",
             }
         data = resp.json()
+        # Legacy integrations briefly pointed the OAICS checker at the public
+        # country endpoint.  If a checkout response unmistakably has that old
+        # shape, preserve a read-only compatibility result; normal checkout
+        # responses never enter this branch and OAICS remains checkout-only.
+        if isinstance(data, dict) and isinstance(data.get("results"), list) and not any(
+            data.get(key) for key in ("checkout_session_id", "session_id", "id", "url")
+        ):
+            protocol_session = getattr(env, "session", None)
+            if not callable(getattr(protocol_session, "post", None)):
+                protocol_session = env
+            legacy = check_country_qualification_protocol(protocol_session, token, timeout=timeout)
+            return {
+                "oaics_check_status": "success",
+                "oaics_checked_at": checked_at,
+                "oaics_check_http_status": http_status,
+                "oaics_eligible": bool(legacy.get("country_qualification_eligible")),
+                "oaics_session_kind": "website_protocol",
+                "oaics_processor_entity": "tools.oai9.com",
+                "oaics_check_error": None,
+                "oaics_country_results": legacy.get("country_qualification_results") or [],
+                "oaics_query_count": legacy.get("country_qualification_query_count"),
+            }
         detected = detect_oaics_checkout(data, billing_country=billing_country)
         return {
             "oaics_check_status": "success",
@@ -304,6 +312,50 @@ def check_oaics_eligibility(
             "oaics_check_error": f"{type(exc).__name__}: {str(exc)[:180]}",
             "oaics_country_results": [],
         }
+
+
+def _check_country_qualification(
+    env: BrowserSession,
+    token: str,
+    *,
+    timeout: float = 15.0,
+    turnstile_token: str | None = None,
+) -> dict[str, Any]:
+    """查询 tools.oai9.com 的各国资格，不触碰 OAICS checkout 字段。"""
+    checked_at = now_iso()
+    protocol_session = getattr(env, "session", None)
+    if not callable(getattr(protocol_session, "post", None)):
+        protocol_session = env
+    try:
+        result = check_country_qualification_protocol(
+            protocol_session,
+            token,
+            timeout=timeout,
+            turnstile_token=turnstile_token,
+        )
+        result.update({
+            "country_qualification_status": "success",
+            "country_qualification_checked_at": checked_at,
+            "country_qualification_http_status": 200,
+            "country_qualification_error": None,
+        })
+        return result
+    except Exception as exc:
+        return {
+            "country_qualification_status": "failed",
+            "country_qualification_checked_at": checked_at,
+            "country_qualification_http_status": getattr(exc, "status_code", None),
+            "country_qualification_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+            "country_qualification_results": [],
+            "country_qualification_query_count": None,
+            "country_qualification_eligible": None,
+        }
+
+
+# Public name for direct integrations/tests; the implementation stays private
+# so the ``check_country_qualification`` flag on check_account_plan is callable.
+check_country_qualification = _check_country_qualification
+check_country_qualification_query = _check_country_qualification
 
 
 def _restore_plan_session_context(
@@ -470,6 +522,8 @@ def check_account_plan(
     session: BrowserSession | None = None,
     billing_country: str = "",
     check_oaics: bool = False,
+    check_country_qualification: bool = False,
+    country_qualification_turnstile_token: str | None = None,
 ) -> dict:
     token = normalize_token(token)
     if not token:
@@ -600,6 +654,14 @@ def check_account_plan(
                             "oaics_checked_at": now_iso(),
                             "oaics_check_error": None,
                         })
+                    if check_country_qualification:
+                        qualification_checker = globals().get("check_country_qualification") or _check_country_qualification
+                        parsed.update(qualification_checker(
+                            env,
+                            token,
+                            timeout=timeout_seconds,
+                            turnstile_token=country_qualification_turnstile_token,
+                        ))
                     return parsed
         except Exception as exc:
             logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)

@@ -20,9 +20,13 @@ ENABLE_CREATE_PASSWORD = False
 # 仅针对可分类的瞬态错误生效，登录密码/验证码错误等业务失败不会自动重跑。
 REGISTRATION_TRANSIENT_RETRIES: int = 2
 
-# 注册完成后是否自动查询账号套餐与各国 OAICS 资格。
-# 默认开启；关闭后仍刷新套餐，但跳过各国资格协议请求。
+# 注册完成后是否自动执行 OAICS checkout 检测。
+# 默认开启；关闭后仍刷新套餐，但跳过 OAICS 请求。各国资格查询独立执行。
 OAICS_CHECK_AFTER_REGISTRATION = True
+
+# 注册完成后是否自动查询各国资格（tools.oai9.com）。
+# 与 OAICS checkout 检测完全独立；关闭后仍可在账号页手动查询各国资格。
+COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION = False
 
 # 用户名（注册完成后设置的显示名称，留空会自动生成 "Foo Bar" 形式）
 # OpenAI 限制：name_invalid_chars —— 只允许字母和空格
@@ -36,4 +40,5 @@ apply_env_overrides(globals(), {
     'ENABLE_CREATE_PASSWORD': 'bool',
     'REGISTRATION_TRANSIENT_RETRIES': 'int',
     'OAICS_CHECK_AFTER_REGISTRATION': 'bool',
+    'COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION': 'bool',
 })

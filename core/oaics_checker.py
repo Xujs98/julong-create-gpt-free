@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""OAICS 结账会话检测器。"""
+"""OAICS 结账会话与各国资格协议工具。"""
 from __future__ import annotations
 
 import re
@@ -7,8 +7,11 @@ from datetime import datetime
 from typing import Any, Iterable
 
 
-OAICS_CHECK_URL = "https://tools.oai9.com/api/trial/check"
-OAICS_SITE_ORIGIN = "https://tools.oai9.com"
+COUNTRY_QUALIFICATION_CHECK_URL = "https://tools.oai9.com/api/trial/check"
+COUNTRY_QUALIFICATION_SITE_ORIGIN = "https://tools.oai9.com"
+# 旧调用方兼容常量；网站接口实际返回各国资格，不是 OAICS checkout。
+OAICS_CHECK_URL = COUNTRY_QUALIFICATION_CHECK_URL
+OAICS_SITE_ORIGIN = COUNTRY_QUALIFICATION_SITE_ORIGIN
 
 
 SUPPORTED_SESSION_PREFIXES = ("oaics_", "cs_")
@@ -95,36 +98,35 @@ def _country_result(item: Any) -> dict[str, Any] | None:
     }
 
 
-def parse_oaics_protocol_response(payload: Any) -> dict[str, Any]:
-    """Parse the country-result response returned by the OAICS website API."""
+def parse_country_qualification_response(payload: Any) -> dict[str, Any]:
+    """解析 tools.oai9.com 返回的各国资格结果。"""
     if not isinstance(payload, dict):
-        raise ValueError("OAICS protocol response must be a JSON object")
+        raise ValueError("country qualification response must be a JSON object")
     raw_results = payload.get("results")
     if not isinstance(raw_results, list) or not raw_results:
-        raise ValueError("OAICS protocol response did not contain results")
+        raise ValueError("country qualification response did not contain results")
     results = []
     for item in raw_results:
         normalized = _country_result(item)
         if normalized is None:
-            raise ValueError("OAICS protocol response contained an invalid country result")
+            raise ValueError("country qualification response contained an invalid country result")
         results.append(normalized)
     return {
-        "oaics_country_results": results,
-        "oaics_eligible": any(item["status"] == "eligible" for item in results),
-        "oaics_query_count": payload.get("query_count"),
-        "oaics_session_kind": "website_protocol",
-        "oaics_processor_entity": "tools.oai9.com",
+        "country_qualification_results": results,
+        "country_qualification_eligible": any(item["status"] == "eligible" for item in results),
+        "country_qualification_query_count": payload.get("query_count"),
+        "country_qualification_source": "tools.oai9.com",
     }
 
 
-def check_oaics_protocol(
+def check_country_qualification_protocol(
     session: Any,
     access_token: str,
     *,
     timeout: float = 15.0,
     turnstile_token: str | None = None,
 ) -> dict[str, Any]:
-    """Call the public OAICS country-check endpoint using an existing session.
+    """调用各国资格接口。
 
     The website accepts JSON ``{"access_token": "..."}`` and optionally an
     ``X-Turnstile-Token`` header.  A caller may pass a BrowserSession or any
@@ -138,13 +140,13 @@ def check_oaics_protocol(
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "Origin": OAICS_SITE_ORIGIN,
-        "Referer": f"{OAICS_SITE_ORIGIN}/",
+        "Origin": COUNTRY_QUALIFICATION_SITE_ORIGIN,
+        "Referer": f"{COUNTRY_QUALIFICATION_SITE_ORIGIN}/",
     }
     if turnstile_token:
         headers["X-Turnstile-Token"] = str(turnstile_token).strip()
     response = session.post(
-        OAICS_CHECK_URL,
+        COUNTRY_QUALIFICATION_CHECK_URL,
         headers=headers,
         json={"access_token": token},
         timeout=timeout,
@@ -160,15 +162,17 @@ def check_oaics_protocol(
         except Exception:
             detail = ""
         suffix = f": {detail[:180]}" if detail else ""
-        raise RuntimeError(f"OAICS protocol HTTP {status_code}{suffix}")
+        error = RuntimeError(f"country qualification HTTP {status_code}{suffix}")
+        setattr(error, "status_code", status_code)
+        raise error
     try:
         payload = response.json()
     except Exception as exc:
-        raise ValueError(f"OAICS protocol returned invalid JSON: {type(exc).__name__}") from exc
-    return parse_oaics_protocol_response(payload)
+        raise ValueError(f"country qualification returned invalid JSON: {type(exc).__name__}") from exc
+    return parse_country_qualification_response(payload)
 
 
-def query_oaics_countries(
+def query_country_qualification(
     access_token: str,
     *,
     proxy: str | None = None,
@@ -184,24 +188,24 @@ def query_oaics_countries(
     if selected_proxy:
         client.proxies = {"http": selected_proxy, "https": selected_proxy}
     try:
-        result = check_oaics_protocol(
+        result = check_country_qualification_protocol(
             client,
             access_token,
             timeout=timeout,
             turnstile_token=turnstile_token,
         )
-        result["oaics_check_status"] = "success"
-        result["oaics_check_http_status"] = 200
-        result["oaics_check_error"] = None
-        result["oaics_checked_at"] = oaics_result_timestamp()
+        result["country_qualification_status"] = "success"
+        result["country_qualification_http_status"] = 200
+        result["country_qualification_error"] = None
+        result["country_qualification_checked_at"] = oaics_result_timestamp()
         return result
     except Exception as exc:
         return {
-            "oaics_check_status": "failed",
-            "oaics_check_http_status": None,
-            "oaics_check_error": f"{type(exc).__name__}: {str(exc)[:180]}",
-            "oaics_checked_at": oaics_result_timestamp(),
-            "oaics_country_results": [],
+            "country_qualification_status": "failed",
+            "country_qualification_http_status": getattr(exc, "status_code", None),
+            "country_qualification_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+            "country_qualification_checked_at": oaics_result_timestamp(),
+            "country_qualification_results": [],
         }
     finally:
         try:
@@ -213,3 +217,55 @@ def query_oaics_countries(
 def oaics_result_timestamp() -> str:
     """Return a compact local timestamp for persisted protocol results."""
     return datetime.now().isoformat(timespec="seconds")
+
+
+# Backward-compatible names retained for integrations written against the first
+# protocol draft.  Their result includes the legacy oaics_* aliases, while new
+# code should use the explicit country_qualification_* names above.
+def parse_oaics_protocol_response(payload: Any) -> dict[str, Any]:
+    result = parse_country_qualification_response(payload)
+    return {
+        **result,
+        "oaics_country_results": result["country_qualification_results"],
+        "oaics_eligible": result["country_qualification_eligible"],
+        "oaics_query_count": result["country_qualification_query_count"],
+        "oaics_session_kind": "website_protocol",
+        "oaics_processor_entity": "tools.oai9.com",
+    }
+
+
+def check_oaics_protocol(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return parse_oaics_protocol_response(
+        _protocol_payload_from_result(check_country_qualification_protocol(*args, **kwargs))
+    )
+
+
+def _protocol_payload_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Convert canonical parsed output into the legacy parser shape."""
+    return {
+        "query_count": result.get("country_qualification_query_count"),
+        "results": result.get("country_qualification_results") or [],
+    }
+
+
+def query_oaics_countries(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    result = query_country_qualification(*args, **kwargs)
+    if result.get("country_qualification_status") == "success":
+        return {
+            **result,
+            "oaics_check_status": "success",
+            "oaics_check_http_status": result.get("country_qualification_http_status"),
+            "oaics_check_error": result.get("country_qualification_error"),
+            "oaics_checked_at": result.get("country_qualification_checked_at"),
+            "oaics_country_results": result.get("country_qualification_results") or [],
+            "oaics_query_count": result.get("country_qualification_query_count"),
+            "oaics_eligible": result.get("country_qualification_eligible"),
+        }
+    return {
+        **result,
+        "oaics_check_status": "failed",
+        "oaics_check_http_status": result.get("country_qualification_http_status"),
+        "oaics_check_error": result.get("country_qualification_error"),
+        "oaics_checked_at": result.get("country_qualification_checked_at"),
+        "oaics_country_results": result.get("country_qualification_results") or [],
+    }

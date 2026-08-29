@@ -127,7 +127,11 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "OAICS_CHECK_AFTER_REGISTRATION", "file": "register.py", "type": "bool", "group": "注册方式",
-        "label": "注册完成查询各国资格", "help": "开启后注册成功并保存账号后自动调用 OAICS 协议查询各国资格；关闭后仍查询套餐，可在账号页手动查询资格",
+        "label": "注册完成查询 OAICS", "help": "开启后注册成功并保存账号后自动调用 ChatGPT checkout 检测 OAICS；各国资格查询在账号页单独执行",
+    },
+    {
+        "key": "COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION", "file": "register.py", "type": "bool", "group": "注册方式",
+        "label": "注册完成查询各国资格", "help": "开启后注册成功并保存账号后自动调用 tools.oai9.com 查询各国资格；与 OAICS 检测相互独立",
     },
     # ---- 账号查活 ----
     {

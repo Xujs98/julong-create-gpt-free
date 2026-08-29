@@ -66,6 +66,8 @@ def _check_plan_with_account_context(
     proxy: str | None,
     timezone_offset_min: str,
     check_oaics: bool = True,
+    check_country_qualification: bool = False,
+    country_qualification_turnstile_token: str | None = None,
     max_attempts: int | None = None,
 ) -> dict:
     """使用账号保存的 device_id 与 Session Cookie 查询套餐，避免随机新环境触发 401。"""
@@ -80,6 +82,8 @@ def _check_plan_with_account_context(
         session_cookies=list(saved_session.get("cookies") or []),
         billing_country=str(account.get("proxy_country_code") or ""),
         check_oaics=bool(check_oaics),
+        check_country_qualification=bool(check_country_qualification),
+        country_qualification_turnstile_token=country_qualification_turnstile_token,
     )
 
 
@@ -112,7 +116,9 @@ def _run_plan_check(
     trigger: str,
     proxy: str | None,
     timezone_offset_min: str,
-    check_oaics: bool = True,
+    check_oaics: bool = False,
+    check_country_qualification: bool = False,
+    country_qualification_turnstile_token: str | None = None,
 ) -> dict:
     try:
         if not db.mark_account_plan_check_running(account_id):
@@ -128,6 +134,8 @@ def _run_plan_check(
             proxy=proxy,
             timezone_offset_min=timezone_offset_min,
             check_oaics=check_oaics,
+            check_country_qualification=check_country_qualification,
+            country_qualification_turnstile_token=country_qualification_turnstile_token,
         )
 
         if result.get("needs_live_check") or result.get("token_expired") is True:
@@ -143,6 +151,8 @@ def _run_plan_check(
                     proxy=proxy,
                     timezone_offset_min=timezone_offset_min,
                     check_oaics=check_oaics,
+                    check_country_qualification=check_country_qualification,
+                    country_qualification_turnstile_token=country_qualification_turnstile_token,
                     max_attempts=1,
                 )
                 current_token = latest_token
@@ -166,6 +176,8 @@ def _run_plan_check(
                     proxy=proxy,
                     timezone_offset_min=timezone_offset_min,
                     check_oaics=check_oaics,
+                    check_country_qualification=check_country_qualification,
+                    country_qualification_turnstile_token=country_qualification_turnstile_token,
                     max_attempts=1,
                 )
                 result["live_refresh_performed"] = True
@@ -203,6 +215,8 @@ def _run_plan_check(
                 session_cookies=list((extract_saved_session(account) or {}).get("cookies") or []),
                 billing_country=str(account.get("proxy_country_code") or ""),
                 check_oaics=bool(check_oaics),
+                check_country_qualification=bool(check_country_qualification),
+                country_qualification_turnstile_token=country_qualification_turnstile_token,
             )
             if recheck_result.get("ok"):
                 result = recheck_result
@@ -254,7 +268,9 @@ def enqueue_account_plan_check(
     trigger: str,
     proxy: str | None = None,
     timezone_offset_min: str = "-",
-    check_oaics: bool = True,
+    check_oaics: bool = False,
+    check_country_qualification: bool = False,
+    country_qualification_turnstile_token: str | None = None,
 ) -> dict:
     """把查询放入统一线程池；重复查询或队列满时不提交。"""
     account_id = int(account_id)
@@ -265,7 +281,11 @@ def enqueue_account_plan_check(
     if not _QUEUE_SLOTS.acquire(blocking=False):
         return {"accepted": False, "busy": False, "queue_full": True, "error": "套餐查询队列已满，请稍后重试"}
 
-    if not db.claim_account_plan_check(acc_id=account_id, trigger=trigger):
+    if not db.claim_account_plan_check(
+        acc_id=account_id,
+        trigger=trigger,
+        country_qualification=bool(check_country_qualification),
+    ):
         _QUEUE_SLOTS.release()
         return {"accepted": False, "busy": True, "error": "该账号正在查询套餐"}
 
@@ -279,6 +299,8 @@ def enqueue_account_plan_check(
             proxy=proxy,
             timezone_offset_min=str(timezone_offset_min or "-"),
             check_oaics=bool(check_oaics),
+            check_country_qualification=bool(check_country_qualification),
+            country_qualification_turnstile_token=country_qualification_turnstile_token,
         )
     except Exception as exc:
         _QUEUE_SLOTS.release()

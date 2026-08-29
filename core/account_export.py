@@ -1285,28 +1285,39 @@ def save_account_data(
         from config import register as register_cfg
 
         auto_check = bool(getattr(register_cfg, "OAICS_CHECK_AFTER_REGISTRATION", True))
+        country_auto_check = bool(getattr(register_cfg, "COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION", False))
     except Exception:
         # 配置模块异常时保留历史默认行为，避免影响注册结果保存。
         auto_check = True
+        country_auto_check = False
     try:
         from core.plan_check_service import enqueue_account_plan_check
 
-        queued = enqueue_account_plan_check(
+        queue_kwargs = dict(
             account_id=row_id,
             email=email,
             access_token=access_token,
             trigger="registration_auto",
             check_oaics=auto_check,
         )
+        # 保持旧调用方的默认参数形状；仅在开关开启时显式开启国家查询。
+        if country_auto_check:
+            queue_kwargs["check_country_qualification"] = True
+        queued = enqueue_account_plan_check(**queue_kwargs)
         if queued.get("accepted"):
+            enabled = []
             if auto_check:
-                logger.info(f"[Plan] 注册后自动查询套餐及 OAICS 已入队: id={row_id}, email={email}")
+                enabled.append("OAICS")
+            if country_auto_check:
+                enabled.append("各国资格")
+            if enabled:
+                logger.info(f"[Plan] 注册后自动查询套餐及{'、'.join(enabled)}已入队: id={row_id}, email={email}")
             else:
-                logger.info(f"[Plan] 注册后自动查询套餐已入队，按开关跳过 OAICS: id={row_id}, email={email}")
+                logger.info(f"[Plan] 注册后自动查询套餐已入队，按开关跳过 OAICS/各国资格: id={row_id}, email={email}")
         elif queued.get("busy"):
-            logger.info(f"[Plan] 账号已有套餐/OAICS 查询，注册流程不重复入队: id={row_id}, email={email}")
+            logger.info(f"[Plan] 账号已有套餐/OAICS/各国资格查询，注册流程不重复入队: id={row_id}, email={email}")
         else:
-            logger.warning(f"[Plan] 注册后自动查询套餐/OAICS 入队失败（不影响注册结果）: {email}, {queued.get('error')}")
+            logger.warning(f"[Plan] 注册后自动查询套餐/OAICS/各国资格入队失败（不影响注册结果）: {email}, {queued.get('error')}")
     except Exception as exc:
         logger.warning(
             f"[Plan] 注册后自动查询入队异常（不影响注册结果）: "

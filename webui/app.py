@@ -210,6 +210,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "proxy_country_name", "proxy_region", "proxy_city", "proxy_exit_ip",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "oaics_eligible", "oaics_check_status",
+        "country_qualification_eligible", "country_qualification_status",
         "plan_check_status", "codex_status", "codex_agent_status",
         "twofa_status", "twofa_requested",
     ):
@@ -226,6 +227,8 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
         "oaics_check_error", "oaics_checked_at", "oaics_session_kind", "oaics_processor_entity",
         "oaics_country_results", "oaics_query_count",
+        "country_qualification_error", "country_qualification_checked_at", "country_qualification_http_status",
+        "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
         "subscription_plan", "has_active_subscription", "is_delinquent",
         "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
         "billing_period", "billing_currency", "last_purchase_origin_platform", "last_will_renew",
@@ -1166,6 +1169,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             trigger="manual",
             proxy=data.get("proxy") if "proxy" in data else None,
             timezone_offset_min=str(data.get("timezone_offset_min") or "-"),
+            check_oaics=bool(data.get("check_oaics", False)),
+            check_country_qualification=False,
         )
         if queued.get("busy"):
             return jsonify({"ok": False, **queued}), 409
@@ -1200,6 +1205,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             trigger="oaics_manual",
             proxy=data.get("proxy") if "proxy" in data else None,
             timezone_offset_min=str(data.get("timezone_offset_min") or "-"),
+            check_oaics=True,
+            check_country_qualification=False,
         )
         if queued.get("busy"):
             return jsonify({"ok": False, **queued}), 409
@@ -1252,6 +1259,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 trigger="manual_bulk",
                 proxy=proxy,
                 timezone_offset_min=timezone_offset_min,
+                check_oaics=bool(data.get("check_oaics", False)),
+                check_country_qualification=False,
             )
             item = {"id": acc.get("id"), "email": acc.get("email"), **queued}
             if queued.get("accepted"):
@@ -1309,6 +1318,103 @@ def create_app(auth_code: str | None = None) -> Flask:
                 trigger="oaics_manual_bulk",
                 proxy=proxy,
                 timezone_offset_min=timezone_offset_min,
+                check_oaics=True,
+                check_country_qualification=False,
+            )
+            item = {"id": acc_id, "email": acc.get("email"), **queued}
+            if queued.get("accepted"):
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+        return jsonify({
+            "ok": True,
+            "started": started, "started_count": len(started),
+            "busy": busy, "busy_count": len(busy),
+            "failed": failed, "failed_count": len(failed),
+            "skipped": skipped, "skipped_count": len(skipped),
+        }), 202
+
+    @app.post("/api/accounts/check-qualification")
+    @app.post("/api/accounts/check-country-qualification")
+    def api_account_check_country_qualification():
+        """查询单个账号的各国资格（tools.oai9.com），不执行 OAICS checkout。"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = str(data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except (TypeError, ValueError):
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = str(acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        queued = plan_check_service.enqueue_account_plan_check(
+            account_id=int(acc.get("id")),
+            email=str(acc.get("email") or ""),
+            access_token=token,
+            trigger="country_qualification_manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+            timezone_offset_min=str(data.get("timezone_offset_min") or "-"),
+            check_oaics=False,
+            check_country_qualification=True,
+            country_qualification_turnstile_token=data.get("turnstile_token"),
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
+    @app.post("/api/accounts/check-qualification-bulk")
+    @app.post("/api/accounts/check-country-qualification-bulk")
+    def api_accounts_check_country_qualification_bulk():
+        """批量查询各国资格；每个账号只执行套餐上下文请求 + 国家协议请求。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多查询 500 个账号"}), 400
+        proxy = data.get("proxy") if "proxy" in data else None
+        timezone_offset_min = str(data.get("timezone_offset_min") or "-")
+        turnstile_token = data.get("turnstile_token")
+        started, busy, failed, skipped = [], [], [], []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            token = str(acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            queued = plan_check_service.enqueue_account_plan_check(
+                account_id=acc_id,
+                email=str(acc.get("email") or ""),
+                access_token=token,
+                trigger="country_qualification_manual_bulk",
+                proxy=proxy,
+                timezone_offset_min=timezone_offset_min,
+                check_oaics=False,
+                check_country_qualification=True,
+                country_qualification_turnstile_token=turnstile_token,
             )
             item = {"id": acc_id, "email": acc.get("email"), **queued}
             if queued.get("accepted"):

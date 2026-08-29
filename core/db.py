@@ -1564,6 +1564,7 @@ def claim_account_plan_check(
     acc_id: int | None = None,
     email: str | None = None,
     trigger: str = "manual",
+    country_qualification: bool = False,
 ) -> bool:
     """原子占用账号的套餐查询；已有未超时查询时返回 False。"""
     with _LOCK:
@@ -1595,6 +1596,11 @@ def claim_account_plan_check(
         row["plan_check_started_at"] = None
         row["plan_check_completed_at"] = None
         row["plan_check_error"] = None
+        if country_qualification:
+            row["country_qualification_status"] = "queued"
+            row["country_qualification_checked_at"] = None
+            row["country_qualification_http_status"] = None
+            row["country_qualification_error"] = None
         row["updated_at"] = now
         _save_accounts(accounts)
         return True
@@ -1610,6 +1616,8 @@ def mark_account_plan_check_running(acc_id: int) -> bool:
         row["plan_check_status"] = "running"
         row["plan_check_started_at"] = _now()
         row["plan_check_error"] = None
+        if str(row.get("plan_check_trigger") or "").startswith("country_qualification"):
+            row["country_qualification_status"] = "running"
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
@@ -1628,6 +1636,10 @@ def recover_interrupted_plan_checks() -> int:
             row["plan_check_ok"] = False
             row["plan_check_error"] = "WebUI 重启导致套餐查询中断，请重新查询"
             row["plan_check_completed_at"] = now
+            if str(row.get("plan_check_trigger") or "").startswith("country_qualification"):
+                row["country_qualification_status"] = "failed"
+                row["country_qualification_checked_at"] = now
+                row["country_qualification_error"] = "WebUI 重启导致各国资格查询中断，请重新查询"
             row["updated_at"] = now
             recovered += 1
         if recovered:
@@ -1656,6 +1668,38 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["plan_check_completed_at"] = _now()
         row["plan_check_http_status"] = result.get("http_status")
         row["plan_check_error"] = None if ok else result.get("error")
+
+        # 各国资格查询与 OAICS checkout 完全分开保存。即使套餐查询成功、
+        # 网站协议返回失败，也要保留本次国家查询状态和错误原因。
+        country_keys = (
+            "country_qualification_status",
+            "country_qualification_results",
+            "country_qualification_eligible",
+            "country_qualification_query_count",
+            "country_qualification_checked_at",
+            "country_qualification_http_status",
+            "country_qualification_error",
+            "country_qualification_source",
+        )
+        if any(key in result for key in country_keys):
+            status = str(result.get("country_qualification_status") or "").strip().lower()
+            if "country_qualification_status" in result:
+                row["country_qualification_status"] = status or "failed"
+            if "country_qualification_results" in result:
+                row["country_qualification_results"] = result.get("country_qualification_results") or []
+            if "country_qualification_query_count" in result:
+                row["country_qualification_query_count"] = result.get("country_qualification_query_count")
+            if "country_qualification_checked_at" in result:
+                row["country_qualification_checked_at"] = result.get("country_qualification_checked_at")
+            if "country_qualification_http_status" in result:
+                row["country_qualification_http_status"] = result.get("country_qualification_http_status")
+            if "country_qualification_error" in result:
+                row["country_qualification_error"] = result.get("country_qualification_error")
+            if "country_qualification_source" in result:
+                row["country_qualification_source"] = result.get("country_qualification_source")
+            if status == "success" and "country_qualification_eligible" in result:
+                value = result.get("country_qualification_eligible")
+                row["country_qualification_eligible"] = bool(value) if value is not None else None
 
         if result.get("account_id"):
             row["account_id"] = result.get("account_id")
@@ -1953,6 +1997,17 @@ def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
     elif row.get("oaics_eligible") is False:
         status_aliases.extend(["无oaics", "[无oaics]"])
 
+    country_status = str(row.get("country_qualification_status") or "").strip().lower()
+    country_eligible = row.get("country_qualification_eligible")
+    if country_eligible is True:
+        status_aliases.extend(["资格", "[资格]", "有资格", "[有资格]"])
+    elif country_eligible is False:
+        status_aliases.extend(["无资格", "[无资格]"])
+    if country_status == "failed":
+        status_aliases.extend(["资格查询失败", "[资格查询失败]"])
+    elif country_status in {"queued", "running", "pending"}:
+        status_aliases.extend(["资格查询中", "[资格查询中]"])
+
     # 代理出口 GeoIP 也作为可组合的搜索别名：例如 ``[jp]``、``[tokyo]``
     # 可与 ``&&``/``!`` 一起使用，且兼容旧账号的嵌套 extra_json 记录。
     geo = _account_proxy_geo(row)
@@ -2104,6 +2159,9 @@ def list_account_plan_check_statuses(
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_checked_at",
         "oaics_session_kind", "oaics_processor_entity", "oaics_country_results", "oaics_query_count",
+        "country_qualification_eligible", "country_qualification_status", "country_qualification_error",
+        "country_qualification_checked_at", "country_qualification_http_status",
+        "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
         "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
@@ -2153,7 +2211,7 @@ def list_account_plan_check_statuses(
                     continue
                 # 查活/套餐状态需要把 null 一并传给前端，用于清除上一轮失败原因和时间；
                 # 否则轻量轮询 Object.assign 会把旧 plan_check_error 永久留在表格里。
-                if key.startswith(("live_check_", "plan_check_", "twofa_", "extract_link_")) or (value is not None and value != ""):
+                if key.startswith(("live_check_", "plan_check_", "twofa_", "extract_link_", "country_qualification_")) or (value is not None and value != ""):
                     item[key] = value
             plan = str(row.get("current_plan_type") or row.get("plan_type") or "").lower()
             if not any(x in plan for x in ("plus", "pro", "team", "go")):
@@ -2187,6 +2245,13 @@ def list_account_plan_check_statuses(
                     "oaics_checked_at": row.get("oaics_checked_at"),
                     "oaics_country_results": row.get("oaics_country_results"),
                     "oaics_query_count": row.get("oaics_query_count"),
+                    "country_qualification_eligible": row.get("country_qualification_eligible"),
+                    "country_qualification_status": row.get("country_qualification_status"),
+                    "country_qualification_error": row.get("country_qualification_error"),
+                    "country_qualification_checked_at": row.get("country_qualification_checked_at"),
+                    "country_qualification_http_status": row.get("country_qualification_http_status"),
+                    "country_qualification_results": row.get("country_qualification_results"),
+                    "country_qualification_query_count": row.get("country_qualification_query_count"),
                     "twofa_status": row.get("twofa_status"),
                     "twofa_error": row.get("twofa_error"),
                     "twofa_queued_at": row.get("twofa_queued_at"),
