@@ -5935,6 +5935,8 @@ function _countryQualificationCell(r) {
 // itself calls _countryQualificationCell and uses country-specific data attrs.
 function _oaicsQualificationCell(r) { return _countryQualificationCell(r); }
 function _oaicsBadge(r) {
+  const status = String(r?.oaics_check_status || '').trim().toLowerCase();
+  if (status && status !== 'success') return '';
   if (!(r.oaics_eligible === true)) return '';
   const detail = [
     'OAICS资格已确认',

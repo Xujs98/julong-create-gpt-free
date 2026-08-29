@@ -1997,16 +1997,17 @@ def _account_query_aliases(row: dict) -> tuple[list[str], list[str]]:
 
     if str(row.get("plan_check_status") or "").lower() == "failed":
         status_aliases.extend(["套餐查询失败", "[套餐查询失败]"])
-    if row.get("oaics_eligible") is True:
+    oaics_status = str(row.get("oaics_check_status") or "").strip().lower()
+    if row.get("oaics_eligible") is True and (not oaics_status or oaics_status == "success"):
         status_aliases.extend(["oaics", "[oaics]"])
-    elif row.get("oaics_eligible") is False:
+    elif row.get("oaics_eligible") is False and (not oaics_status or oaics_status == "success"):
         status_aliases.extend(["无oaics", "[无oaics]"])
 
     country_status = str(row.get("country_qualification_status") or "").strip().lower()
     country_eligible = row.get("country_qualification_eligible")
-    if country_eligible is True:
+    if country_eligible is True and country_status == "success":
         status_aliases.extend(["资格", "[资格]", "有资格", "[有资格]"])
-    elif country_eligible is False:
+    elif country_eligible is False and country_status == "success":
         status_aliases.extend(["无资格", "[无资格]"])
     if country_status == "failed":
         status_aliases.extend(["资格查询失败", "[资格查询失败]"])

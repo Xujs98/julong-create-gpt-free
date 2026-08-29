@@ -80,6 +80,15 @@ def test_oaics_status_alias_is_searchable():
     assert _account_matches_query(_row(oaics_eligible=False), "[无oaics]")
 
 
+def test_failed_oaics_or_country_check_does_not_match_eligibility_alias():
+    assert not _account_matches_query(
+        _row(oaics_eligible=True, oaics_check_status="failed"), "[oaics]"
+    )
+    assert not _account_matches_query(
+        _row(country_qualification_eligible=True, country_qualification_status="failed"), "[资格]"
+    )
+
+
 def test_proxy_geo_alias_supports_brackets_and_and():
     row = _row(
         twofa=True,
