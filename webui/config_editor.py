@@ -125,6 +125,10 @@ EDITABLE_FIELDS = [
         "key": "REGISTRATION_TRANSIENT_RETRIES", "file": "register.py", "type": "int", "group": "注册方式",
         "label": "瞬态错误重试", "help": "仅对网络超时、Cloudflare 挑战、浏览器关闭等可恢复错误进行整流程重试；业务/验证码错误不自动重跑",
     },
+    {
+        "key": "OAICS_CHECK_AFTER_REGISTRATION", "file": "register.py", "type": "bool", "group": "注册方式",
+        "label": "注册完成查询 OAICS", "help": "开启后注册成功并保存账号后自动查询套餐与 OAICS 资格；关闭后跳过自动查询，可在账号页手动查询",
+    },
     # ---- 账号查活 ----
     {
         "key": "LIVE_CHECK_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",

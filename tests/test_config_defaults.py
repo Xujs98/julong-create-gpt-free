@@ -92,6 +92,23 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_registration_has_oaics_completion_query_switch(self):
+        """注册方式配置应暴露注册完成后的 OAICS 自动查询开关。"""
+        fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
+        field = fields["OAICS_CHECK_AFTER_REGISTRATION"]
+        self.assertEqual(field["type"], "bool")
+        self.assertEqual(field["group"], "注册方式")
+        self.assertIn("注册成功", field["help"])
+
+        source = (config_editor._CONFIG_DIR / "register.py").read_text(encoding="utf-8")
+        self.assertTrue(
+            config_editor._parse_value_from_source(
+                source,
+                "OAICS_CHECK_AFTER_REGISTRATION",
+                "bool",
+            )
+        )
+
     def test_proxy_warmup_has_multidimensional_cleanliness_fields(self):
         fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
 

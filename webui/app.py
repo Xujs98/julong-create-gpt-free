@@ -1172,6 +1172,40 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, **queued}), 503
         return jsonify({"ok": True, "started": True, **queued}), 202
 
+    @app.post("/api/accounts/check-oaics")
+    def api_account_check_oaics():
+        """把单账号 OAICS 资格查询加入统一后台队列。"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        email = str(data.get("email") or "").strip()
+        acc = None
+        if acc_id is not None:
+            try:
+                acc = db.get_account(int(acc_id))
+            except (TypeError, ValueError):
+                acc = None
+        if acc is None and email:
+            acc = db.get_account_by_email(email)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        token = str(acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        account_id = int(acc.get("id"))
+        queued = plan_check_service.enqueue_account_plan_check(
+            account_id=account_id,
+            email=acc.get("email") or "",
+            access_token=token,
+            trigger="oaics_manual",
+            proxy=data.get("proxy") if "proxy" in data else None,
+            timezone_offset_min=str(data.get("timezone_offset_min") or "-"),
+        )
+        if queued.get("busy"):
+            return jsonify({"ok": False, **queued}), 409
+        if not queued.get("accepted"):
+            return jsonify({"ok": False, **queued}), 503
+        return jsonify({"ok": True, "started": True, **queued}), 202
+
     @app.post("/api/accounts/check-plan-bulk")
     def api_accounts_check_plan_bulk():
         """批量把套餐查询加入统一后台队列。Body {account_ids:[...], proxy?, timezone_offset_min?}"""

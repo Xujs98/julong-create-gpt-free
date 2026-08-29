@@ -48,3 +48,19 @@ def test_config_unsaved_changes_can_be_tracked_and_discarded() -> None:
     assert "setConfigPendingValueV2(f.key, readConfigElementValue(el, f))" in html
     assert "Object.keys(CONFIG_PENDING_UPDATES).forEach" in html
     assert "已撤销未保存的配置更改" in html
+
+
+def test_registration_section_contains_oaics_completion_switch() -> None:
+    html = source()
+
+    assert "OAICS_CHECK_AFTER_REGISTRATION" in html
+    assert "config-switches-v2--registration" in html
+    assert "config-switch-v2-icon--oaics" in html
+    assert "const oaicsField = fields.find(f => f.key === 'OAICS_CHECK_AFTER_REGISTRATION')" in html
+    assert "renderFeatureSwitchField(oaicsField" in html
+
+
+def test_env_example_documents_oaics_completion_switch() -> None:
+    env_example = TEMPLATE.parents[2] / ".env.example"
+    text = env_example.read_text(encoding="utf-8")
+    assert "OAICS_CHECK_AFTER_REGISTRATION=true" in text

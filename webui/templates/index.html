@@ -953,6 +953,7 @@
     .accounts-table-v2 .col-group { width: 130px; min-width: 120px; }
     .accounts-table-v2 .col-token { width: 150px; min-width: 150px; }
     .accounts-table-v2 .col-plan { width: 200px; }
+    .accounts-table-v2 .col-qualification { width: 250px; min-width: 220px; }
     .accounts-table-v2 .col-note { width: 110px; }
     .accounts-table-v2 .col-completion { width: 130px; }
     .accounts-table-v2 .col-small { width: 64px; }
@@ -1195,6 +1196,84 @@
     }
     .accounts-table-v2 .acc-v2-plan-line {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+    }
+    /* OAICS 资格列：国家结果与单账号查询动作保持紧凑、可扫描的商业化状态卡。 */
+    .accounts-table-v2 .acc-v2-qualification-cell {
+      min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
+    }
+    .accounts-table-v2 .acc-v2-qualification-list {
+      min-width: 0; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item {
+      display: inline-flex; align-items: center; gap: 4px; min-height: 27px;
+      padding: 0 7px; border: 1px solid #e4e7ed; border-radius: 7px;
+      background: #fafafa; color: #606266; font-size: 12px; line-height: 1;
+      white-space: nowrap; transition: border-color .16s ease, background .16s ease, color .16s ease;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item .qualification-code {
+      color: #377DFF; font-size: 10px; font-weight: 800; letter-spacing: .04em;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item .qualification-name { font-weight: 600; }
+    .accounts-table-v2 .acc-v2-qualification-item .qualification-state {
+      width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 50%; font-size: 11px; font-weight: 800;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item .qualification-state svg {
+      width: 13px; height: 13px; fill: none; stroke: currentColor;
+      stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item.is-eligible {
+      color: #23856c; background: #ecf9f5; border-color: #9ed8c9;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item.is-eligible .qualification-code { color: #23856c; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-eligible .qualification-state { color: #2bb8a6; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-ineligible {
+      color: #7a7f8c; background: #fafafa; border-color: #e1e4ea;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item.is-ineligible .qualification-code { color: #7a7f8c; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-ineligible .qualification-state { color: #a7adb8; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-pending {
+      color: #a06b18; background: #fff8e8; border-color: #f0c36d;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item.is-pending .qualification-code { color: #b26a00; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-pending .qualification-state { color: #e6a23c; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-failed {
+      color: #b42318; background: #fff0f0; border-color: #f4aaaa;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item.is-failed .qualification-code { color: #e64545; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-failed .qualification-state { color: #e64545; }
+    .accounts-table-v2 .acc-v2-qualification-item.is-unknown {
+      color: #909399; background: #f5f6f8; border-color: #dfe2e8;
+    }
+    .accounts-table-v2 .acc-v2-qualification-action {
+      width: 30px; height: 30px; min-width: 30px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center; gap: 0;
+      border: 1px solid #b8cffb; border-radius: 7px;
+      color: #377DFF; background: #f4f7ff; cursor: pointer;
+      transition: color .16s ease, background-color .16s ease, border-color .16s ease,
+        box-shadow .16s ease, transform .16s ease;
+    }
+    .accounts-table-v2 .acc-v2-qualification-action:hover:not(:disabled) {
+      color: #fff; background: #377DFF; border-color: #377DFF;
+      box-shadow: 0 4px 10px rgba(55, 125, 255, .2); transform: translateY(-1px);
+    }
+    .accounts-table-v2 .acc-v2-qualification-action:focus-visible {
+      outline: 2px solid rgba(55, 125, 255, .3); outline-offset: 2px;
+    }
+    .accounts-table-v2 .acc-v2-qualification-action:disabled { opacity: .58; cursor: wait; transform: none; }
+    .accounts-table-v2 .acc-v2-qualification-action svg {
+      width: 16px; height: 16px; fill: none; stroke: currentColor;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .accounts-table-v2 .acc-v2-qualification-action.is-loading svg { animation: acc-v2-qualification-spin .9s linear infinite; }
+    .accounts-table-v2 .acc-v2-qualification-empty { color: #a7adb8; font-size: 12px; white-space: nowrap; }
+    .accounts-table-v2 .acc-v2-qualification-meta {
+      flex-basis: 100%; color: #909399; font-size: 11px; line-height: 1.35;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    @keyframes acc-v2-qualification-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .accounts-table-v2 .acc-v2-qualification-action.is-loading svg { animation: none; }
     }
     .accounts-table-v2 .acc-v2-registration-pill {
       display: inline-flex; align-items: center; justify-content: center;
@@ -2203,6 +2282,7 @@
     .accounts-table-v2.is-col-hidden-group .col-group,
     .accounts-table-v2.is-col-hidden-token .col-token,
     .accounts-table-v2.is-col-hidden-plan .col-plan,
+    .accounts-table-v2.is-col-hidden-qualification .col-qualification,
     .accounts-table-v2.is-col-hidden-note .col-note,
     .accounts-table-v2.is-col-hidden-completion .col-completion,
     .accounts-table-v2.is-col-hidden-small .col-small,
@@ -2749,6 +2829,10 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
     }
+    .config-switches-v2--registration {
+      grid-template-columns: minmax(0, 1fr);
+      margin-top: 0;
+    }
     .config-subtabs-v2 {
       margin: 18px 24px 0; display: flex; gap: 6px; flex-wrap: wrap;
       padding: 5px; border: 1px solid #e8ebf2; border-radius: 11px; background: #f6f7fa;
@@ -2788,6 +2872,7 @@
     .config-switch-v2-icon--codex { color: #409eff; background: color-mix(in srgb, #409eff 12%, transparent); }
     .config-switch-v2-icon--2fa { color: #67c23a; background: color-mix(in srgb, #67c23a 12%, transparent); }
     .config-switch-v2-icon--flow { color: #e6a23c; background: color-mix(in srgb, #e6a23c 12%, transparent); }
+    .config-switch-v2-icon--oaics { color: #8b5cf6; background: color-mix(in srgb, #8b5cf6 12%, transparent); }
     .config-switch-v2-icon--default { color: #909399; background: #f5f7fa; }
     .config-switch-v2-label {
       min-width: 0; font-size: 13px; font-weight: 720; color: #2b3548; line-height: 1.4;
@@ -3425,6 +3510,7 @@ try {
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="group" role="menuitemcheckbox" aria-checked="true"><span>分组</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="token" role="menuitemcheckbox" aria-checked="true"><span>AT / Session</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="plan" role="menuitemcheckbox" aria-checked="true"><span>套餐</span><span class="accounts-view-check">✓</span></button>
+              <button type="button" class="accounts-view-item-v2 is-active" data-account-column="qualification" role="menuitemcheckbox" aria-checked="true"><span>资格</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="note" role="menuitemcheckbox" aria-checked="true"><span>备注</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="completion" role="menuitemcheckbox" aria-checked="true"><span>状态</span><span class="accounts-view-check">✓</span></button>
               <button type="button" class="accounts-view-item-v2 is-active" data-account-column="small" role="menuitemcheckbox" aria-checked="true"><span>2FA</span><span class="accounts-view-check">✓</span></button>
@@ -3442,7 +3528,7 @@ try {
           <span class="acc-v2-btn-group-title">套餐/提链</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="优先校验现有 AT；仅失效时重新登录并刷新">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedOaicsV2" disabled title="查询选中账号的 OAICS 资格；会复用套餐查询的登录态和结账会话">查询OAICS</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedOaicsV2" disabled title="批量查询选中账号的 OAICS 资格（查询OAICS）；会复用套餐查询的登录态和结账会话">资格查询</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="按通用提链配置给选中的 free(可Plus试用) 账号批量提链">提链</button>
         </div>
         <div class="acc-v2-btn-group">
@@ -3498,7 +3584,7 @@ try {
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source"><col class="col-registration"><col class="col-group">
-            <col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-completion"><col class="col-small">
+            <col class="col-token"><col class="col-plan"><col class="col-qualification"><col class="col-note"><col class="col-completion"><col class="col-small">
             <col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
@@ -3511,6 +3597,7 @@ try {
               <th class="col-group">分组</th>
               <th class="col-token">AT / Session</th>
               <th class="col-plan">套餐</th>
+              <th class="col-qualification">资格</th>
               <th class="col-note">备注</th>
               <th class="col-completion">状态</th>
               <th class="col-small acc-v2-totp-cell">2FA</th>
@@ -4445,6 +4532,8 @@ function accountV2Icons() {
     copy: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>`,
     urlCopy: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2.2-2.2a5 5 0 0 0-7.1-7.1L10.9 5"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2.2 2.2a5 5 0 0 0 7.1 7.1l1.3-1.2"/></svg>`,
     check: `<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`,
+    search: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>`,
+    spinner: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"/></svg>`,
   };
 }
 function hideToast() {
@@ -5715,6 +5804,139 @@ function _hidePlanHoverCard() {
   window.addEventListener('scroll', _hidePlanHoverCard, true);
   window.addEventListener('resize', _hidePlanHoverCard);
 })();
+// OAICS 国家资格结果统一归一化，兼容后端返回数组、映射或 JSON 字符串。
+const OAICS_COUNTRY_LABELS = Object.freeze({
+  JP: '日本', PH: '菲律宾', GB: '英国', ID: '印度尼西亚', NL: '荷兰',
+  US: '美国', CA: '加拿大', AU: '澳大利亚', DE: '德国', FR: '法国',
+  IE: '爱尔兰', IT: '意大利', ES: '西班牙', SG: '新加坡', KR: '韩国',
+});
+function _oaicsParseValue(value) {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!text) return value;
+  if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+    try { return JSON.parse(text); } catch (_) {}
+  }
+  return value;
+}
+function _oaicsBool(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value !== 0;
+  const text = String(value == null ? '' : value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'eligible', 'qualified', 'available', '有', '有资格', '通过', 'ok', 'success'].includes(text)) return true;
+  if (['false', '0', 'no', 'ineligible', 'unqualified', 'unavailable', '无', '无资格', '失败', 'failed'].includes(text)) return false;
+  return null;
+}
+function _oaicsState(value, fallbackStatus = '') {
+  const direct = _oaicsBool(value);
+  if (direct !== null) return direct ? 'eligible' : 'ineligible';
+  const text = String(value == null ? fallbackStatus : value).trim().toLowerCase();
+  if (['queued', 'running', 'pending', 'loading', 'checking', '查询中', '排队中'].some(x => text.includes(x))) return 'pending';
+  if (['failed', 'error', 'timeout', '失败', '异常'].some(x => text.includes(x))) return 'failed';
+  if (['ineligible', 'unqualified', 'unavailable', 'not_eligible', 'not eligible', '无资格', '无'].some(x => text.includes(x))) return 'ineligible';
+  if (['success', 'ok', 'eligible', 'qualified', 'available', '有资格', '通过'].some(x => text.includes(x))) return 'eligible';
+  return 'unknown';
+}
+function _oaicsCountryEntry(raw, fallbackCode = '') {
+  const value = _oaicsParseValue(raw);
+  const item = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const code = String(
+    item.code || item.country_code || item.countryCode || item.iso || item.country || fallbackCode || ''
+  ).trim().toUpperCase();
+  const name = String(
+    item.name || item.country_name || item.countryName || item.label || (code ? OAICS_COUNTRY_LABELS[code] || '' : '')
+  ).trim();
+  const rawStatus = item.status || item.state || item.check_status || item.oaics_check_status || '';
+  const rawEligible = Object.prototype.hasOwnProperty.call(item, 'eligible') ? item.eligible
+    : Object.prototype.hasOwnProperty.call(item, 'qualified') ? item.qualified
+      : Object.prototype.hasOwnProperty.call(item, 'is_eligible') ? item.is_eligible
+        : Object.prototype.hasOwnProperty.call(item, 'oaics_eligible') ? item.oaics_eligible
+          : Object.prototype.hasOwnProperty.call(item, 'available') ? item.available : (typeof value === 'boolean' ? value : rawStatus);
+  return {
+    code: code || 'OAICS',
+    name: name || (code === 'OAICS' ? 'OAICS' : code),
+    state: _oaicsState(rawEligible, rawStatus),
+    error: String(item.error || item.message || item.reason || '').trim(),
+  };
+}
+function _oaicsCountryEntries(r) {
+  const status = String(r?.oaics_check_status || '').trim().toLowerCase();
+  const countryRaw = r?.oaics_country_results ?? r?.oaics_countries ?? r?.oaics_qualifications
+    ?? r?.oaics_country_eligibility ?? r?.country_qualifications ?? r?.qualification_results
+    ?? r?.qualifications ?? r?.oaics_result?.countries ?? r?.oaics_result?.results;
+  const parsed = _oaicsParseValue(countryRaw);
+  const entries = [];
+  const add = (value, fallbackCode = '') => {
+    const item = _oaicsCountryEntry(value, fallbackCode);
+    if (!item.code) return;
+    const key = `${item.code}:${item.name}`;
+    if (!entries.some(existing => `${existing.code}:${existing.name}` === key)) entries.push(item);
+  };
+  const consume = (value) => {
+    const next = _oaicsParseValue(value);
+    if (Array.isArray(next)) {
+      next.forEach(item => {
+        if (typeof item === 'string') add({code: item, eligible: true}, item);
+        else add(item);
+      });
+      return;
+    }
+    if (!next || typeof next !== 'object') return;
+    const wrapper = next.items || next.results || next.countries || next.country_results || next.qualifications;
+    if (wrapper && wrapper !== next) { consume(wrapper); return; }
+    Object.entries(next).forEach(([code, item]) => {
+      if (['status', 'error', 'message', 'checked_at', 'updated_at', 'processor_entity'].includes(code)) return;
+      if (item && typeof item === 'object' && !Array.isArray(item)) add({...item, code: item.code || code}, code);
+      else add({code, eligible: item}, code);
+    });
+  };
+  if (parsed != null) consume(parsed);
+  if (!entries.length) {
+    const hasStatus = Boolean(status || r?.oaics_checked_at);
+    const countryCode = String(r?.proxy_country_code || r?.country_code || '').trim().toUpperCase();
+    if (hasStatus) {
+      // 未提供国家明细时，以代理出口国家作标签；没有国家时用 OAICS 总体标签。
+      add({
+        code: countryCode || 'OAICS',
+        name: countryCode ? (r?.proxy_country_name || OAICS_COUNTRY_LABELS[countryCode] || countryCode) : 'OAICS',
+        eligible: status === 'success' ? r?.oaics_eligible : undefined,
+        status: status || (typeof r?.oaics_eligible === 'boolean' ? (r.oaics_eligible ? 'success' : 'ineligible') : 'unknown'),
+        error: r?.oaics_check_error || '',
+      }, countryCode || 'OAICS');
+    }
+  }
+  return entries;
+}
+function _oaicsQualificationIcon(state) {
+  if (state === 'eligible') return '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+  if (state === 'pending') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"/></svg>';
+  if (state === 'ineligible' || state === 'failed') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 10v5M12 7h.01"/></svg>';
+}
+function _oaicsQualificationGlyph(state) {
+  return state === 'eligible' ? '✓' : state === 'ineligible' || state === 'failed' ? '✗' : state === 'pending' ? '…' : '?';
+}
+function _oaicsQualificationStateLabel(state) {
+  return state === 'eligible' ? '有资格' : state === 'ineligible' ? '无资格' : state === 'failed' ? '查询失败' : state === 'pending' ? '查询中' : '未查询';
+}
+function _oaicsQualificationCell(r) {
+  const entries = _oaicsCountryEntries(r);
+  const planStatus = String(r?.plan_check_status || '').trim().toLowerCase();
+  const oaicsStatus = String(r?.oaics_check_status || '').trim().toLowerCase();
+  const pending = ['queued', 'running', 'pending'].includes(oaicsStatus)
+    || ['queued', 'running'].includes(planStatus);
+  if (pending && !entries.length) entries.push({code: String(r?.proxy_country_code || 'OAICS').toUpperCase(), name: String(r?.proxy_country_name || OAICS_COUNTRY_LABELS[String(r?.proxy_country_code || '').toUpperCase()] || 'OAICS'), state: 'pending'});
+  const list = entries.map(item => {
+    const state = pending && item.state === 'unknown' ? 'pending' : item.state;
+    const title = [item.error, r?.oaics_checked_at ? `检测：${r.oaics_checked_at}` : ''].filter(Boolean).join('；');
+    return `<span class="acc-v2-qualification-item is-${esc(state)}" title="${esc(title || `${item.code}${item.name}`)}"><span class="qualification-code">${esc(item.code)}</span><span class="qualification-name">${esc(item.name)}</span><span class="qualification-state" data-qualification-state="${esc(state)}" data-qualification-glyph="${_oaicsQualificationGlyph(state)}" aria-label="${esc(_oaicsQualificationStateLabel(state))}">${_oaicsQualificationIcon(state)}</span></span>`;
+  }).join('');
+  const empty = list ? '' : '<span class="acc-v2-qualification-empty">未查询</span>';
+  const actionTitle = pending ? 'OAICS 资格查询进行中' : '查询该账号的 OAICS 资格';
+  const actionIcon = pending ? accountV2Icons().spinner : accountV2Icons().search;
+  const checkedMeta = r?.oaics_checked_at ? `<span class="acc-v2-qualification-meta" title="${esc(r.oaics_checked_at)}">更新于 ${esc(r.oaics_checked_at)}</span>` : '';
+  return `<div class="acc-v2-qualification-cell"><div class="acc-v2-qualification-list">${list || empty}</div><button type="button" class="acc-v2-qualification-action${pending ? ' is-loading' : ''}" data-oaics-check="${esc(r.id)}" data-account-oaics-check="${esc(r.id)}" title="${esc(actionTitle)}" aria-label="${esc(actionTitle)}"${pending ? ' disabled' : ''}>${actionIcon}</button>${checkedMeta}</div>`;
+}
 function _oaicsBadge(r) {
   if (!(r.oaics_eligible === true)) return '';
   const detail = [
@@ -6023,6 +6245,7 @@ function renderAccounts() {
       <td class="col-group" title="${esc(r.group_name || '默认分组')}"><span class="pill status-used">${esc(r.group_name || '默认分组')}</span></td>
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-plan"><div class="acc-v2-plan-line">${_planCell(r)}${_oaicsBadge(r)}</div><div class="acc-v2-sub">${_oaicsResultCell(r)}</div></td>
+      <td class="col-qualification">${_oaicsQualificationCell(r)}</td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-completion acc-v2-completion-cell">${_accountCompletionStatusCell(r)}</td>
       <td class="col-small acc-v2-totp-cell">${_accountTotpCell(r, accountIcons)}</td>
@@ -6042,7 +6265,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="15" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="16" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
@@ -6584,6 +6807,12 @@ async function onAccountsBodyClick(e) {
   const extractLogBtn = e.target.closest('[data-account-extract-log]');
   if (extractLogBtn) {
     openExtractLinkLog(extractLogBtn.dataset.accountExtractLog, extractLogBtn.dataset.accountExtractLogEmail);
+    return;
+  }
+
+  const oaicsBtn = e.target.closest('[data-oaics-check], [data-account-oaics-check]');
+  if (oaicsBtn) {
+    await checkOneOaics(Number(oaicsBtn.dataset.oaicsCheck || oaicsBtn.dataset.accountOaicsCheck), oaicsBtn);
     return;
   }
 
@@ -7424,6 +7653,41 @@ async function retryAccountTwofa(id, btn) {
   } catch (err) {
     showToast('重新设置 2FA 失败: ' + err.message);
     if (btn) { btn.disabled = false; btn.textContent = old; }
+  }
+}
+
+async function checkOneOaics(id, btn) {
+  const account = ACCOUNTS.find(row => Number(row.id) === Number(id));
+  if (!account) { showToast('账号不存在'); return; }
+  const target = btn || document.querySelector(`[data-oaics-check="${CSS.escape(String(id))}"]`);
+  const oldHtml = target ? target.innerHTML : '';
+  if (target) {
+    target.disabled = true;
+    target.classList.add('is-loading');
+    target.setAttribute('aria-busy', 'true');
+    target.title = 'OAICS 资格查询进行中';
+    target.innerHTML = accountV2Icons().spinner;
+  }
+  try {
+    const r = await api('/api/accounts/check-oaics', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({account_id: Number(id)}),
+    });
+    if (r.busy) showToast('该账号的 OAICS 资格正在查询');
+    else showToast(r.message || 'OAICS 资格查询已入队');
+    planStatusRevision = '';
+    await pollAccountPlanStatuses();
+  } catch (err) {
+    showToast('查询 OAICS 资格失败: ' + err.message);
+  } finally {
+    if (target && target.isConnected) {
+      target.disabled = false;
+      target.classList.remove('is-loading');
+      target.removeAttribute('aria-busy');
+      target.innerHTML = oldHtml || accountV2Icons().search;
+      target.title = '查询该账号的 OAICS 资格';
+    }
   }
 }
 
@@ -8759,7 +9023,7 @@ function configSectionIntro(name) {
   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
   if (name === '账号查活') return '分别配置查活、换绑登录和换绑提交方式；混合模式支持指纹浏览器登录后由协议完成邮箱变更。';
   if (name === '功能开关') return '';
-  if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
+  if (name === '注册方式') return '选择账号注册时使用的自动化方式，并控制注册完成后的 OAICS 资格查询。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
   if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
   if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
@@ -8791,6 +9055,12 @@ function configFeatureIcon(key) {
     return {
       cls: 'config-switch-v2-icon--flow',
       svg: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'
+    };
+  }
+  if (key === 'OAICS_CHECK_AFTER_REGISTRATION') {
+    return {
+      cls: 'config-switch-v2-icon--oaics',
+      svg: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/><path d="M8.5 11h5"/><path d="M11 8.5v5"/>'
     };
   }
   return {
@@ -9689,11 +9959,15 @@ function renderConfigSectionV2(name, fields) {
   }
   if (name === '注册方式') {
     const field = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
+    const oaicsField = fields.find(f => f.key === 'OAICS_CHECK_AFTER_REGISTRATION');
     return `
       <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
         ${renderConfigSectionHead(name, configSectionIntro(name))}
         <div class="config-section-v2-body config-section-v2-body--single">
           ${field ? renderRegistrationDriverField(field) : '<div class="banner warn">未找到注册方式配置项</div>'}
+        </div>
+        <div class="config-switches-v2 config-switches-v2--registration">
+          ${oaicsField ? renderFeatureSwitchField(oaicsField, { withIcon: true }) : '<div class="banner warn">未找到 OAICS 自动查询开关</div>'}
         </div>
         ${renderConfigSectionActionsV2()}
       </section>

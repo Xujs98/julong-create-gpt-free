@@ -24,6 +24,21 @@ def test_oaics_bulk_endpoint_queues_plan_context_check():
     assert enqueue.call_args.kwargs["access_token"] == "TOKEN"
 
 
+def test_oaics_single_endpoint_queues_plan_context_check():
+    client = _client()
+    account = {"id": 8, "email": "user@example.test", "access_token": "TOKEN"}
+    with patch("webui.app.db.get_account", return_value=account), patch(
+        "webui.app.plan_check_service.enqueue_account_plan_check",
+        return_value={"accepted": True, "busy": False, "status": "queued"},
+    ) as enqueue:
+        response = client.post("/api/accounts/check-oaics", json={"account_id": 8})
+
+    assert response.status_code == 202
+    assert response.get_json()["started"] is True
+    assert enqueue.call_args.kwargs["trigger"] == "oaics_manual"
+    assert enqueue.call_args.kwargs["access_token"] == "TOKEN"
+
+
 def test_twofa_retry_endpoint_queues_saved_password_account():
     client = _client()
     account = {"id": 8, "email": "user@example.test", "registration_password": "PASSWORD"}
