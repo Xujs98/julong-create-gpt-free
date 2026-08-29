@@ -4060,6 +4060,8 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 const COUNTRY_QUALIFICATION_TURNSTILE_ENABLED = {{ country_qualification_turnstile_enabled|default(false)|tojson }};
 const COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY = {{ country_qualification_turnstile_site_key|default('')|tojson }};
+const COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED = {{ country_qualification_browser_relay_enabled|default(true)|tojson }};
+const COUNTRY_QUALIFICATION_OFFICIAL_HOST = 'tools.oai9.com';
 
 // 全站统一商业化下拉组件：原生 select 保留数据、表单与 change 语义，可见菜单使用 body portal 避免被容器裁切。
 const UI_SELECT_STATE_V3 = { select: null, wrap: null, trigger: null, menu: null, searchInput: null, query: '' };
@@ -7718,7 +7720,11 @@ async function _countryQualificationTurnstileToken() {
         execution: 'execute',
         appearance: 'interaction-only',
         callback: token => countryQualificationTurnstileResolve?.(String(token || '')),
-        'error-callback': () => countryQualificationTurnstileReject?.(new Error('安全验证组件暂时不可用')),
+        'error-callback': code => {
+          const error = new Error(code ? `安全验证组件暂时不可用（${code}）` : '安全验证组件暂时不可用');
+          error.turnstileCode = String(code || '');
+          countryQualificationTurnstileReject?.(error);
+        },
         'expired-callback': () => countryQualificationTurnstileReject?.(new Error('安全验证已过期，请重试')),
         'timeout-callback': () => countryQualificationTurnstileReject?.(new Error('安全验证超时，请重试')),
       });
@@ -7746,6 +7752,32 @@ async function _countryQualificationTurnstileToken() {
   return countryQualificationTurnstilePending;
 }
 
+async function _countryQualificationTokenOrRelay() {
+  const currentHost = String(window.location.hostname || '').toLowerCase();
+  if (
+    COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED
+    && currentHost !== COUNTRY_QUALIFICATION_OFFICIAL_HOST
+  ) {
+    showToast('本地页面已切换官方浏览器验证');
+    return '';
+  }
+  try {
+    return await _countryQualificationTurnstileToken();
+  } catch (err) {
+    // Production site keys are hostname-bound.  A local WebUI therefore
+    // cannot mint a usable token; the backend will execute the official page
+    // in its own tools.oai9.com browser context instead.
+    if (COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED) {
+      const code = String(err?.turnstileCode || '');
+      if (code === '110200' || /安全验证组件|Turnstile|验证超时|加载失败/i.test(String(err?.message || ''))) {
+        showToast('当前页面无法使用官方安全验证，已切换官方浏览器验证');
+        return '';
+      }
+    }
+    throw err;
+  }
+}
+
 async function _enqueueCountryQualification(id, turnstileToken) {
   return api('/api/accounts/check-qualification', {
     method: 'POST',
@@ -7771,7 +7803,7 @@ async function checkOneCountryQualification(id, btn) {
   }
   try {
     const r = await _queueCountryQualificationRequest(async () => {
-      const turnstileToken = await _countryQualificationTurnstileToken();
+      const turnstileToken = await _countryQualificationTokenOrRelay();
       return _enqueueCountryQualification(id, turnstileToken);
     });
     if (r.busy) showToast('该账号的各国资格正在查询');
@@ -7807,7 +7839,7 @@ async function checkSelectedCountryQualification() {
     for (const id of ids) {
       try {
         const result = await _queueCountryQualificationRequest(async () => {
-          const turnstileToken = await _countryQualificationTurnstileToken();
+          const turnstileToken = await _countryQualificationTokenOrRelay();
           return _enqueueCountryQualification(id, turnstileToken);
         });
         if (result.busy) busy += 1;

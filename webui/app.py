@@ -528,6 +528,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             country_qualification_turnstile_site_key=str(
                 getattr(webui_config, "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "") or ""
             ).strip(),
+            country_qualification_browser_relay_enabled=bool(
+                getattr(webui_config, "COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED", True)
+            ),
         )
 
     # ----------------------------------------------------------

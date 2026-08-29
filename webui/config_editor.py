@@ -116,6 +116,20 @@ EDITABLE_FIELDS = [
         "key": "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "file": "webui.py", "type": "str", "group": "WebUI",
         "label": "各国资格验证站点密钥", "help": "公开的 Turnstile site key；部署到自定义域名时填写在 Cloudflare 中登记的对应密钥",
     },
+    {
+        "key": "COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED", "file": "webui.py", "type": "bool", "group": "WebUI",
+        "label": "各国资格官方浏览器中继", "help": "本地 WebUI 域名未被生产 site key 授权时，自动在 tools.oai9.com 官方页面上下文完成 Turnstile 与查询",
+    },
+    {
+        "key": "COUNTRY_QUALIFICATION_BROWSER_HEADLESS", "file": "webui.py", "type": "str", "group": "WebUI",
+        "label": "官方验证浏览器模式", "help": "auto=macOS 优先可见窗口、服务器自动无头；也可填 headed 或 headless",
+        "choices": ["auto", "headed", "headless"],
+        "choice_labels": {"auto": "自动", "headed": "可见窗口", "headless": "无头"},
+    },
+    {
+        "key": "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", "file": "webui.py", "type": "int", "group": "WebUI",
+        "label": "官方验证超时(秒)", "help": "官方页面加载、Turnstile 验证和资格请求的总超时，建议 30-90 秒",
+    },
     # ---- 功能开关 ----
     {
         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",
