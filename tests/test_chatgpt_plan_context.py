@@ -122,6 +122,10 @@ def test_free_plan_query_checks_oaics_checkout_session_prefix():
     checkout = env.post.call_args
     assert checkout.args[0].endswith("/backend-api/payments/checkout")
     assert checkout.kwargs["json"]["plan_name"] == "chatgptplusplan"
+    assert checkout.kwargs["json"]["entry_point"] == "all_plans_pricing_modal"
+    assert checkout.kwargs["json"]["billing_details"] == {"country": "US", "currency": "USD"}
+    assert checkout.kwargs["json"]["promo_campaign"]["promo_campaign_id"] == "plus-1-month-free"
+    assert checkout.kwargs["json"]["checkout_ui_mode"] == "hosted"
 
 
 def test_free_plan_query_uses_oaics_website_country_protocol():
@@ -175,6 +179,29 @@ def test_free_plan_keeps_plan_success_when_oaics_check_fails():
     assert result["ok"] is True
     assert result["oaics_check_status"] == "failed"
     assert "403" in result["oaics_check_error"]
+
+
+def test_oaics_checkout_failure_preserves_provider_detail_and_retryability():
+    failed = _Response({"detail": "Our systems have detected unusual activity. Please try again later."})
+    failed.status_code = 400
+    env = SimpleNamespace(
+        device_id="saved-device",
+        proxy="PROXY",
+        session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
+        get_chatgpt_headers=lambda **_kwargs: {},
+        navigator_language=lambda: "zh-CN",
+        get=MagicMock(return_value=_Response(_free_payload())),
+        post=MagicMock(return_value=failed),
+    )
+    with patch("core.chatgpt_plan.BrowserSession", return_value=env):
+        result = chatgpt_plan.check_account_plan(
+            "TOKEN", proxy="PROXY", billing_country="JP", check_oaics=True, max_attempts=1
+        )
+
+    assert result["ok"] is True
+    assert result["oaics_check_http_status"] == 400
+    assert "unusual activity" in result["oaics_check_error"]
+    assert result["oaics_check_retryable"] is True
 
 
 def test_http_401_reports_backend_auth_failure_for_live_refresh():

@@ -1679,6 +1679,7 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
             "country_qualification_checked_at",
             "country_qualification_http_status",
             "country_qualification_error",
+            "country_qualification_requires_turnstile",
             "country_qualification_source",
         )
         if any(key in result for key in country_keys):
@@ -1695,6 +1696,8 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 row["country_qualification_http_status"] = result.get("country_qualification_http_status")
             if "country_qualification_error" in result:
                 row["country_qualification_error"] = result.get("country_qualification_error")
+            if "country_qualification_requires_turnstile" in result:
+                row["country_qualification_requires_turnstile"] = bool(result.get("country_qualification_requires_turnstile"))
             if "country_qualification_source" in result:
                 row["country_qualification_source"] = result.get("country_qualification_source")
             if status == "success" and "country_qualification_eligible" in result:
@@ -1752,6 +1755,8 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 row["oaics_checked_at"] = result.get("oaics_checked_at")
                 row["oaics_check_http_status"] = result.get("oaics_check_http_status")
                 row["oaics_check_error"] = result.get("oaics_check_error")
+                if "oaics_check_retryable" in result:
+                    row["oaics_check_retryable"] = bool(result.get("oaics_check_retryable"))
                 if "oaics_country_results" in result:
                     row["oaics_country_results"] = result.get("oaics_country_results") or []
                 if "oaics_query_count" in result:
@@ -2157,9 +2162,10 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived", "link_completed", "payment_completed", "sms_completed",
         "plan_type", "current_plan_type", "plus_trial_eligible",
-        "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_checked_at",
+        "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_check_retryable", "oaics_checked_at",
         "oaics_session_kind", "oaics_processor_entity", "oaics_country_results", "oaics_query_count",
         "country_qualification_eligible", "country_qualification_status", "country_qualification_error",
+        "country_qualification_requires_turnstile",
         "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
         "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
@@ -2242,12 +2248,14 @@ def list_account_plan_check_statuses(
                     "oaics_eligible": row.get("oaics_eligible"),
                     "oaics_check_status": row.get("oaics_check_status"),
                     "oaics_check_error": row.get("oaics_check_error"),
+                    "oaics_check_retryable": row.get("oaics_check_retryable"),
                     "oaics_checked_at": row.get("oaics_checked_at"),
                     "oaics_country_results": row.get("oaics_country_results"),
                     "oaics_query_count": row.get("oaics_query_count"),
                     "country_qualification_eligible": row.get("country_qualification_eligible"),
                     "country_qualification_status": row.get("country_qualification_status"),
                     "country_qualification_error": row.get("country_qualification_error"),
+                    "country_qualification_requires_turnstile": row.get("country_qualification_requires_turnstile"),
                     "country_qualification_checked_at": row.get("country_qualification_checked_at"),
                     "country_qualification_http_status": row.get("country_qualification_http_status"),
                     "country_qualification_results": row.get("country_qualification_results"),

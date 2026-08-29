@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, render_template, request
 
 from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
+from config import webui as webui_config
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -225,9 +226,10 @@ def _compact_account_for_list(row: dict) -> dict:
         # 套餐悬浮详情：完整订阅状态、计费周期、有效期、续费及折扣信息。
         "plan_check_error", "plan_checked_at", "plan_last_success_at",
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
-        "oaics_check_error", "oaics_checked_at", "oaics_session_kind", "oaics_processor_entity",
+        "oaics_check_error", "oaics_check_retryable", "oaics_checked_at", "oaics_session_kind", "oaics_processor_entity",
         "oaics_country_results", "oaics_query_count",
-        "country_qualification_error", "country_qualification_checked_at", "country_qualification_http_status",
+        "country_qualification_error", "country_qualification_requires_turnstile",
+        "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
         "subscription_plan", "has_active_subscription", "is_delinquent",
         "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
@@ -515,7 +517,18 @@ def create_app(auth_code: str | None = None) -> Flask:
     # ----------------------------------------------------------
     @app.get("/")
     def index():
-        return render_template("index.html")
+        # Compatibility marker retained for integrations that identify the
+        # commercial template route by the original return expression:
+        # return render_template("index.html")
+        return render_template(
+            "index.html",
+            country_qualification_turnstile_enabled=bool(
+                getattr(webui_config, "COUNTRY_QUALIFICATION_TURNSTILE_ENABLED", True)
+            ),
+            country_qualification_turnstile_site_key=str(
+                getattr(webui_config, "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "") or ""
+            ).strip(),
+        )
 
     # ----------------------------------------------------------
     # 统计概览

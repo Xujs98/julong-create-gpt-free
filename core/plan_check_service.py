@@ -72,9 +72,19 @@ def _check_plan_with_account_context(
 ) -> dict:
     """使用账号保存的 device_id 与 Session Cookie 查询套餐，避免随机新环境触发 401。"""
     saved_session = extract_saved_session(account) or {}
+    # Checkout 风控会把保存的 cf_clearance / __cf_bm 与出口 IP 绑定。
+    # OAICS 自动查询未显式指定代理时，优先复用注册时的完整代理会话，
+    # 避免“Cookie 来自出口 A、Checkout 从出口 B 发出”而返回 unusual activity。
+    effective_proxy = proxy
+    preserve_proxy_session = False
+    if check_oaics and effective_proxy is None:
+        saved_proxy = str(account.get("proxy_used") or "").strip()
+        if saved_proxy:
+            effective_proxy = saved_proxy
+            preserve_proxy_session = True
     return check_account_plan(
         token,
-        proxy=proxy,
+        proxy=effective_proxy,
         timezone_offset_min=timezone_offset_min,
         max_attempts=max_attempts,
         account_id=str(account.get("account_id") or "") or None,
@@ -84,6 +94,7 @@ def _check_plan_with_account_context(
         check_oaics=bool(check_oaics),
         check_country_qualification=bool(check_country_qualification),
         country_qualification_turnstile_token=country_qualification_turnstile_token,
+        preserve_proxy_session=preserve_proxy_session,
     )
 
 
@@ -205,18 +216,15 @@ def _run_plan_check(
             logger.info("[Plan] 新账号暂未发现 Plus 试用资格，%.1fs 后复查一次: %s", recheck_delay, email)
             time.sleep(recheck_delay)
             _wait_for_rate_slot()
-            recheck_result = check_account_plan(
+            recheck_result = _check_plan_with_account_context(
+                account,
                 current_token,
                 proxy=proxy,
                 timezone_offset_min=timezone_offset_min,
-                max_attempts=1,
-                account_id=str(account.get("account_id") or "") or None,
-                device_id=str(account.get("device_id") or "") or None,
-                session_cookies=list((extract_saved_session(account) or {}).get("cookies") or []),
-                billing_country=str(account.get("proxy_country_code") or ""),
                 check_oaics=bool(check_oaics),
                 check_country_qualification=bool(check_country_qualification),
                 country_qualification_turnstile_token=country_qualification_turnstile_token,
+                max_attempts=1,
             )
             if recheck_result.get("ok"):
                 result = recheck_result

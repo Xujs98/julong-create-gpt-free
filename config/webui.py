@@ -13,9 +13,16 @@ WEBUI_JOB_LOG_REFRESH_INTERVAL: int = 2
 # 其他非终态任务始终保留。超出数量的任务记录和对应日志由后台清理。
 WEBUI_REGISTRATION_JOB_RETENTION_COUNT: int = 50
 
+# 各国资格接口启用 Cloudflare Turnstile。站点密钥是公开值；部署到自定义域名时
+# 可通过 .env 覆盖为在该域名登记的站点密钥，避免后台请求缺少安全验证令牌而返回 403。
+COUNTRY_QUALIFICATION_TURNSTILE_ENABLED: bool = True
+COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY: str = "0x4AAAAAAEApfJ6TZ5Bngm17"
+
 
 apply_env_overrides(globals(), {
     'WEBUI_JOB_LOG_AUTO_REFRESH': 'bool',
     'WEBUI_JOB_LOG_REFRESH_INTERVAL': 'int',
     'WEBUI_REGISTRATION_JOB_RETENTION_COUNT': 'int',
+    'COUNTRY_QUALIFICATION_TURNSTILE_ENABLED': 'bool',
+    'COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY': 'str',
 })

@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 ACCOUNTS_CHECK_PATH = "/backend-api/accounts/check/v4-2023-04-27"
 CHECKOUT_PATH = "/backend-api/payments/checkout"
+_CHECKOUT_CURRENCY_BY_COUNTRY = {
+    "AU": "AUD", "AT": "EUR", "BE": "EUR", "CA": "CAD", "CH": "CHF",
+    "DE": "EUR", "DK": "DKK", "ES": "EUR", "FI": "EUR", "FR": "EUR",
+    "GB": "GBP", "IE": "EUR", "IT": "EUR", "JP": "JPY", "LU": "EUR",
+    "NL": "EUR", "NO": "NOK", "PT": "EUR", "SE": "SEK", "US": "USD",
+}
 
 
 def now_iso() -> str:
@@ -241,12 +247,25 @@ def check_oaics_eligibility(
 ) -> dict[str, Any]:
     """仅通过 ChatGPT checkout 会话检测 OAICS 资格。"""
     checked_at = now_iso()
+    billing_code = str(billing_country or "").strip().upper()
+    billing_details = None
+    if len(billing_code) == 2:
+        billing_details = {
+            "country": billing_code,
+            "currency": _CHECKOUT_CURRENCY_BY_COUNTRY.get(billing_code, "USD"),
+        }
     payload = {
+        # This mirrors the current web checkout request shape.  The previous
+        # flat promo_campaign_id + embedded payload is accepted by some older
+        # deployments but is rejected by newer checkout risk checks.
+        "entry_point": "all_plans_pricing_modal",
         "plan_name": "chatgptplusplan",
-        "team_plan_data": None,
-        "billing_interval": "month",
-        "promo_campaign_id": promo_campaign_id or None,
-        "checkout_ui_mode": "embedded",
+        "billing_details": billing_details,
+        "promo_campaign": {
+            "promo_campaign_id": promo_campaign_id or "plus-1-month-free",
+            "is_coupon_from_query_param": False,
+        },
+        "checkout_ui_mode": "hosted",
     }
     resp = None
     try:
@@ -264,11 +283,24 @@ def check_oaics_eligibility(
         )
         http_status = int(resp.status_code)
         if not 200 <= http_status < 300:
+            detail = ""
+            try:
+                body = resp.json()
+                if isinstance(body, dict):
+                    detail = str(body.get("detail") or body.get("error") or "").strip()
+            except Exception:
+                detail = ""
+            suffix = f": {detail[:240]}" if detail else ""
             return {
                 "oaics_check_status": "failed",
                 "oaics_checked_at": checked_at,
                 "oaics_check_http_status": http_status,
-                "oaics_check_error": f"OAICS checkout HTTP {http_status}",
+                "oaics_check_error": f"OAICS checkout HTTP {http_status}{suffix}",
+                "oaics_check_retryable": bool(
+                    http_status in {408, 409, 425, 429}
+                    or http_status >= 500
+                    or "unusual activity" in detail.lower()
+                ),
             }
         data = resp.json()
         # Legacy integrations briefly pointed the OAICS checker at the public
@@ -310,6 +342,7 @@ def check_oaics_eligibility(
             "oaics_checked_at": checked_at,
             "oaics_check_http_status": int(resp.status_code) if resp is not None else None,
             "oaics_check_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+            "oaics_check_retryable": True,
             "oaics_country_results": [],
         }
 
@@ -338,6 +371,7 @@ def _check_country_qualification(
             "country_qualification_checked_at": checked_at,
             "country_qualification_http_status": 200,
             "country_qualification_error": None,
+            "country_qualification_requires_turnstile": False,
         })
         return result
     except Exception as exc:
@@ -346,6 +380,7 @@ def _check_country_qualification(
             "country_qualification_checked_at": checked_at,
             "country_qualification_http_status": getattr(exc, "status_code", None),
             "country_qualification_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+            "country_qualification_requires_turnstile": bool(getattr(exc, "requires_turnstile", False)),
             "country_qualification_results": [],
             "country_qualification_query_count": None,
             "country_qualification_eligible": None,
@@ -524,6 +559,7 @@ def check_account_plan(
     check_oaics: bool = False,
     check_country_qualification: bool = False,
     country_qualification_turnstile_token: str | None = None,
+    preserve_proxy_session: bool = False,
 ) -> dict:
     token = normalize_token(token)
     if not token:
@@ -572,7 +608,8 @@ def check_account_plan(
         try:
             # 独立查询创建协议会话；查活后的即时校验可借用原会话保持 Cookie/IP 连续性。
             if env is None:
-                env = BrowserSession(proxy=rotate_proxy_session(route["proxy"]), detect_exit_geo=False)
+                session_proxy = route["proxy"] if preserve_proxy_session else rotate_proxy_session(route["proxy"])
+                env = BrowserSession(proxy=session_proxy, detect_exit_geo=False)
             _restore_plan_session_context(
                 env,
                 device_id=device_id,

@@ -39,6 +39,25 @@ def test_oaics_single_endpoint_queues_plan_context_check():
     assert enqueue.call_args.kwargs["access_token"] == "TOKEN"
 
 
+def test_country_qualification_endpoint_forwards_turnstile_token():
+    client = _client()
+    account = {"id": 8, "email": "user@example.test", "access_token": "TOKEN"}
+    with patch("webui.app.db.get_account", return_value=account), patch(
+        "webui.app.plan_check_service.enqueue_account_plan_check",
+        return_value={"accepted": True, "busy": False, "status": "queued"},
+    ) as enqueue:
+        response = client.post(
+            "/api/accounts/check-qualification",
+            json={"account_id": 8, "turnstile_token": "TURNSTILE"},
+        )
+
+    assert response.status_code == 202
+    assert enqueue.call_args.kwargs["trigger"] == "country_qualification_manual"
+    assert enqueue.call_args.kwargs["check_oaics"] is False
+    assert enqueue.call_args.kwargs["check_country_qualification"] is True
+    assert enqueue.call_args.kwargs["country_qualification_turnstile_token"] == "TURNSTILE"
+
+
 def test_twofa_retry_endpoint_queues_saved_password_account():
     client = _client()
     account = {"id": 8, "email": "user@example.test", "registration_password": "PASSWORD"}

@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 COUNTRY_QUALIFICATION_CHECK_URL = "https://tools.oai9.com/api/trial/check"
 COUNTRY_QUALIFICATION_SITE_ORIGIN = "https://tools.oai9.com"
+COUNTRY_QUALIFICATION_TURNSTILE_ACTION = "trial_check"
 # 旧调用方兼容常量；网站接口实际返回各国资格，不是 OAICS checkout。
 OAICS_CHECK_URL = COUNTRY_QUALIFICATION_CHECK_URL
 OAICS_SITE_ORIGIN = COUNTRY_QUALIFICATION_SITE_ORIGIN
@@ -16,6 +17,23 @@ OAICS_SITE_ORIGIN = COUNTRY_QUALIFICATION_SITE_ORIGIN
 
 SUPPORTED_SESSION_PREFIXES = ("oaics_", "cs_")
 _SESSION_PATTERN = re.compile(r"(?<![A-Za-z0-9_])(oaics_|cs_)[A-Za-z0-9_-]+")
+
+
+class CountryQualificationError(RuntimeError):
+    """HTTP/protocol error from the country qualification endpoint."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        detail: str = "",
+        requires_turnstile: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.detail = str(detail or "")
+        self.requires_turnstile = bool(requires_turnstile)
 
 
 def _walk_values(value: Any, *, depth: int = 0) -> Iterable[Any]:
@@ -142,6 +160,13 @@ def check_country_qualification_protocol(
         "Content-Type": "application/json",
         "Origin": COUNTRY_QUALIFICATION_SITE_ORIGIN,
         "Referer": f"{COUNTRY_QUALIFICATION_SITE_ORIGIN}/",
+        # Keep the request close to the browser request made by gpt-trial.js.
+        # The Turnstile token remains the authoritative anti-abuse proof.
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/147.0.0.0 Safari/537.36",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
     }
     if turnstile_token:
         headers["X-Turnstile-Token"] = str(turnstile_token).strip()
@@ -162,8 +187,19 @@ def check_country_qualification_protocol(
         except Exception:
             detail = ""
         suffix = f": {detail[:180]}" if detail else ""
-        error = RuntimeError(f"country qualification HTTP {status_code}{suffix}")
-        setattr(error, "status_code", status_code)
+        requires_turnstile = status_code == 403 and any(
+            marker in detail.lower()
+            for marker in ("turnstile", "安全验证", "验证失败", "captcha")
+        )
+        message = f"country qualification HTTP {status_code}{suffix}"
+        if requires_turnstile:
+            message += "；需要有效的 Turnstile token"
+        error = CountryQualificationError(
+            message,
+            status_code=status_code,
+            detail=detail,
+            requires_turnstile=requires_turnstile,
+        )
         raise error
     try:
         payload = response.json()
@@ -197,6 +233,7 @@ def query_country_qualification(
         result["country_qualification_status"] = "success"
         result["country_qualification_http_status"] = 200
         result["country_qualification_error"] = None
+        result["country_qualification_requires_turnstile"] = False
         result["country_qualification_checked_at"] = oaics_result_timestamp()
         return result
     except Exception as exc:
@@ -204,6 +241,7 @@ def query_country_qualification(
             "country_qualification_status": "failed",
             "country_qualification_http_status": getattr(exc, "status_code", None),
             "country_qualification_error": f"{type(exc).__name__}: {str(exc)[:180]}",
+            "country_qualification_requires_turnstile": bool(getattr(exc, "requires_turnstile", False)),
             "country_qualification_checked_at": oaics_result_timestamp(),
             "country_qualification_results": [],
         }

@@ -108,6 +108,14 @@ EDITABLE_FIELDS = [
         "key": "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "file": "webui.py", "type": "int", "group": "WebUI",
         "label": "注册任务保留条数", "help": "保留最近 N 条已结束注册任务；排队中、运行中及其他非终态任务始终保留，超出部分及对应日志由后台清理",
     },
+    {
+        "key": "COUNTRY_QUALIFICATION_TURNSTILE_ENABLED", "file": "webui.py", "type": "bool", "group": "WebUI",
+        "label": "各国资格安全验证", "help": "开启后各国资格查询按钮会先执行 Turnstile，向 tools.oai9.com 发送有效验证令牌，避免接口返回 HTTP 403",
+    },
+    {
+        "key": "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "file": "webui.py", "type": "str", "group": "WebUI",
+        "label": "各国资格验证站点密钥", "help": "公开的 Turnstile site key；部署到自定义域名时填写在 Cloudflare 中登记的对应密钥",
+    },
     # ---- 功能开关 ----
     {
         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",
