@@ -3609,6 +3609,87 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_config_get():
         return jsonify(config_editor.get_config())
 
+    @app.post("/api/codex-sms/check")
+    def api_codex_sms_check():
+        """批量检查 Codex 接码助手 CDK，并返回脱敏明细与长期/短效统计。"""
+        data = request.get_json(silent=True) or {}
+        raw = data.get("cdks") if isinstance(data, dict) else None
+        if raw is None:
+            from config import codex as _codex_cfg
+            raw = getattr(_codex_cfg, "CODEX_SMS_CDKS", [])
+        if isinstance(raw, str):
+            cdks = [line.strip().upper() for line in raw.splitlines() if line.strip()]
+        else:
+            cdks = [str(line or "").strip().upper() for line in (raw or []) if str(line or "").strip()]
+        if not cdks:
+            return jsonify({"ok": False, "error": "请至少输入一个 CDK"}), 400
+        try:
+            from core.codex_sms_client import CodexSmsClient
+            from core.sms_provider import _http
+            from config import codex as _codex_cfg
+
+            http = _http()
+            try:
+                result = CodexSmsClient(
+                    getattr(_codex_cfg, "CODEX_SMS_API_BASE", "https://sms.kkdos.store"),
+                    http,
+                    getattr(_codex_cfg, "SMS_REQUEST_TIMEOUT", 30),
+                ).batch_redeem(cdks)
+            finally:
+                http.close()
+            items = []
+            counts = {"total": len(cdks), "available": 0, "long": 0, "short": 0, "failed": 0}
+            for index, item in enumerate(result.get("items") or []):
+                item = item if isinstance(item, dict) else {}
+                source_index = item.get("index", index)
+                try:
+                    source_index = int(source_index)
+                except (TypeError, ValueError):
+                    source_index = index
+                source_cdk = cdks[source_index] if 0 <= source_index < len(cdks) else ""
+                success = str(item.get("status") or "").lower() == "success"
+                kind = str(item.get("type") or "").lower()
+                if success:
+                    counts["available"] += 1
+                    if kind == "bindable": counts["long"] += 1
+                    elif kind == "onetime": counts["short"] += 1
+                else:
+                    counts["failed"] += 1
+                items.append({
+                    "index": item.get("index", index),
+                    "status": "success" if success else "error",
+                    "type": kind or None,
+                    "phone": item.get("phone") if success else None,
+                    "error": item.get("error") if not success else None,
+                    "cdkHint": f"{source_cdk[:3]}***{source_cdk[-3:]}" if len(source_cdk) > 6 else "***",
+                })
+            return jsonify({"ok": True, "items": items, "counts": counts})
+        except Exception as exc:
+            logger.warning("Codex CDK 批量检查失败：%s: %s", type(exc).__name__, exc)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.get("/api/codex-sms/availability")
+    def api_codex_sms_availability():
+        """读取 Codex 接码助手公开的长效/短效号码库存等级。"""
+        try:
+            from core.codex_sms_client import CodexSmsClient
+            from core.sms_provider import _http
+            from config import codex as _codex_cfg
+
+            http = _http()
+            try:
+                result = CodexSmsClient(
+                    getattr(_codex_cfg, "CODEX_SMS_API_BASE", "https://sms.kkdos.store"),
+                    http,
+                    getattr(_codex_cfg, "SMS_REQUEST_TIMEOUT", 30),
+                ).phone_availability()
+            finally:
+                http.close()
+            return jsonify({"ok": True, "shortTerm": result.get("shortTerm"), "longTerm": result.get("longTerm")})
+        except Exception as exc:
+            logger.warning("Codex 号码库存查询失败：%s: %s", type(exc).__name__, exc)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
     @app.post("/api/proxy/test")
     def api_proxy_test():
         """测试当前表单中的代理，返回出口 IP 和地理位置。"""

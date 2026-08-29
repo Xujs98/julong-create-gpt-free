@@ -101,6 +101,7 @@ CPA_SAVE_CALLBACK_RECEIPT: bool = True
 #   "grizzly" = GrizzlySMS，接口说明见 https://api.grizzlysms.com
 #   "l"       = 本地 L 取号服务，接口说明见 L_API.md
 #   "h"       = 本地 H 取号服务，接口说明见 H_API.md
+#   "codex"   = Codex 接码助手，接口说明见 https://sms.kkdos.store/api-docs
 # ============================================================
 
 SMS_PROVIDER: str = "l"
@@ -167,5 +168,26 @@ L_ADMIN_AUTH_CODE: str = env_str("L_ADMIN_AUTH_CODE", "")
 # 留空则直接使用 L 返回的 item.phone。
 L_PHONE_PREFIX: str = ""
 
+
+# ============================================================
+# Codex 接码助手（SMS_PROVIDER="codex" 时使用）
+# ============================================================
+
+# API 基址；CDK 本身承担鉴权，留空时使用官方地址。
+CODEX_SMS_API_BASE: str = "https://sms.kkdos.store"
+
+# CDK 池：每行一个，可同时放入长期（bindable）与短效（onetime）CDK。
+# WebUI 保存到 .env，运行时按需读取，不把真实 CDK 写入源码。
+CODEX_SMS_CDKS: list[str] = []
+
+# 号码类型：auto=自动选择，short=短效号码，long=长效号码。
+CODEX_SMS_NUMBER_TYPE: str = "auto"
+
+# 取号前批量检查 CDK；检查结果仅用于筛选可用项，失败项会跳过。
+CODEX_SMS_CHECK_BEFORE_USE: bool = True
+
+# 成功收到验证码后从本地 CDK 池自动删除已使用的 CDK。
+CODEX_SMS_DELETE_USED_CDK: bool = False
+
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_RETRY_FOLLOW_LIVE_CHECK': 'bool', 'CODEX_RETRY_DRIVER': 'str', 'CODEX_RETRY_HEADLESS': 'bool', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str'})
+apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_RETRY_FOLLOW_LIVE_CHECK': 'bool', 'CODEX_RETRY_DRIVER': 'str', 'CODEX_RETRY_HEADLESS': 'bool', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str', 'CODEX_SMS_API_BASE': 'str', 'CODEX_SMS_CDKS': 'list_str_multiline', 'CODEX_SMS_NUMBER_TYPE': 'str', 'CODEX_SMS_CHECK_BEFORE_USE': 'bool', 'CODEX_SMS_DELETE_USED_CDK': 'bool'})

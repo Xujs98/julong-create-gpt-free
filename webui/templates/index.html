@@ -2805,6 +2805,22 @@
     .config-section-v2-placeholder {
       margin: 8px 0 0; font-size: 13px; color: #c0c4cc; line-height: 1.5;
     }
+    .codex-sms-tools-v2 { margin: 0 24px 20px; padding: 18px; border: 1px solid #e6eaff; border-radius: 14px; background: linear-gradient(135deg,#f8f9ff,#fff); }
+    .codex-sms-tools-v2-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:14px; }
+    .codex-sms-tools-v2-title { color:#27345d; font-size:14px; font-weight:760; }
+    .codex-sms-tools-v2-subtitle { margin-top:4px; color:#8a94a7; font-size:11px; line-height:1.5; }
+    .codex-sms-tools-v2-actions { display:flex; flex-wrap:wrap; gap:8px; }
+    .codex-sms-tools-v2-actions .btn { min-height:34px; padding:0 12px; border:1px solid #dce2f2; border-radius:9px; background:#fff; color:#4d5b82; font-size:11px; font-weight:720; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:6px; transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease; }
+    .codex-sms-tools-v2-actions a.btn:hover { border-color:#aebcff; background:#f7f8ff; color:#3f55be; transform:translateY(-1px); box-shadow:0 5px 14px rgba(79,107,255,.13); text-decoration:none; }
+    .codex-sms-tools-v2-actions button.btn.primary { border-color:#4f6bff; background:#4f6bff; color:#fff; box-shadow:0 6px 14px rgba(79,107,255,.2); }
+    .codex-sms-tools-v2-actions button.btn.primary:hover:not(:disabled) { border-color:#405be4; background:#405be4; color:#fff; }
+    .codex-sms-tools-v2-actions .btn svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .codex-sms-counts-v2 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:12px; }
+    .codex-sms-count-v2 { padding:10px 12px; border:1px solid #edf0f5; border-radius:10px; background:#fff; }
+    .codex-sms-count-v2 span { display:block; color:#8a94a7; font-size:11px; }
+    .codex-sms-count-v2 b { display:block; margin-top:4px; color:#27345d; font-size:20px; line-height:1; }
+    .codex-sms-check-status-v2 { margin-top:12px; color:#667085; font-size:11px; line-height:1.5; white-space:pre-wrap; }
+    @media (max-width: 680px) { .codex-sms-tools-v2 { margin-left:14px; margin-right:14px; } .codex-sms-counts-v2 { grid-template-columns:1fr; } .codex-sms-tools-v2-head { flex-direction:column; } }
     .config-section-v2-head {
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
       padding: 20px 24px; border-bottom: 1px solid #edf0f5;
@@ -9036,7 +9052,56 @@ function smsConfigSectionForKey(key) {
   if (key === 'SMS_API_KEY') return ['GrizzlySMS', 'GrizzlySMS 平台 API Key 配置'];
   if (key.startsWith('H_')) return ['H 接码', 'H_API.md 本地 H 取号服务配置；项目ID/国家留空时复用通用字段'];
   if (key.startsWith('L_')) return ['L 接码', 'L_API.md 本地 L 取号服务配置'];
+  if (key.startsWith('CODEX_SMS_')) return ['Codex 接码助手', 'Codex 接码助手 CDK 池、号码类型与使用策略'];
   return ['其他接码配置', ''];
+}
+
+function renderCodexSmsToolsV2() {
+  return `
+    <div class="codex-sms-tools-v2" data-codex-sms-tools-v2>
+      <div class="codex-sms-tools-v2-head">
+        <div>
+          <div class="codex-sms-tools-v2-title">Codex 接码助手 · CDK 工作台</div>
+          <div class="codex-sms-tools-v2-subtitle">批量检查 CDK 可用性，并查看长效/短效号码库存等级。CDK 仅在当前浏览器表单和 .env 中保存。</div>
+        </div>
+        <div class="codex-sms-tools-v2-actions">
+          <button type="button" class="btn primary" id="btnCheckCodexSmsCdksV2"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/><path d="M3 12a9 9 0 1 0 3-6.7"/></svg>批量检查 CDK</button>
+          <a class="btn" href="https://sms.kkdos.store/" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>打开官网</a>
+          <a class="btn" href="https://pay.ldxp.cn/item/u04lhu" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24"><path d="M6 2v20"/><path d="M18 2v20"/><path d="M3 6h18"/><path d="M3 18h18"/><path d="M6 6c0 3 3 4 6 4s6 1 6 4"/></svg>购买 CDK</a>
+        </div>
+      </div>
+      <div class="codex-sms-counts-v2" aria-live="polite">
+        <div class="codex-sms-count-v2"><span>全部可用 CDK</span><b id="codexSmsCountAvailableV2">—</b></div>
+        <div class="codex-sms-count-v2"><span>长效 CDK</span><b id="codexSmsCountLongV2">—</b></div>
+        <div class="codex-sms-count-v2"><span>短效 CDK</span><b id="codexSmsCountShortV2">—</b></div>
+      </div>
+      <div class="codex-sms-check-status-v2" id="codexSmsCheckStatusV2">尚未检查 CDK</div>
+    </div>
+  `;
+}
+
+async function checkCodexSmsCdksV2() {
+  const btn = document.getElementById('btnCheckCodexSmsCdksV2');
+  const status = document.getElementById('codexSmsCheckStatusV2');
+  const field = document.querySelector('#configSectionsV2 textarea[data-key="CODEX_SMS_CDKS"]');
+  const cdks = field ? field.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) : [];
+  if (!cdks.length) { if (status) status.textContent = '请先在 CDK 池中输入至少一个 CDK'; return; }
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = `正在检查 ${cdks.length} 个 CDK…`;
+  try {
+    const r = await api('/api/codex-sms/check', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({cdks}) });
+    const counts = r.counts || {};
+    const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = String(value ?? 0); };
+    set('codexSmsCountAvailableV2', counts.available || 0); set('codexSmsCountLongV2', counts.long || 0); set('codexSmsCountShortV2', counts.short || 0);
+    const details = (r.items || []).map(item => `${item.cdkHint || '***'} · ${item.status === 'success' ? (item.type === 'bindable' ? '长效可用' : '短效可用') : (item.error || '不可用')}`);
+    if (status) status.textContent = `检查完成：可用 ${counts.available || 0} / ${counts.total || cdks.length} · 长效 ${counts.long || 0} · 短效 ${counts.short || 0}\n${details.join('\n')}`;
+  } catch (e) { if (status) status.textContent = `检查失败：${e.message}`; }
+  finally { if (btn) btn.disabled = false; }
+}
+
+function bindCodexSmsToolsV2() {
+  const btn = document.getElementById('btnCheckCodexSmsCdksV2');
+  if (btn && !btn.dataset.bound) { btn.dataset.bound = '1'; btn.addEventListener('click', checkCodexSmsCdksV2); }
 }
 
 function codexConfigSectionForKey(key) {
@@ -9887,6 +9952,9 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
   if (name === '邮箱 / OTP' && active === 'CloudMail') {
     extra = renderCloudMailTokenToolsV2();
   }
+  if (name === '接码平台' && active === 'Codex 接码助手') {
+    extra = renderCodexSmsToolsV2();
+  }
   return `
     <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
       ${renderConfigSectionHead(name, '')}
@@ -10105,7 +10173,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       smsConfigSectionForKey,
-      ['通用接码', 'GrizzlySMS', 'H 接码', 'L 接码', '其他接码配置'],
+      ['通用接码', 'Codex 接码助手', 'GrizzlySMS', 'H 接码', 'L 接码', '其他接码配置'],
       { get: () => CONFIG_SMS_ACTIVE_SECTION_V2, set: v => { CONFIG_SMS_ACTIVE_SECTION_V2 = v; } },
       'sms-section-v2'
     );
@@ -10136,6 +10204,7 @@ function renderConfigLayoutV2() {
   bindProxyTestToolsV2();
   bindPageAgentToolsV2();
   bindExtractLinkToolsV2();
+  bindCodexSmsToolsV2();
   syncRegionProfileControlV2();
   syncConfigDirtyIndicatorsV2();
 }

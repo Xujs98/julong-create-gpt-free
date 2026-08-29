@@ -888,9 +888,9 @@ EDITABLE_FIELDS = [
 
     {
         "key": "SMS_PROVIDER", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "接码平台", "help": "选择已经适配的接码平台；GrizzlySMS 使用兼容 API，H/L 使用项目内置本地取号服务",
-        "choices": ["grizzly", "h", "l"],
-        "choice_labels": {"grizzly": "GrizzlySMS", "h": "H 接码", "l": "L 接码"},
+        "label": "接码平台", "help": "选择已经适配的接码平台；Codex 接码助手使用 CDK 管理长期/短效号码",
+        "choices": ["grizzly", "h", "l", "codex"],
+        "choice_labels": {"grizzly": "GrizzlySMS", "h": "H 接码", "l": "L 接码", "codex": "Codex 接码助手"},
     },
     {
         "key": "SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
@@ -949,6 +949,28 @@ EDITABLE_FIELDS = [
     {
         "key": "L_PHONE_PREFIX", "file": "codex.py", "type": "str", "group": "接码平台",
         "label": "L 号码前缀", "help": "L 返回号码不含国家码时填写，例如美国 10 位本地号填 1；留空则不补",
+    },
+    {
+        "key": "CODEX_SMS_API_BASE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Codex API 地址", "help": "Codex 接码助手 API 基址，默认 https://sms.kkdos.store",
+    },
+    {
+        "key": "CODEX_SMS_CDKS", "file": "codex.py", "type": "list_str_multiline", "group": "接码平台",
+        "label": "Codex CDK 池", "help": "每行输入一个 CDK；支持批量检查，CDK 只保存在 .env，不写入源码或日志",
+    },
+    {
+        "key": "CODEX_SMS_NUMBER_TYPE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "号码类型", "help": "自动按可用 CDK 选择，或优先使用短效/长效号码",
+        "choices": ["auto", "short", "long"],
+        "choice_labels": {"auto": "自动选择", "short": "短效号码", "long": "长效号码"},
+    },
+    {
+        "key": "CODEX_SMS_CHECK_BEFORE_USE", "file": "codex.py", "type": "bool", "group": "接码平台",
+        "label": "使用前检查 CDK", "help": "取号前跳过已知不可用 CDK，并优先使用最近检查通过的 CDK",
+    },
+    {
+        "key": "CODEX_SMS_DELETE_USED_CDK", "file": "codex.py", "type": "bool", "group": "接码平台",
+        "label": "使用后自动删除 CDK", "help": "成功收到验证码后，从本地 CDK 池移除本次使用的 CDK",
     },
 ]
 

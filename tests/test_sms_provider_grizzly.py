@@ -31,7 +31,7 @@ class GrizzlySmsProviderTests(unittest.TestCase):
     def test_webui_exposes_provider_choices_and_optional_price_preset(self):
         fields = {item["key"]: item for item in config_editor.EDITABLE_FIELDS}
         provider = fields["SMS_PROVIDER"]
-        self.assertEqual(provider["choices"], ["grizzly", "h", "l"])
+        self.assertEqual(provider["choices"], ["grizzly", "h", "l", "codex"])
         self.assertEqual(provider["choice_labels"]["grizzly"], "GrizzlySMS")
         country = fields["SMS_COUNTRY"]
         self.assertTrue(country["searchable"])

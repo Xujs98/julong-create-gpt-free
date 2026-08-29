@@ -39,6 +39,11 @@ _MIN_CANCEL_DELAY = 125
 # 用模块级 dict 而不是改 acquire_number 返回值，保持向后兼容。
 _ACQUIRED_AT: dict[str, float] = {}
 
+# Codex 接码助手会话由 sessionId 代替传统 activation_id。
+_CODEX_SESSIONS: dict[str, dict] = {}
+_CODEX_KNOWN_TYPES: dict[str, str] = {}
+_CODEX_LOCK = threading.RLock()
+
 
 class SmsProviderError(RuntimeError):
     """接码平台通用错误。"""
@@ -301,6 +306,55 @@ def _h_phone_acquire_mode() -> str:
     return "reusable"
 
 
+def _codex_cdks() -> list[str]:
+    raw = getattr(_cfg, "CODEX_SMS_CDKS", [])
+    if isinstance(raw, str):
+        values = raw.splitlines()
+    else:
+        values = list(raw or [])
+    out, seen = [], set()
+    for value in values:
+        cdk = str(value or "").strip().upper()
+        if cdk and cdk not in seen:
+            out.append(cdk)
+            seen.add(cdk)
+    return out
+
+
+def _codex_type(value: object) -> str:
+    value = str(value or "").strip().lower()
+    if value in {"bindable", "long", "longterm", "long_term"}:
+        return "long"
+    if value in {"onetime", "short", "shortterm", "short_term"}:
+        return "short"
+    return ""
+
+
+def _codex_client(http):
+    from core.codex_sms_client import CodexSmsClient
+
+    return CodexSmsClient(
+        getattr(_cfg, "CODEX_SMS_API_BASE", "https://sms.kkdos.store"),
+        http,
+        getattr(_cfg, "SMS_REQUEST_TIMEOUT", 30),
+    )
+
+
+def _remove_codex_cdk(cdk: str) -> None:
+    """按开关从 .env CDK 池移除已成功使用的 CDK。"""
+    cdk = str(cdk or "").strip().upper()
+    if not cdk:
+        return
+    remaining = [item for item in _codex_cdks() if item != cdk]
+    try:
+        from config.env_loader import write_env_values
+
+        write_env_values({"CODEX_SMS_CDKS": "\n".join(remaining) if remaining else "[]"})
+        _cfg.CODEX_SMS_CDKS = remaining
+    except Exception as exc:
+        logger.warning("[SMS:CODEX] 删除已用 CDK 失败：%s", exc)
+
+
 # ============================================================
 # 取号
 # ============================================================
@@ -322,6 +376,58 @@ def acquire_number(
     own_http = http is None
     http = http or _http()
     try:
+        if _provider() == "codex":
+            from core.codex_sms_client import CodexSmsError, CodexSmsNoNumbers
+
+            requested_type = str(getattr(_cfg, "CODEX_SMS_NUMBER_TYPE", "auto") or "auto").strip().lower()
+            cdks = _codex_cdks()
+            if bool(getattr(_cfg, "CODEX_SMS_CHECK_BEFORE_USE", True)):
+                cdks = [x for x in cdks if _CODEX_KNOWN_TYPES.get(x) != "invalid"]
+            if requested_type in {"short", "long"}:
+                preferred = [x for x in cdks if _codex_type(_CODEX_KNOWN_TYPES.get(x)) == requested_type]
+                cdks = preferred + [x for x in cdks if x not in preferred]
+            if not cdks:
+                raise SmsNoNumbersError("Codex 接码助手未配置 CDK，请在配置-接码平台中添加")
+            last_error = None
+            for cdk in cdks:
+                try:
+                    data = _codex_client(http).request_session(cdk)
+                except CodexSmsNoNumbers as exc:
+                    _CODEX_KNOWN_TYPES[cdk] = "invalid"
+                    last_error = exc
+                    continue
+                except CodexSmsError as exc:
+                    # 429/协议错误属于平台级故障，换 CDK 不会修复，保留原始原因。
+                    raise SmsProviderError(str(exc)) from exc
+                except Exception as exc:
+                    raise SmsProviderError(f"Codex 接码助手请求失败：{exc}") from exc
+                activation_id = str(data.get("sessionId") or "").strip()
+                phone = _normalize_phone_digits(data.get("phone"))
+                if not activation_id or not phone:
+                    last_error = SmsProviderError("Codex 接码助手响应缺少 sessionId/phone")
+                    continue
+                kind = _codex_type(data.get("type") or data.get("cdkType"))
+                if requested_type in {"short", "long"} and kind and kind != requested_type:
+                    # API 已明确返回另一种契约时跳过本次会话，继续寻找符合下拉选择的 CDK。
+                    _CODEX_KNOWN_TYPES[cdk] = kind
+                    last_error = SmsProviderError(f"CDK 类型为 {kind}，当前选择 {requested_type}")
+                    continue
+                with _CODEX_LOCK:
+                    _CODEX_SESSIONS[activation_id] = {
+                        "cdk": cdk,
+                        "type": kind,
+                        "data": data,
+                        "started_at": time.time(),
+                    }
+                if kind:
+                    _CODEX_KNOWN_TYPES[cdk] = kind
+                _ACQUIRED_AT[activation_id] = time.time()
+                logger.info("[SMS:CODEX] 取号成功：type=%s, session=%s, phone=+%s", kind or "unknown", activation_id, phone)
+                return activation_id, phone
+            if last_error:
+                raise SmsNoNumbersError(f"Codex 接码助手暂无可用号码：{last_error}")
+            raise SmsNoNumbersError("Codex 接码助手暂无可用号码")
+
         if _provider() == "l":
             payload = {
                 "service": service or _cfg.SMS_SERVICE,
@@ -481,6 +587,20 @@ def wait_for_sms_code(
                 time.sleep(interval)
                 continue
 
+            if provider == "codex":
+                data = _codex_client(http).get_status(activation_id)
+                state = str(data.get("state") or "").strip().lower()
+                code = str(data.get("code") or "").strip()
+                if state == "succeeded" and code:
+                    logger.info("[SMS:CODEX] 第 %s 轮收到验证码", round_no)
+                    return code
+                if state in {"failed", "expired"}:
+                    raise SmsProviderError(f"Codex 接码助手会话{state}：{data.get('error') or activation_id}")
+                remaining = max(0, int(deadline - time.time()))
+                logger.info("[SMS:CODEX] 第 %s 轮未收到验证码，状态=%s，%ss 后重试（剩余 %ss）", round_no, state or "polling", interval, remaining)
+                time.sleep(interval)
+                continue
+
             text = _request_grizzly(http, {"action": "getStatus", "id": activation_id})
 
             if text.startswith("STATUS_OK:"):
@@ -536,6 +656,14 @@ def complete(activation_id: str, http: CurlSession | None = None) -> None:
         # H 成功 fetch-code 后后台会自动按多次收码策略重取；这里不 release。
         logger.info(f"[SMS:H] 已完成 id={activation_id}")
         _ACQUIRED_AT.pop(activation_id, None)
+        return
+
+    if _provider() == "codex":
+        with _CODEX_LOCK:
+            meta = _CODEX_SESSIONS.pop(str(activation_id), None) or {}
+        _ACQUIRED_AT.pop(str(activation_id), None)
+        if bool(getattr(_cfg, "CODEX_SMS_DELETE_USED_CDK", False)):
+            _remove_codex_cdk(meta.get("cdk"))
         return
     try:
         set_status(activation_id, 6, http=http)
@@ -607,6 +735,13 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
         except Exception as exc:
             logger.warning(f"[SMS:H] 释放号码失败（不影响主流程）：id={activation_id}, {type(exc).__name__}: {exc}")
             _ACQUIRED_AT.pop(activation_id, None)
+        return
+
+    if _provider() == "codex":
+        with _CODEX_LOCK:
+            _CODEX_SESSIONS.pop(str(activation_id), None)
+        _ACQUIRED_AT.pop(str(activation_id), None)
+        logger.info("[SMS:CODEX] 已放弃会话：session=%s", activation_id)
         return
 
     if not background:
