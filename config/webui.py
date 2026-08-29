@@ -21,7 +21,10 @@ COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY: str = "0x4AAAAAAEApfJ6TZ5Bngm17"
 # 官方页面上下文执行 Turnstile，再把查询结果回传到账号列表。
 COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED: bool = True
 COUNTRY_QUALIFICATION_BROWSER_HEADLESS: str = "auto"
-COUNTRY_QUALIFICATION_BROWSER_TIMEOUT: int = 45
+# Turnstile's official browser challenge can take 1–3 minutes on a cold
+# profile (the challenge may wait for a Private Access Token before the API
+# request is sent).  Keep the relay open long enough to receive the response.
+COUNTRY_QUALIFICATION_BROWSER_TIMEOUT: int = 240
 
 
 apply_env_overrides(globals(), {

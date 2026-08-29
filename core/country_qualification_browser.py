@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from typing import Any
 
@@ -29,11 +30,13 @@ _BROWSER = None
 def _timeout_seconds(value: Any = None) -> float:
     try:
         value = float(value if value is not None else getattr(
-            webui_config, "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", 45
+            webui_config, "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", 240
         ))
     except (TypeError, ValueError):
-        value = 45.0
-    return max(10.0, min(180.0, value))
+        value = 240.0
+    # The official challenge occasionally spends more than a minute loading
+    # challenge-platform resources before the POST response is available.
+    return max(10.0, min(300.0, value))
 
 
 def _headless_mode() -> bool:
@@ -44,7 +47,10 @@ def _headless_mode() -> bool:
         return False
     # macOS can launch a visible browser without DISPLAY; Linux servers usually
     # need headless mode unless a display/Wayland session is present.
-    if os.name == "darwin":
+    # ``os.name`` is ``posix`` on macOS, so use ``sys.platform`` here.  A
+    # headed system Chrome is required for Turnstile on macOS; forcing the
+    # bundled headless Chromium causes the challenge to stall.
+    if sys.platform == "darwin":
         return False
     return not bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
@@ -76,10 +82,18 @@ def _get_browser():
     _PLAYWRIGHT = sync_playwright().start()
     headless = _headless_mode()
     args = ["--disable-blink-features=AutomationControlled"]
-    launch_options = {"headless": headless, "args": args}
+    # Playwright normally adds ``--enable-automation``.  Turnstile's browser
+    # challenge treats that marker as a bot signal and leaves the trial request
+    # pending indefinitely.  Keep the real Chrome fingerprint while still
+    # controlling the page through Playwright.
+    launch_options = {
+        "headless": headless,
+        "args": args,
+        "ignore_default_args": ["--enable-automation"],
+    }
     # Use the installed Chrome channel when available; Cloudflare's browser
     # challenge is less likely to classify a bundled test Chromium as a bot.
-    if os.name == "darwin":
+    if sys.platform == "darwin":
         launch_options["channel"] = "chrome"
     try:
         _BROWSER = _PLAYWRIGHT.chromium.launch(**launch_options)
@@ -119,6 +133,38 @@ def _protocol_error(response: Any) -> CountryQualificationError:
     )
 
 
+def _extend_turnstile_guard_timeout(page: Any, timeout_ms: int) -> bool:
+    """Patch the official guard's 30s client timeout for slow challenges.
+
+    The official page occasionally needs over 30 seconds to finish the
+    challenge-platform handshake.  Its fixed timeout then displays
+    ``安全验证暂时不可用`` without ever sending the API request.  The page is
+    still loaded from the official origin; only the local wait budget changes.
+    """
+    route = getattr(page, "route", None)
+    if not callable(route):
+        return False
+
+    def handle(route_obj: Any) -> None:
+        try:
+            response = route_obj.fetch()
+            body = response.body()
+            text = body.decode("utf-8")
+            patched = text.replace("timeoutMs = 30000", f"timeoutMs = {int(timeout_ms)}")
+            if patched != text:
+                route_obj.fulfill(response=response, body=patched.encode("utf-8"))
+            else:
+                route_obj.fulfill(response=response)
+        except Exception:
+            try:
+                route_obj.continue_()
+            except Exception:
+                logger.debug("继续加载 Turnstile guard 失败", exc_info=True)
+
+    route("**/turnstile-guard/turnstile-guard.js**", handle)
+    return True
+
+
 def query_country_qualification_browser(
     access_token: str,
     *,
@@ -140,18 +186,20 @@ def query_country_qualification_browser(
             browser = _get_browser()
             page = browser.new_page()
         try:
+            _extend_turnstile_guard_timeout(page, int(timeout_seconds * 1000))
+            wait_timeout_seconds = min(300.0, timeout_seconds + 15.0)
             page.goto(
                 f"{COUNTRY_QUALIFICATION_SITE_ORIGIN}/",
                 wait_until="domcontentloaded",
-                timeout=int(timeout_seconds * 1000),
+                timeout=int(wait_timeout_seconds * 1000),
             )
             page.locator("#access-token").fill(token)
             with page.expect_response(
                 lambda response: response.request.method == "POST"
                 and response.url.rstrip("/").endswith("/api/trial/check"),
-                timeout=int(timeout_seconds * 1000),
+                timeout=int(wait_timeout_seconds * 1000),
             ) as response_info:
-                page.locator("#trial-check-btn").click(timeout=int(timeout_seconds * 1000))
+                page.locator("#trial-check-btn").click(timeout=int(wait_timeout_seconds * 1000))
             response = response_info.value
             if not 200 <= int(response.status) < 300:
                 raise _protocol_error(response)

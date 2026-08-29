@@ -369,10 +369,10 @@ def _check_country_qualification(
 
             try:
                 configured_browser_timeout = float(
-                    getattr(webui_config, "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", 45) or 45
+                    getattr(webui_config, "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", 240) or 240
                 )
             except (TypeError, ValueError):
-                configured_browser_timeout = 45.0
+                configured_browser_timeout = 240.0
             browser_timeout = max(float(timeout or 0), configured_browser_timeout)
             result = query_country_qualification_browser(token, timeout=browser_timeout)
             result.update({

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from core.country_qualification_browser import query_country_qualification_browser
 from core import chatgpt_plan
+import core.country_qualification_browser as country_browser
 
 
 class _Response:
@@ -106,6 +107,15 @@ def test_plan_country_check_uses_browser_relay_without_local_token():
     ) as relay:
         result = chatgpt_plan._check_country_qualification(env, "TOKEN")
 
-    relay.assert_called_once_with("TOKEN", timeout=45.0)
+    relay.assert_called_once_with("TOKEN", timeout=240.0)
     assert result["country_qualification_status"] == "success"
     assert result["country_qualification_source"] == "tools.oai9.com/browser"
+
+
+def test_browser_auto_mode_uses_headed_chrome_on_macos():
+    with patch.object(country_browser.sys, "platform", "darwin"), patch.dict(
+        country_browser.os.environ,
+        {"DISPLAY": "", "WAYLAND_DISPLAY": ""},
+        clear=False,
+    ), patch.object(country_browser.webui_config, "COUNTRY_QUALIFICATION_BROWSER_HEADLESS", "auto"):
+        assert country_browser._headless_mode() is False
