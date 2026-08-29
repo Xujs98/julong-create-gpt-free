@@ -7657,6 +7657,13 @@ let countryQualificationTurnstileWidget = null;
 let countryQualificationTurnstilePending = null;
 let countryQualificationTurnstileResolve = null;
 let countryQualificationTurnstileReject = null;
+let countryQualificationRequestQueue = Promise.resolve();
+
+function _queueCountryQualificationRequest(task) {
+  const run = countryQualificationRequestQueue.then(task, task);
+  countryQualificationRequestQueue = run.catch(() => {});
+  return run;
+}
 
 function _countryQualificationTurnstileMount() {
   let mount = document.getElementById('countryQualificationTurnstileMount');
@@ -7745,8 +7752,10 @@ async function checkOneCountryQualification(id, btn) {
     target.innerHTML = accountV2Icons().spinner;
   }
   try {
-    const turnstileToken = await _countryQualificationTurnstileToken();
-    const r = await _enqueueCountryQualification(id, turnstileToken);
+    const r = await _queueCountryQualificationRequest(async () => {
+      const turnstileToken = await _countryQualificationTurnstileToken();
+      return _enqueueCountryQualification(id, turnstileToken);
+    });
     if (r.busy) showToast('该账号的各国资格正在查询');
     else showToast(r.message || '各国资格查询已入队');
     planStatusRevision = '';
@@ -7779,8 +7788,10 @@ async function checkSelectedCountryQualification() {
     let started = 0, busy = 0, skipped = 0, failed = 0;
     for (const id of ids) {
       try {
-        const turnstileToken = await _countryQualificationTurnstileToken();
-        const result = await _enqueueCountryQualification(id, turnstileToken);
+        const result = await _queueCountryQualificationRequest(async () => {
+          const turnstileToken = await _countryQualificationTurnstileToken();
+          return _enqueueCountryQualification(id, turnstileToken);
+        });
         if (result.busy) busy += 1;
         else if (result.started || result.ok) started += 1;
         else failed += 1;
