@@ -13,17 +13,14 @@ WEBUI_JOB_LOG_REFRESH_INTERVAL: int = 2
 # 其他非终态任务始终保留。超出数量的任务记录和对应日志由后台清理。
 WEBUI_REGISTRATION_JOB_RETENTION_COUNT: int = 50
 
-# 各国资格接口启用 Cloudflare Turnstile。站点密钥是公开值；部署到自定义域名时
-# 可通过 .env 覆盖为在该域名登记的站点密钥，避免后台请求缺少安全验证令牌而返回 403。
+# 旧版各国资格 Turnstile 配置（兼容项）。新版 qualification-test 使用
+# Checkout/Sentinel 检测，后端与前端资格查询不读取这些字段。
 COUNTRY_QUALIFICATION_TURNSTILE_ENABLED: bool = True
 COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY: str = "0x4AAAAAAEApfJ6TZ5Bngm17"
-# 本地 WebUI 的 hostname 未被 tools.oai9.com 的 site key 授权时，自动在
-# 官方页面上下文执行 Turnstile，再把查询结果回传到账号列表。
+# 旧版官方页面中继配置（兼容项）。
 COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED: bool = True
 COUNTRY_QUALIFICATION_BROWSER_HEADLESS: str = "auto"
-# Turnstile's official browser challenge can take 1–3 minutes on a cold
-# profile (the challenge may wait for a Private Access Token before the API
-# request is sent).  Keep the relay open long enough to receive the response.
+# 仅供旧版客户端读取；新引擎使用套餐查询超时。
 COUNTRY_QUALIFICATION_BROWSER_TIMEOUT: int = 240
 
 

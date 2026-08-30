@@ -231,6 +231,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "country_qualification_error", "country_qualification_requires_turnstile",
         "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
+        "country_qualification_engine", "country_qualification_turnstile_ignored",
         "subscription_plan", "has_active_subscription", "is_delinquent",
         "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
         "billing_period", "billing_currency", "last_purchase_origin_platform", "last_will_renew",
@@ -1355,7 +1356,7 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.post("/api/accounts/check-qualification")
     @app.post("/api/accounts/check-country-qualification")
     def api_account_check_country_qualification():
-        """查询单个账号的各国资格（tools.oai9.com），不执行 OAICS checkout。"""
+        """查询单个账号的各国支付渠道资格，不执行 OAICS checkout。"""
         data = request.get_json(silent=True) or {}
         acc_id = data.get("account_id") or data.get("id")
         email = str(data.get("email") or "").strip()

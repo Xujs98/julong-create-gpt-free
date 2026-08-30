@@ -77,7 +77,7 @@ def _check_plan_with_account_context(
     # 避免“Cookie 来自出口 A、Checkout 从出口 B 发出”而返回 unusual activity。
     effective_proxy = proxy
     preserve_proxy_session = False
-    if check_oaics and effective_proxy is None:
+    if (check_oaics or check_country_qualification) and effective_proxy is None:
         saved_proxy = str(account.get("proxy_used") or "").strip()
         if saved_proxy:
             effective_proxy = saved_proxy

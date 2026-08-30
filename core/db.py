@@ -1681,6 +1681,8 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
             "country_qualification_error",
             "country_qualification_requires_turnstile",
             "country_qualification_source",
+            "country_qualification_engine",
+            "country_qualification_turnstile_ignored",
         )
         if any(key in result for key in country_keys):
             status = str(result.get("country_qualification_status") or "").strip().lower()
@@ -1700,6 +1702,10 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 row["country_qualification_requires_turnstile"] = bool(result.get("country_qualification_requires_turnstile"))
             if "country_qualification_source" in result:
                 row["country_qualification_source"] = result.get("country_qualification_source")
+            if "country_qualification_engine" in result:
+                row["country_qualification_engine"] = result.get("country_qualification_engine")
+            if "country_qualification_turnstile_ignored" in result:
+                row["country_qualification_turnstile_ignored"] = bool(result.get("country_qualification_turnstile_ignored"))
             if status == "success" and "country_qualification_eligible" in result:
                 value = result.get("country_qualification_eligible")
                 row["country_qualification_eligible"] = bool(value) if value is not None else None
@@ -2169,6 +2175,7 @@ def list_account_plan_check_statuses(
         "country_qualification_requires_turnstile",
         "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
+        "country_qualification_engine", "country_qualification_turnstile_ignored",
         "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",

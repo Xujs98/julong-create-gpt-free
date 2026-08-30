@@ -3545,7 +3545,7 @@ try {
           <span class="acc-v2-btn-group-title">套餐/提链</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="优先校验现有 AT；仅失效时重新登录并刷新">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedOaicsV2" disabled title="批量查询选中账号的各国资格（来源 tools.oai9.com）；不执行 OAICS checkout">资格查询</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedOaicsV2" disabled title="批量查询选中账号的各国支付渠道资格（Checkout 只读检测）；不执行 OAICS checkout">资格查询</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="按通用提链配置给选中的 free(可Plus试用) 账号批量提链">提链</button>
         </div>
         <div class="acc-v2-btn-group">
@@ -4052,16 +4052,9 @@ try {
 </div>
 
 {% include "_app_dialog.html" %}
-{% if country_qualification_turnstile_enabled and country_qualification_turnstile_site_key %}
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" defer></script>
-{% endif %}
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
-const COUNTRY_QUALIFICATION_TURNSTILE_ENABLED = {{ country_qualification_turnstile_enabled|default(false)|tojson }};
-const COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY = {{ country_qualification_turnstile_site_key|default('')|tojson }};
-const COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED = {{ country_qualification_browser_relay_enabled|default(true)|tojson }};
-const COUNTRY_QUALIFICATION_OFFICIAL_HOST = 'tools.oai9.com';
 
 // 全站统一商业化下拉组件：原生 select 保留数据、表单与 change 语义，可见菜单使用 body portal 避免被容器裁切。
 const UI_SELECT_STATE_V3 = { select: null, wrap: null, trigger: null, menu: null, searchInput: null, query: '' };
@@ -5828,11 +5821,15 @@ function _hidePlanHoverCard() {
   window.addEventListener('scroll', _hidePlanHoverCard, true);
   window.addEventListener('resize', _hidePlanHoverCard);
 })();
-// 各国资格结果统一归一化，来源为 tools.oai9.com 国家检测协议。
+// 各国资格结果统一归一化，来源为 qualification-test Checkout 支付渠道检测。
 const COUNTRY_QUALIFICATION_LABELS = Object.freeze({
   JP: '日本', PH: '菲律宾', GB: '英国', ID: '印度尼西亚', NL: '荷兰', IN: '印度',
   US: '美国', CA: '加拿大', AU: '澳大利亚', DE: '德国', FR: '法国',
   IE: '爱尔兰', IT: '意大利', ES: '西班牙', SG: '新加坡', KR: '韩国',
+});
+const COUNTRY_QUALIFICATION_CHANNEL_LABELS = Object.freeze({
+  gcash: 'GCash', card: '银行卡', paypal: 'PayPal', ideal: 'iDEAL', momo: 'MoMo',
+  gopay: 'GoPay', upi: 'UPI', blik: 'BLIK', pix: 'PIX', twint: 'TWINT', kakao: 'KakaoPay',
 });
 const OAICS_COUNTRY_LABELS = COUNTRY_QUALIFICATION_LABELS;
 // Legacy markup token retained for third-party template checks: data-oaics-check="${esc(r.id)}"
@@ -5868,6 +5865,7 @@ function _countryQualificationEntry(raw, fallbackCode = '') {
   const item = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const code = String(item.code || item.country_code || item.countryCode || item.iso || item.country || fallbackCode || '').trim().toUpperCase();
   const name = String(item.name || item.country_name || item.countryName || item.label || (code ? COUNTRY_QUALIFICATION_LABELS[code] || '' : '')).trim();
+  const channel = String(item.channel || item.target_channel || item.payment_channel || '').trim().toLowerCase();
   const rawStatus = item.status || item.state || item.check_status || item.country_qualification_status || '';
   const rawEligible = Object.prototype.hasOwnProperty.call(item, 'eligible') ? item.eligible
     : Object.prototype.hasOwnProperty.call(item, 'qualified') ? item.qualified
@@ -5875,7 +5873,8 @@ function _countryQualificationEntry(raw, fallbackCode = '') {
         : Object.prototype.hasOwnProperty.call(item, 'available') ? item.available : (typeof value === 'boolean' ? value : rawStatus);
   return {
     code: code || 'COUNTRY',
-    name: name || (code === 'COUNTRY' ? '各国资格' : code),
+    name: `${name || (code === 'COUNTRY' ? '各国资格' : code)}${channel ? ` · ${COUNTRY_QUALIFICATION_CHANNEL_LABELS[channel] || channel}` : ''}`,
+    channel,
     state: _countryQualificationState(rawEligible, rawStatus),
     error: String(item.error || item.message || item.reason || '').trim(),
   };
@@ -5944,7 +5943,7 @@ function _countryQualificationCell(r) {
     return `<span class="acc-v2-qualification-item is-${esc(state)}" title="${esc(title || `${item.code}${item.name}`)}"><span class="qualification-code">${esc(item.code)}</span><span class="qualification-name">${esc(item.name)}</span><span class="qualification-state" data-qualification-state="${esc(state)}" data-qualification-glyph="${_countryQualificationGlyph(state)}" aria-label="${esc(_countryQualificationStateLabel(state))}">${_countryQualificationIcon(state)}</span></span>`;
   }).join('');
   const empty = list ? '' : '<span class="acc-v2-qualification-empty">未查询</span>';
-  const actionTitle = pending ? '各国资格查询进行中' : '查询该账号的各国资格';
+  const actionTitle = pending ? '各国支付渠道资格查询进行中' : '查询该账号的各国支付渠道资格';
   const actionIcon = pending ? accountV2Icons().spinner : accountV2Icons().search;
   const checkedMeta = r?.country_qualification_checked_at ? `<span class="acc-v2-qualification-meta" title="${esc(r.country_qualification_checked_at)}">更新于 ${esc(r.country_qualification_checked_at)}</span>` : '';
   return `<div class="acc-v2-qualification-cell"><div class="acc-v2-qualification-list">${list || empty}</div><button type="button" class="acc-v2-qualification-action${pending ? ' is-loading' : ''}" data-country-qualification-check="${esc(r.id)}" data-account-country-qualification-check="${esc(r.id)}" title="${esc(actionTitle)}" aria-label="${esc(actionTitle)}"${pending ? ' disabled' : ''}>${actionIcon}</button>${checkedMeta}</div>`;
@@ -7673,10 +7672,6 @@ async function retryAccountTwofa(id, btn) {
   }
 }
 
-let countryQualificationTurnstileWidget = null;
-let countryQualificationTurnstilePending = null;
-let countryQualificationTurnstileResolve = null;
-let countryQualificationTurnstileReject = null;
 let countryQualificationRequestQueue = Promise.resolve();
 
 function _queueCountryQualificationRequest(task) {
@@ -7685,107 +7680,19 @@ function _queueCountryQualificationRequest(task) {
   return run;
 }
 
-function _countryQualificationTurnstileMount() {
-  let mount = document.getElementById('countryQualificationTurnstileMount');
-  if (mount) return mount;
-  mount = document.createElement('div');
-  mount.id = 'countryQualificationTurnstileMount';
-  mount.setAttribute('role', 'status');
-  mount.setAttribute('aria-live', 'polite');
-  mount.style.cssText = 'display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10000;width:340px;min-height:92px;padding:16px;border:1px solid #d9e2ec;border-radius:10px;background:#fff;box-shadow:0 18px 48px rgba(15,23,42,.22);';
-  document.body.appendChild(mount);
-  return mount;
-}
-
-async function _countryQualificationTurnstileToken() {
-  if (!COUNTRY_QUALIFICATION_TURNSTILE_ENABLED) {
-    throw new Error('各国资格查询已关闭安全验证，请在配置中开启');
-  }
-  if (!COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY) {
-    throw new Error('未配置各国资格 Turnstile site key');
-  }
-  if (countryQualificationTurnstilePending) return countryQualificationTurnstilePending;
-  countryQualificationTurnstilePending = (async () => {
-    const deadline = Date.now() + 12000;
-    while (!window.turnstile && Date.now() < deadline) {
-      await new Promise(resolve => window.setTimeout(resolve, 100));
-    }
-    if (!window.turnstile) throw new Error('安全验证组件加载失败，请刷新页面重试');
-    const mount = _countryQualificationTurnstileMount();
-    mount.style.display = 'block';
-    if (countryQualificationTurnstileWidget === null) {
-      countryQualificationTurnstileWidget = window.turnstile.render(mount, {
-        sitekey: COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY,
-        action: 'trial_check',
-        execution: 'execute',
-        appearance: 'interaction-only',
-        callback: token => countryQualificationTurnstileResolve?.(String(token || '')),
-        'error-callback': code => {
-          const error = new Error(code ? `安全验证组件暂时不可用（${code}）` : '安全验证组件暂时不可用');
-          error.turnstileCode = String(code || '');
-          countryQualificationTurnstileReject?.(error);
-        },
-        'expired-callback': () => countryQualificationTurnstileReject?.(new Error('安全验证已过期，请重试')),
-        'timeout-callback': () => countryQualificationTurnstileReject?.(new Error('安全验证超时，请重试')),
-      });
-    }
-    const token = await new Promise((resolve, reject) => {
-      countryQualificationTurnstileResolve = resolve;
-      countryQualificationTurnstileReject = reject;
-      const timeoutId = window.setTimeout(() => reject(new Error('安全验证超时，请重试')), 30000);
-      const finish = (fn) => (value) => { window.clearTimeout(timeoutId); fn(value); };
-      countryQualificationTurnstileResolve = finish(resolve);
-      countryQualificationTurnstileReject = finish(reject);
-      window.turnstile.execute(countryQualificationTurnstileWidget);
-    });
-    const normalized = String(token || '').trim();
-    if (!normalized) throw new Error('未取得有效安全验证令牌，请重试');
-    return normalized;
-  })().finally(() => {
-    countryQualificationTurnstilePending = null;
-    countryQualificationTurnstileResolve = null;
-    countryQualificationTurnstileReject = null;
-    const mount = document.getElementById('countryQualificationTurnstileMount');
-    if (mount) mount.style.display = 'none';
-    try { if (window.turnstile && countryQualificationTurnstileWidget !== null) window.turnstile.reset(countryQualificationTurnstileWidget); } catch (_) {}
-  });
-  return countryQualificationTurnstilePending;
-}
-
 async function _countryQualificationTokenOrRelay() {
-  const currentHost = String(window.location.hostname || '').toLowerCase();
-  if (
-    COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED
-    && currentHost !== COUNTRY_QUALIFICATION_OFFICIAL_HOST
-  ) {
-    showToast('本地页面已切换官方浏览器验证');
-    return '';
-  }
-  try {
-    return await _countryQualificationTurnstileToken();
-  } catch (err) {
-    // Production site keys are hostname-bound.  A local WebUI therefore
-    // cannot mint a usable token; the backend will execute the official page
-    // in its own tools.oai9.com browser context instead.
-    if (COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED) {
-      const code = String(err?.turnstileCode || '');
-      if (code === '110200' || /安全验证组件|Turnstile|验证超时|加载失败/i.test(String(err?.message || ''))) {
-        showToast('当前页面无法使用官方安全验证，已切换官方浏览器验证');
-        return '';
-      }
-    }
-    throw err;
-  }
+  // qualification-test uses the account's saved Checkout/Sentinel session;
+  // the browser no longer mints or forwards a Turnstile token.
+  return '';
 }
 
 async function _enqueueCountryQualification(id, turnstileToken) {
   return api('/api/accounts/check-qualification', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    // Turnstile tokens are bound to the browser's egress.  Keep the relay on
-    // the same direct route instead of sending the token through an account
-    // proxy, otherwise the upstream verifier returns HTTP 403.
-    body: JSON.stringify({account_id: Number(id), turnstile_token: turnstileToken, proxy: ''}),
+    // The backend reuses the account's saved proxy/session context.  The
+    // second argument remains for compatibility with older extensions.
+    body: JSON.stringify({account_id: Number(id)}),
   });
 }
 
@@ -7798,7 +7705,7 @@ async function checkOneCountryQualification(id, btn) {
     target.disabled = true;
     target.classList.add('is-loading');
     target.setAttribute('aria-busy', 'true');
-    target.title = '各国资格查询进行中';
+    target.title = '各国支付渠道资格查询进行中';
     target.innerHTML = accountV2Icons().spinner;
   }
   try {
@@ -7818,7 +7725,7 @@ async function checkOneCountryQualification(id, btn) {
       target.classList.remove('is-loading');
       target.removeAttribute('aria-busy');
       target.innerHTML = oldHtml || accountV2Icons().search;
-      target.title = '查询该账号的各国资格';
+      target.title = '查询该账号的各国支付渠道资格';
     }
   }
 }
@@ -7832,9 +7739,8 @@ async function checkSelectedCountryQualification() {
   btn.disabled = true;
   btn.textContent = '查询中…';
   try {
-    // Turnstile tokens are single-use.  Obtain one per account instead of
-    // reusing a token across the bulk queue (which would make every item after
-    // the first return HTTP 403 from tools.oai9.com).
+    // Each account gets an independent Checkout/Sentinel request in the
+    // backend queue; no browser Turnstile token is shared or required.
     let started = 0, busy = 0, skipped = 0, failed = 0;
     for (const id of ids) {
       try {

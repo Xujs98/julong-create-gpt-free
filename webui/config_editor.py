@@ -110,15 +110,15 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "COUNTRY_QUALIFICATION_TURNSTILE_ENABLED", "file": "webui.py", "type": "bool", "group": "WebUI",
-        "label": "各国资格安全验证", "help": "开启后各国资格查询按钮会先执行 Turnstile，向 tools.oai9.com 发送有效验证令牌，避免接口返回 HTTP 403",
+        "label": "各国资格安全验证（兼容项）", "help": "qualification-test 已改用 Checkout/Sentinel 检测；此项仅保留给旧版客户端兼容，不影响新查询",
     },
     {
         "key": "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "file": "webui.py", "type": "str", "group": "WebUI",
-        "label": "各国资格验证站点密钥", "help": "公开的 Turnstile site key；部署到自定义域名时填写在 Cloudflare 中登记的对应密钥",
+        "label": "各国资格验证站点密钥（兼容项）", "help": "旧版 tools.oai9.com Turnstile 配置，新版 qualification-test 查询不使用",
     },
     {
         "key": "COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED", "file": "webui.py", "type": "bool", "group": "WebUI",
-        "label": "各国资格官方浏览器中继", "help": "本地 WebUI 域名未被生产 site key 授权时，自动在 tools.oai9.com 官方页面上下文完成 Turnstile 与查询",
+        "label": "各国资格官方浏览器中继（兼容项）", "help": "旧版 tools.oai9.com 查询配置，新版 qualification-test 查询不使用",
     },
     {
         "key": "COUNTRY_QUALIFICATION_BROWSER_HEADLESS", "file": "webui.py", "type": "str", "group": "WebUI",
@@ -128,7 +128,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", "file": "webui.py", "type": "int", "group": "WebUI",
-        "label": "官方验证超时(秒)", "help": "官方页面加载、Turnstile 验证和资格请求的总超时，建议 30-90 秒",
+        "label": "官方验证超时(秒)（兼容项）", "help": "旧版官方页面验证超时；新版 qualification-test 使用套餐查询超时",
     },
     # ---- 功能开关 ----
     {
@@ -153,7 +153,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION", "file": "register.py", "type": "bool", "group": "注册方式",
-        "label": "注册完成查询各国资格", "help": "开启后注册成功并保存账号后自动调用 tools.oai9.com 查询各国资格；与 OAICS 检测相互独立",
+        "label": "注册完成查询各国资格", "help": "开启后注册成功并保存账号后自动调用 qualification-test Checkout 检测各国支付渠道；与 OAICS 检测相互独立",
     },
     # ---- 账号查活 ----
     {

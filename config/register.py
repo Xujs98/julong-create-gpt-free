@@ -24,7 +24,7 @@ REGISTRATION_TRANSIENT_RETRIES: int = 2
 # 默认开启；关闭后仍刷新套餐，但跳过 OAICS 请求。各国资格查询独立执行。
 OAICS_CHECK_AFTER_REGISTRATION = True
 
-# 注册完成后是否自动查询各国资格（tools.oai9.com）。
+# 注册完成后是否自动查询各国支付渠道资格（qualification-test Checkout）。
 # 与 OAICS checkout 检测完全独立；关闭后仍可在账号页手动查询各国资格。
 COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION = False
 

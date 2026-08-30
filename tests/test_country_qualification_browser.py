@@ -91,25 +91,23 @@ def test_browser_relay_uses_official_page_and_parses_results():
     assert page.closed is True
 
 
-def test_plan_country_check_uses_browser_relay_without_local_token():
-    env = SimpleNamespace(post=None)
-    with patch.object(
-        chatgpt_plan.webui_config,
-        "COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED",
-        True,
-    ), patch(
-        "core.country_qualification_browser.query_country_qualification_browser",
+def test_plan_country_check_uses_checkout_qualification_engine():
+    env = SimpleNamespace()
+    with patch(
+        "core.qualification_test.query_country_qualification",
         return_value={
             "country_qualification_results": [],
             "country_qualification_eligible": False,
-            "country_qualification_query_count": 1,
+            "country_qualification_query_count": 10,
+            "country_qualification_status": "success",
+            "country_qualification_source": "qualification-test",
         },
-    ) as relay:
+    ) as checker:
         result = chatgpt_plan._check_country_qualification(env, "TOKEN")
 
-    relay.assert_called_once_with("TOKEN", timeout=240.0)
+    checker.assert_called_once_with(env, "TOKEN", timeout=15.0)
     assert result["country_qualification_status"] == "success"
-    assert result["country_qualification_source"] == "tools.oai9.com/browser"
+    assert result["country_qualification_source"] == "qualification-test"
 
 
 def test_browser_auto_mode_uses_headed_chrome_on_macos():
