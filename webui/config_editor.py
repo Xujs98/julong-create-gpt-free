@@ -108,28 +108,6 @@ EDITABLE_FIELDS = [
         "key": "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "file": "webui.py", "type": "int", "group": "WebUI",
         "label": "注册任务保留条数", "help": "保留最近 N 条已结束注册任务；排队中、运行中及其他非终态任务始终保留，超出部分及对应日志由后台清理",
     },
-    {
-        "key": "COUNTRY_QUALIFICATION_TURNSTILE_ENABLED", "file": "webui.py", "type": "bool", "group": "WebUI",
-        "label": "各国资格安全验证（兼容项）", "help": "qualification-test 已改用 Checkout/Sentinel 检测；此项仅保留给旧版客户端兼容，不影响新查询",
-    },
-    {
-        "key": "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "file": "webui.py", "type": "str", "group": "WebUI",
-        "label": "各国资格验证站点密钥（兼容项）", "help": "旧版 tools.oai9.com Turnstile 配置，新版 qualification-test 查询不使用",
-    },
-    {
-        "key": "COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED", "file": "webui.py", "type": "bool", "group": "WebUI",
-        "label": "各国资格官方浏览器中继（兼容项）", "help": "旧版 tools.oai9.com 查询配置，新版 qualification-test 查询不使用",
-    },
-    {
-        "key": "COUNTRY_QUALIFICATION_BROWSER_HEADLESS", "file": "webui.py", "type": "str", "group": "WebUI",
-        "label": "官方验证浏览器模式", "help": "auto=macOS 优先可见窗口、服务器自动无头；也可填 headed 或 headless",
-        "choices": ["auto", "headed", "headless"],
-        "choice_labels": {"auto": "自动", "headed": "可见窗口", "headless": "无头"},
-    },
-    {
-        "key": "COUNTRY_QUALIFICATION_BROWSER_TIMEOUT", "file": "webui.py", "type": "int", "group": "WebUI",
-        "label": "官方验证超时(秒)（兼容项）", "help": "旧版官方页面验证超时；新版 qualification-test 使用套餐查询超时",
-    },
     # ---- 功能开关 ----
     {
         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",

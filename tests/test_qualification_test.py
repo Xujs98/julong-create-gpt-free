@@ -133,7 +133,7 @@ def test_query_country_qualification_keeps_partial_results():
     assert result["country_qualification_results"][1]["status"] == "failed"
 
 
-def test_plan_country_check_uses_checkout_engine_and_ignores_legacy_turnstile():
+def test_plan_country_check_uses_checkout_engine():
     expected = {
         "country_qualification_results": [],
         "country_qualification_eligible": False,
@@ -143,11 +143,7 @@ def test_plan_country_check_uses_checkout_engine_and_ignores_legacy_turnstile():
     }
     env = SimpleNamespace()
     with patch("core.qualification_test.query_country_qualification", return_value=expected) as query:
-        result = chatgpt_plan._check_country_qualification(
-            env, "TOKEN", timeout=8, turnstile_token="legacy-token"
-        )
+        result = chatgpt_plan._check_country_qualification(env, "TOKEN", timeout=8)
 
     query.assert_called_once_with(env, "TOKEN", timeout=15.0)
     assert result["country_qualification_source"] == "qualification-test"
-    assert result["country_qualification_requires_turnstile"] is False
-    assert result["country_qualification_turnstile_ignored"] is True

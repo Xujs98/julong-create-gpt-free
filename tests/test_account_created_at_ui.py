@@ -11,6 +11,8 @@ def test_account_created_at_uses_two_line_date_and_time_layout():
     assert 'class="acc-v2-created-date"' in source
     assert 'class="acc-v2-created-meta"' in source
     assert 'class="acc-v2-created-time"' in source
+    assert 'class="acc-v2-created-traffic-row"' in source
+    assert '${trafficHtml}</div></div>`;' in source
     assert "${_accountCreatedAtCell(r.created_at, r.registration_traffic_bytes)}" in source
 
 

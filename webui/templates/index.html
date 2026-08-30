@@ -992,6 +992,7 @@
     }
     .acc-v2-created-date { color: #606266; font-size: 14px; }
     .acc-v2-created-meta { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+    .acc-v2-created-traffic-row { min-height: 16px; line-height: 16px; }
     .acc-v2-created-day {
       display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
       border-radius: 9px; background: #ecf5ff; color: #409eff;
@@ -1199,7 +1200,7 @@
     .accounts-table-v2 .acc-v2-plan-line {
       display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
     }
-    /* 各国资格列：国家结果与单账号查询动作保持紧凑、可扫描的商业化状态卡。 */
+    /* 各国资格列：仅展示有资格国家，国家代码使用独立色板，完整信息悬停查看。 */
     .accounts-table-v2 .acc-v2-qualification-cell {
       min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
     }
@@ -1207,15 +1208,21 @@
       min-width: 0; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px;
     }
     .accounts-table-v2 .acc-v2-qualification-item {
-      display: inline-flex; align-items: center; gap: 4px; min-height: 27px;
+      position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: 27px;
       padding: 0 7px; border: 1px solid #e4e7ed; border-radius: 7px;
-      background: #fafafa; color: #606266; font-size: 12px; line-height: 1;
-      white-space: nowrap; transition: border-color .16s ease, background .16s ease, color .16s ease;
+      background: var(--qualification-bg, #fafafa); color: var(--qualification-fg, #606266);
+      border-color: var(--qualification-border, #e4e7ed); font-size: 12px; line-height: 1;
+      white-space: nowrap; cursor: help; transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease;
+    }
+    .accounts-table-v2 .acc-v2-qualification-item:hover,
+    .accounts-table-v2 .acc-v2-qualification-item:focus-visible {
+      transform: translateY(-1px); box-shadow: 0 4px 12px rgba(30, 64, 175, .14); outline: none;
     }
     .accounts-table-v2 .acc-v2-qualification-item .qualification-code {
-      color: #377DFF; font-size: 10px; font-weight: 800; letter-spacing: .04em;
+      color: inherit; font-size: 10px; font-weight: 800; letter-spacing: .04em;
     }
-    .accounts-table-v2 .acc-v2-qualification-item .qualification-name { font-weight: 600; }
+    .accounts-table-v2 .acc-v2-qualification-item .qualification-name,
+    .accounts-table-v2 .acc-v2-qualification-item .qualification-state { display: none; }
     .accounts-table-v2 .acc-v2-qualification-item .qualification-state {
       width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center;
       border-radius: 50%; font-size: 11px; font-weight: 800;
@@ -1224,29 +1231,7 @@
       width: 13px; height: 13px; fill: none; stroke: currentColor;
       stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
     }
-    .accounts-table-v2 .acc-v2-qualification-item.is-eligible {
-      color: #23856c; background: #ecf9f5; border-color: #9ed8c9;
-    }
-    .accounts-table-v2 .acc-v2-qualification-item.is-eligible .qualification-code { color: #23856c; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-eligible .qualification-state { color: #2bb8a6; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-ineligible {
-      color: #7a7f8c; background: #fafafa; border-color: #e1e4ea;
-    }
-    .accounts-table-v2 .acc-v2-qualification-item.is-ineligible .qualification-code { color: #7a7f8c; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-ineligible .qualification-state { color: #a7adb8; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-pending {
-      color: #a06b18; background: #fff8e8; border-color: #f0c36d;
-    }
-    .accounts-table-v2 .acc-v2-qualification-item.is-pending .qualification-code { color: #b26a00; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-pending .qualification-state { color: #e6a23c; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-failed {
-      color: #b42318; background: #fff0f0; border-color: #f4aaaa;
-    }
-    .accounts-table-v2 .acc-v2-qualification-item.is-failed .qualification-code { color: #e64545; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-failed .qualification-state { color: #e64545; }
-    .accounts-table-v2 .acc-v2-qualification-item.is-unknown {
-      color: #909399; background: #f5f6f8; border-color: #dfe2e8;
-    }
+    .accounts-table-v2 .acc-v2-qualification-item.is-eligible { color: var(--qualification-fg); }
     .accounts-table-v2 .acc-v2-qualification-action {
       width: 30px; height: 30px; min-width: 30px; padding: 0;
       display: inline-flex; align-items: center; justify-content: center; gap: 0;
@@ -1269,6 +1254,8 @@
     }
     .accounts-table-v2 .acc-v2-qualification-action.is-loading svg { animation: acc-v2-qualification-spin .9s linear infinite; }
     .accounts-table-v2 .acc-v2-qualification-empty { color: #a7adb8; font-size: 12px; white-space: nowrap; }
+    .accounts-table-v2 .acc-v2-qualification-empty.is-pending { color: #b26a00; }
+    .accounts-table-v2 .acc-v2-qualification-empty.is-failed { color: #e64545; }
     .accounts-table-v2 .acc-v2-qualification-meta {
       flex-basis: 100%; color: #909399; font-size: 11px; line-height: 1.35;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1277,6 +1264,19 @@
     @media (prefers-reduced-motion: reduce) {
       .accounts-table-v2 .acc-v2-qualification-action.is-loading svg { animation: none; }
     }
+    .qualification-hover-card {
+      position: fixed; z-index: 12000; max-width: min(360px, calc(100vw - 24px));
+      padding: 10px 13px; border: 1px solid #d9e2f2; border-radius: 10px;
+      background: linear-gradient(135deg, #ffffff 0%, #f7faff 100%); color: #253858;
+      box-shadow: 0 12px 30px rgba(25, 55, 109, .18); pointer-events: none;
+      opacity: 0; transform: translateY(4px) scale(.98); transform-origin: top center;
+      transition: opacity .14s ease, transform .14s ease;
+    }
+    .qualification-hover-card.is-visible { opacity: 1; transform: translateY(0) scale(1); }
+    .qualification-hover-card[data-placement="top"] { transform-origin: bottom center; }
+    .qualification-hover-card .qualification-hover-title { font-size: 13px; font-weight: 760; white-space: nowrap; }
+    .qualification-hover-card .qualification-hover-sub { margin-top: 3px; color: #8492a6; font-size: 11px; white-space: nowrap; }
+    @media (prefers-reduced-motion: reduce) { .qualification-hover-card { transition: none; } }
     .accounts-table-v2 .acc-v2-registration-pill {
       display: inline-flex; align-items: center; justify-content: center;
       min-width: 112px; height: 26px; padding: 0 9px;
@@ -5833,6 +5833,24 @@ const COUNTRY_QUALIFICATION_CHANNEL_LABELS = Object.freeze({
   gcash: 'GCash', card: '银行卡', paypal: 'PayPal', ideal: 'iDEAL', momo: 'MoMo',
   gopay: 'GoPay', upi: 'UPI', blik: 'BLIK', pix: 'PIX', twint: 'TWINT', kakao: 'KakaoPay',
 });
+const COUNTRY_QUALIFICATION_TONES = Object.freeze({
+  PH: ['#c2413b', '#fff2f0', '#ffb3ad'], GB: ['#2563a9', '#eef6ff', '#a9c9ef'],
+  NL: ['#b45309', '#fff7e6', '#f4c98a'], VN: ['#087f8c', '#e8fbfd', '#9bdee4'],
+  ID: ['#5b4ab1', '#f3efff', '#c5b8f5'], IN: ['#7c3aed', '#f6efff', '#d7baf7'],
+  PL: ['#a16207', '#fff9e8', '#f2d18a'], BR: ['#2f855a', '#edf9f1', '#a8d8b8'],
+  JP: ['#1d70b8', '#eef7ff', '#afd0ef'], US: ['#3157a6', '#eef3ff', '#b7c8f0'],
+  CA: ['#0f7490', '#eafaff', '#a5dbe8'], AU: ['#25734d', '#eefaf3', '#add9be'],
+  DE: ['#596273', '#f2f4f7', '#c7cdd6'], FR: ['#6b46c1', '#f4f0ff', '#c8b9f0'],
+  IE: ['#23856c', '#ecf9f5', '#9ed8c9'], IT: ['#2877a8', '#eef8ff', '#aed3e8'],
+  ES: ['#b45309', '#fff7e6', '#f4c98a'], SG: ['#0f766e', '#e9fbf8', '#a6ddd4'],
+  KR: ['#b23a72', '#fff0f6', '#efb4cd'],
+});
+function _countryQualificationTone(code) {
+  return COUNTRY_QUALIFICATION_TONES[String(code || '').trim().toUpperCase()] || ['#52606d', '#f4f6f8', '#c8d0d8'];
+}
+function _countryQualificationTooltip(item) {
+  return `${item.code} ${item.name}`.trim();
+}
 const OAICS_COUNTRY_LABELS = COUNTRY_QUALIFICATION_LABELS;
 // Legacy markup token retained for third-party template checks: data-oaics-check="${esc(r.id)}"
 function _countryQualificationParseValue(value) {
@@ -5883,13 +5901,9 @@ function _countryQualificationEntry(raw, fallbackCode = '') {
 }
 function _countryQualificationEntries(r) {
   const status = String(r?.country_qualification_status || '').trim().toLowerCase();
-  // 旧 oaics_country_results 仅作为历史数据回显；新查询只写入 country_qualification_*。
-  const legacyCountryRaw = !r?.country_qualification_status
-    && String(r?.oaics_session_kind || '').toLowerCase() === 'website_protocol'
-    && String(r?.oaics_processor_entity || '').toLowerCase() === 'tools.oai9.com'
-    ? r?.oaics_country_results : null;
+  // 新查询只写入 country_qualification_*；历史 OAICS 字段不参与各国资格展示。
   const countryRaw = r?.country_qualification_results ?? r?.country_qualifications ?? r?.qualification_results
-    ?? r?.qualifications ?? legacyCountryRaw;
+    ?? r?.qualifications;
   const parsed = _countryQualificationParseValue(countryRaw);
   const entries = [];
   const add = (value, fallbackCode = '') => {
@@ -5938,18 +5952,102 @@ function _countryQualificationCell(r) {
   const entries = _countryQualificationEntries(r);
   const status = String(r?.country_qualification_status || '').trim().toLowerCase();
   const pending = ['queued', 'running', 'pending'].includes(status);
-  if (pending && !entries.length) entries.push({code: 'COUNTRY', name: '各国资格', state: 'pending'});
-  const list = entries.map(item => {
-    const state = pending && item.state === 'unknown' ? 'pending' : item.state;
-    const title = [item.error, r?.country_qualification_checked_at ? `检测：${r.country_qualification_checked_at}` : ''].filter(Boolean).join('；');
-    return `<span class="acc-v2-qualification-item is-${esc(state)}" title="${esc(title || `${item.code}${item.name}`)}"><span class="qualification-code">${esc(item.code)}</span><span class="qualification-name">${esc(item.name)}</span><span class="qualification-state" data-qualification-state="${esc(state)}" data-qualification-glyph="${_countryQualificationGlyph(state)}" aria-label="${esc(_countryQualificationStateLabel(state))}">${_countryQualificationIcon(state)}</span></span>`;
+  const eligible = entries.filter(item => item.state === 'eligible');
+  const list = eligible.map(item => {
+    const tooltip = _countryQualificationTooltip(item);
+    const [fg, bg, border] = _countryQualificationTone(item.code);
+    return `<span class="acc-v2-qualification-item is-eligible" tabindex="0" data-qualification-hover="${esc(tooltip)}" aria-label="${esc(tooltip)}" style="--qualification-fg:${fg};--qualification-bg:${bg};--qualification-border:${border}"><span class="qualification-code">${esc(item.code)}</span><span class="qualification-name">${esc(item.name)}</span></span>`;
   }).join('');
-  const empty = list ? '' : '<span class="acc-v2-qualification-empty">未查询</span>';
+  let empty = '';
+  if (!list) {
+    if (pending) empty = '<span class="acc-v2-qualification-empty is-pending">查询中</span>';
+    else if (status === 'failed') empty = `<span class="acc-v2-qualification-empty is-failed" title="${esc(r?.country_qualification_error || '各国资格查询失败')}">查询失败</span>`;
+    else if (status === 'success') empty = '<span class="acc-v2-qualification-empty">暂无资格</span>';
+    else empty = '<span class="acc-v2-qualification-empty">未查询</span>';
+  }
   const actionTitle = pending ? '各国支付渠道资格查询进行中' : '查询该账号的各国支付渠道资格';
   const actionIcon = pending ? accountV2Icons().spinner : accountV2Icons().search;
   const checkedMeta = r?.country_qualification_checked_at ? `<span class="acc-v2-qualification-meta" title="${esc(r.country_qualification_checked_at)}">更新于 ${esc(r.country_qualification_checked_at)}</span>` : '';
   return `<div class="acc-v2-qualification-cell"><div class="acc-v2-qualification-list">${list || empty}</div><button type="button" class="acc-v2-qualification-action${pending ? ' is-loading' : ''}" data-country-qualification-check="${esc(r.id)}" data-account-country-qualification-check="${esc(r.id)}" title="${esc(actionTitle)}" aria-label="${esc(actionTitle)}"${pending ? ' disabled' : ''}>${actionIcon}</button>${checkedMeta}</div>`;
 }
+let QUALIFICATION_HOVER_TARGET = null;
+let QUALIFICATION_HOVER_RAF = 0;
+function _ensureQualificationHoverCard() {
+  let card = document.getElementById('qualificationHoverCard');
+  if (card) return card;
+  card = document.createElement('div');
+  card.id = 'qualificationHoverCard';
+  card.className = 'qualification-hover-card';
+  card.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(card);
+  return card;
+}
+function _positionQualificationHoverCard(trigger) {
+  const card = _ensureQualificationHoverCard();
+  const rect = trigger.getBoundingClientRect();
+  const margin = 12, gap = 9;
+  const width = card.offsetWidth, height = card.offsetHeight;
+  let left = rect.left + (rect.width / 2) - (width / 2);
+  left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+  let top = rect.bottom + gap;
+  let placement = 'bottom';
+  if (top + height > window.innerHeight - margin && rect.top - height - gap >= margin) {
+    top = rect.top - height - gap;
+    placement = 'top';
+  } else {
+    top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+  }
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+  card.dataset.placement = placement;
+}
+function _showQualificationHoverCard(trigger) {
+  const label = String(trigger?.dataset?.qualificationHover || '').trim();
+  if (!label) return;
+  const card = _ensureQualificationHoverCard();
+  QUALIFICATION_HOVER_TARGET = trigger;
+  if (QUALIFICATION_HOVER_RAF) cancelAnimationFrame(QUALIFICATION_HOVER_RAF);
+  card.classList.remove('is-visible');
+  card.innerHTML = `<div class="qualification-hover-title">${esc(label)}</div><div class="qualification-hover-sub">支付渠道资格 · Checkout 检测</div>`;
+  card.setAttribute('aria-hidden', 'false');
+  _positionQualificationHoverCard(trigger);
+  QUALIFICATION_HOVER_RAF = requestAnimationFrame(() => {
+    if (QUALIFICATION_HOVER_TARGET === trigger && trigger.isConnected) card.classList.add('is-visible');
+  });
+}
+function _hideQualificationHoverCard() {
+  QUALIFICATION_HOVER_TARGET = null;
+  if (QUALIFICATION_HOVER_RAF) cancelAnimationFrame(QUALIFICATION_HOVER_RAF);
+  QUALIFICATION_HOVER_RAF = 0;
+  const card = document.getElementById('qualificationHoverCard');
+  if (!card) return;
+  card.classList.remove('is-visible');
+  card.setAttribute('aria-hidden', 'true');
+}
+(function bindQualificationHoverCard() {
+  _ensureQualificationHoverCard();
+  document.addEventListener('pointerover', e => {
+    const trigger = e.target.closest?.('[data-qualification-hover]');
+    if (!trigger || trigger.contains(e.relatedTarget)) return;
+    _showQualificationHoverCard(trigger);
+  });
+  document.addEventListener('pointerout', e => {
+    const trigger = e.target.closest?.('[data-qualification-hover]');
+    if (!trigger || trigger.contains(e.relatedTarget)) return;
+    _hideQualificationHoverCard();
+  });
+  document.addEventListener('focusin', e => {
+    const trigger = e.target.closest?.('[data-qualification-hover]');
+    if (trigger) _showQualificationHoverCard(trigger);
+  });
+  document.addEventListener('focusout', e => {
+    const trigger = e.target.closest?.('[data-qualification-hover]');
+    if (trigger && !trigger.contains(e.relatedTarget)) _hideQualificationHoverCard();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') _hideQualificationHoverCard(); });
+  window.addEventListener('scroll', _hideQualificationHoverCard, true);
+  window.addEventListener('resize', _hideQualificationHoverCard);
+})();
 // Legacy symbol kept for extensions that imported the old renderer; the table
 // itself calls _countryQualificationCell and uses country-specific data attrs.
 function _oaicsQualificationCell(r) { return _countryQualificationCell(r); }
@@ -6263,7 +6361,7 @@ function _accountCreatedAtCell(value, trafficBytes) {
   const trafficHtml = trafficText
     ? `<span class="acc-v2-created-traffic" title="注册阶段累计传输量">流量 ${esc(trafficText)}</span>`
     : '<span class="acc-v2-created-traffic is-muted">流量未记录</span>';
-  return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span>${trafficHtml}</div></div>`;
+  return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span></div><div class="acc-v2-created-traffic-row">${trafficHtml}</div></div>`;
 }
 function renderAccounts() {
   const total = ACCOUNTS_TOTAL;
@@ -7701,18 +7799,11 @@ function _queueCountryQualificationRequest(task) {
   return run;
 }
 
-async function _countryQualificationTokenOrRelay() {
-  // qualification-test uses the account's saved Checkout/Sentinel session;
-  // the browser no longer mints or forwards a Turnstile token.
-  return '';
-}
-
-async function _enqueueCountryQualification(id, turnstileToken) {
+async function _enqueueCountryQualification(id) {
   return api('/api/accounts/check-qualification', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    // The backend reuses the account's saved proxy/session context.  The
-    // second argument remains for compatibility with older extensions.
+    // The backend reuses the account's saved proxy/session context.
     body: JSON.stringify({account_id: Number(id)}),
   });
 }
@@ -7731,8 +7822,7 @@ async function checkOneCountryQualification(id, btn) {
   }
   try {
     const r = await _queueCountryQualificationRequest(async () => {
-      const turnstileToken = await _countryQualificationTokenOrRelay();
-      return _enqueueCountryQualification(id, turnstileToken);
+      return _enqueueCountryQualification(id);
     });
     if (r.busy) showToast('该账号的各国资格正在查询');
     else showToast(r.message || '各国资格查询已入队');
@@ -7760,14 +7850,12 @@ async function checkSelectedCountryQualification() {
   btn.disabled = true;
   btn.textContent = '查询中…';
   try {
-    // Each account gets an independent Checkout/Sentinel request in the
-    // backend queue; no browser Turnstile token is shared or required.
+    // Each account gets an independent Checkout/Sentinel request in the backend queue.
     let started = 0, busy = 0, skipped = 0, failed = 0;
     for (const id of ids) {
       try {
         const result = await _queueCountryQualificationRequest(async () => {
-          const turnstileToken = await _countryQualificationTokenOrRelay();
-          return _enqueueCountryQualification(id, turnstileToken);
+          return _enqueueCountryQualification(id);
         });
         if (result.busy) busy += 1;
         else if (result.started || result.ok) started += 1;

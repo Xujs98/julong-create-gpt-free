@@ -6,9 +6,8 @@
 创建一个只读 Checkout，读取 OpenAI Checkout 或 Stripe 初始化响应中的支付
 渠道，不调用 confirm/start，也不发起实际支付。
 
-本项目复用现有 BrowserSession、Sentinel runner、账号 Cookie 与代理，不再依赖
-tools.oai9.com 的 Turnstile 页面。外部调用继续返回
-``country_qualification_*`` 字段，因而账号列表、队列和历史数据保持兼容。
+本项目复用现有 BrowserSession、Sentinel runner、账号 Cookie 与代理。外部调用
+继续返回 ``country_qualification_*`` 字段，因而账号列表、队列和历史数据保持兼容。
 """
 from __future__ import annotations
 
@@ -457,6 +456,7 @@ def query_country_qualification(
                 "currency": str(preset.get("currency") or "").upper(),
                 "status": "failed",
                 "eligible": None,
+                "http_status": getattr(exc, "status_code", None),
                 "message": f"{type(exc).__name__}: {str(exc)[:180]}",
                 "error": f"{type(exc).__name__}: {str(exc)[:180]}",
                 "available_channels": [],

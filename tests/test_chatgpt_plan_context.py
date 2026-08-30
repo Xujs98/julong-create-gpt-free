@@ -128,39 +128,6 @@ def test_free_plan_query_checks_oaics_checkout_session_prefix():
     assert checkout.kwargs["json"]["checkout_ui_mode"] == "hosted"
 
 
-def test_free_plan_query_uses_oaics_website_country_protocol():
-    env = SimpleNamespace(
-        device_id="saved-device",
-        proxy="PROXY",
-        session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
-        get_chatgpt_headers=lambda **_kwargs: {},
-        navigator_language=lambda: "zh-CN",
-        get=MagicMock(return_value=_Response(_free_payload())),
-        post=MagicMock(return_value=_Response({
-            "query_count": 3,
-            "results": [
-                {"country": "JP", "country_name": "日本", "status": "eligible", "eligible": True, "message": "有资格"},
-                {"country": "PH", "country_name": "菲律宾", "status": "not_eligible", "eligible": False, "message": "无资格"},
-            ],
-        })),
-    )
-    with patch("core.chatgpt_plan.BrowserSession", return_value=env):
-        result = chatgpt_plan.check_account_plan(
-            "TOKEN",
-            proxy="PROXY",
-            billing_country="US",
-            check_oaics=True,
-            max_attempts=1,
-        )
-
-    assert result["ok"] is True
-    assert result["oaics_check_status"] == "success"
-    assert result["oaics_eligible"] is True
-    assert result["oaics_query_count"] == 3
-    assert [item["country"] for item in result["oaics_country_results"]] == ["JP", "PH"]
-    assert env.post.call_args.args[0] == "https://tools.oai9.com/api/trial/check"
-
-
 def test_free_plan_keeps_plan_success_when_oaics_check_fails():
     failed = _Response({"error": "blocked"})
     failed.status_code = 403

@@ -1696,7 +1696,7 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
         row["plan_check_error"] = None if ok else result.get("error")
 
         # 各国资格查询与 OAICS checkout 完全分开保存。即使套餐查询成功、
-        # 网站协议返回失败，也要保留本次国家查询状态和错误原因。
+        # 国家资格查询与 OAICS checkout 完全分开保存，也要保留本次国家查询状态和错误原因。
         country_keys = (
             "country_qualification_status",
             "country_qualification_results",
@@ -1705,10 +1705,8 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
             "country_qualification_checked_at",
             "country_qualification_http_status",
             "country_qualification_error",
-            "country_qualification_requires_turnstile",
             "country_qualification_source",
             "country_qualification_engine",
-            "country_qualification_turnstile_ignored",
         )
         if any(key in result for key in country_keys):
             status = str(result.get("country_qualification_status") or "").strip().lower()
@@ -1724,14 +1722,10 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 row["country_qualification_http_status"] = result.get("country_qualification_http_status")
             if "country_qualification_error" in result:
                 row["country_qualification_error"] = result.get("country_qualification_error")
-            if "country_qualification_requires_turnstile" in result:
-                row["country_qualification_requires_turnstile"] = bool(result.get("country_qualification_requires_turnstile"))
             if "country_qualification_source" in result:
                 row["country_qualification_source"] = result.get("country_qualification_source")
             if "country_qualification_engine" in result:
                 row["country_qualification_engine"] = result.get("country_qualification_engine")
-            if "country_qualification_turnstile_ignored" in result:
-                row["country_qualification_turnstile_ignored"] = bool(result.get("country_qualification_turnstile_ignored"))
             if status == "success" and "country_qualification_eligible" in result:
                 value = result.get("country_qualification_eligible")
                 row["country_qualification_eligible"] = bool(value) if value is not None else None
@@ -2198,10 +2192,9 @@ def list_account_plan_check_statuses(
         "oaics_eligible", "oaics_check_status", "oaics_check_error", "oaics_check_retryable", "oaics_checked_at",
         "oaics_session_kind", "oaics_processor_entity", "oaics_country_results", "oaics_query_count",
         "country_qualification_eligible", "country_qualification_status", "country_qualification_error",
-        "country_qualification_requires_turnstile",
         "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
-        "country_qualification_engine", "country_qualification_turnstile_ignored",
+        "country_qualification_engine",
         "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
@@ -2289,7 +2282,6 @@ def list_account_plan_check_statuses(
                     "country_qualification_eligible": row.get("country_qualification_eligible"),
                     "country_qualification_status": row.get("country_qualification_status"),
                     "country_qualification_error": row.get("country_qualification_error"),
-                    "country_qualification_requires_turnstile": row.get("country_qualification_requires_turnstile"),
                     "country_qualification_checked_at": row.get("country_qualification_checked_at"),
                     "country_qualification_http_status": row.get("country_qualification_http_status"),
                     "country_qualification_results": row.get("country_qualification_results"),

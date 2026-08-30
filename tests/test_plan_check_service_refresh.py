@@ -70,6 +70,39 @@ def test_plan_worker_refreshes_login_and_retries_after_401():
     assert query.call_args_list[-1].args[1] == "NEW_TOKEN"
 
 
+def test_country_qualification_failure_closes_running_state_after_proxy_error():
+    """共享套餐请求失败时，各国资格状态也必须进入终态。"""
+    account = {"id": 1, "email": "user@example.com", "access_token": "TOKEN"}
+    failed = {
+        "ok": False,
+        "http_status": None,
+        "error": "ProxyError: SOCKS5 credentials rejected",
+    }
+    with patch("core.plan_check_service.db.mark_account_plan_check_running", return_value=True), patch(
+        "core.plan_check_service.db.get_account", return_value=account
+    ), patch("core.plan_check_service._wait_for_rate_slot"), patch(
+        "core.plan_check_service._check_plan_with_account_context", return_value=failed
+    ), patch("core.plan_check_service.db.update_account_plan_check") as update, patch.object(
+        plan_check_service._QUEUE_SLOTS, "release"
+    ):
+        result = plan_check_service._run_plan_check(
+            account_id=1,
+            email="user@example.com",
+            access_token="TOKEN",
+            trigger="country_qualification_manual",
+            proxy="PROXY",
+            timezone_offset_min="-",
+            check_oaics=False,
+            check_country_qualification=True,
+        )
+
+    assert result["country_qualification_status"] == "failed"
+    assert result["country_qualification_error"] == failed["error"]
+    persisted = update.call_args.kwargs["result"]
+    assert persisted["country_qualification_status"] == "failed"
+    assert persisted["country_qualification_query_count"] == 0
+
+
 def test_live_refresh_automatically_queues_plan_recheck():
     """查活写入新 AT 后自动查询套餐，清除表格里上一枚 AT 的失败状态。"""
     account = {"id": 1, "email": "user@example.com", "access_token": "OLD_TOKEN"}

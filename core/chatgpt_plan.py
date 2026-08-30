@@ -16,9 +16,7 @@ from config import proxy as proxy_cfg
 from core.session import BrowserSession
 from core.proxy_utils import rotate_proxy_session
 from core.oaics_checker import (
-    check_country_qualification_protocol,
     detect_oaics_checkout,
-    oaics_result_timestamp,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,28 +300,6 @@ def check_oaics_eligibility(
                 ),
             }
         data = resp.json()
-        # Legacy integrations briefly pointed the OAICS checker at the public
-        # country endpoint.  If a checkout response unmistakably has that old
-        # shape, preserve a read-only compatibility result; normal checkout
-        # responses never enter this branch and OAICS remains checkout-only.
-        if isinstance(data, dict) and isinstance(data.get("results"), list) and not any(
-            data.get(key) for key in ("checkout_session_id", "session_id", "id", "url")
-        ):
-            protocol_session = getattr(env, "session", None)
-            if not callable(getattr(protocol_session, "post", None)):
-                protocol_session = env
-            legacy = check_country_qualification_protocol(protocol_session, token, timeout=timeout)
-            return {
-                "oaics_check_status": "success",
-                "oaics_checked_at": checked_at,
-                "oaics_check_http_status": http_status,
-                "oaics_eligible": bool(legacy.get("country_qualification_eligible")),
-                "oaics_session_kind": "website_protocol",
-                "oaics_processor_entity": "tools.oai9.com",
-                "oaics_check_error": None,
-                "oaics_country_results": legacy.get("country_qualification_results") or [],
-                "oaics_query_count": legacy.get("country_qualification_query_count"),
-            }
         detected = detect_oaics_checkout(data, billing_country=billing_country)
         return {
             "oaics_check_status": "success",
@@ -351,24 +327,47 @@ def _check_country_qualification(
     token: str,
     *,
     timeout: float = 15.0,
-    turnstile_token: str | None = None,
 ) -> dict[str, Any]:
-    """按 qualification-test 的 Checkout 支付渠道预设查询各国资格。
-
-    ``turnstile_token`` 仅为旧 API 调用方保留，新的资格检测在 ChatGPT
-    Checkout/Sentinel 链路内完成，不再请求 tools.oai9.com。
-    """
+    """按 qualification-test 的 Checkout 支付渠道预设查询各国资格。"""
     checked_at = now_iso()
     try:
         from core.qualification_test import query_country_qualification
 
         result = query_country_qualification(env, token, timeout=max(15.0, float(timeout or 0)))
+        # ``query_country_qualification`` keeps per-country failures in the
+        # result list so partial successes remain visible.  Preserve a useful
+        # aggregate error when every Checkout attempt failed instead of
+        # replacing it with ``None`` (which made the table look as if it had
+        # merely returned no eligible countries).
+        status = str(result.get("country_qualification_status") or "").strip().lower()
+        error = str(result.get("country_qualification_error") or "").strip()
+        if status == "failed" and not error:
+            failures = []
+            for item in result.get("country_qualification_results") or []:
+                if not isinstance(item, dict) or str(item.get("status") or "").lower() != "failed":
+                    continue
+                country = str(item.get("country") or item.get("country_code") or "").upper().strip()
+                channel = str(item.get("channel") or item.get("target_channel") or "").strip()
+                detail = str(item.get("error") or item.get("message") or "查询失败").strip()
+                prefix = "/".join(part for part in (country, channel) if part)
+                failures.append(f"{prefix}: {detail}" if prefix else detail)
+            if failures:
+                error = "；".join(failures)[:500]
+            if not error:
+                error = "各国资格查询失败，所有支付渠道检测均未完成"
+        http_status = result.get("country_qualification_http_status")
+        if http_status is None:
+            statuses = {
+                int(item.get("http_status"))
+                for item in result.get("country_qualification_results") or []
+                if isinstance(item, dict) and str(item.get("http_status") or "").isdigit()
+            }
+            if len(statuses) == 1:
+                http_status = next(iter(statuses))
         result.update({
             "country_qualification_checked_at": checked_at,
-            "country_qualification_http_status": 200,
-            "country_qualification_error": None,
-            "country_qualification_requires_turnstile": False,
-            "country_qualification_turnstile_ignored": bool(str(turnstile_token or "").strip()),
+            "country_qualification_http_status": http_status if http_status is not None else 200,
+            "country_qualification_error": error or None,
         })
         return result
     except Exception as exc:
@@ -377,7 +376,6 @@ def _check_country_qualification(
             "country_qualification_checked_at": checked_at,
             "country_qualification_http_status": getattr(exc, "status_code", None),
             "country_qualification_error": f"{type(exc).__name__}: {str(exc)[:180]}",
-            "country_qualification_requires_turnstile": False,
             "country_qualification_results": [],
             "country_qualification_query_count": None,
             "country_qualification_eligible": None,
@@ -556,7 +554,6 @@ def check_account_plan(
     billing_country: str = "",
     check_oaics: bool = False,
     check_country_qualification: bool = False,
-    country_qualification_turnstile_token: str | None = None,
     preserve_proxy_session: bool = False,
 ) -> dict:
     token = normalize_token(token)
@@ -695,7 +692,6 @@ def check_account_plan(
                             env,
                             token,
                             timeout=timeout_seconds,
-                            turnstile_token=country_qualification_turnstile_token,
                         ))
                     return parsed
         except Exception as exc:

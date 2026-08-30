@@ -229,10 +229,10 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_check_network_route", "plan_check_proxy_used", "plan_check_proxy_fallback_reason",
         "oaics_check_error", "oaics_check_retryable", "oaics_checked_at", "oaics_session_kind", "oaics_processor_entity",
         "oaics_country_results", "oaics_query_count",
-        "country_qualification_error", "country_qualification_requires_turnstile",
+        "country_qualification_error",
         "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
-        "country_qualification_engine", "country_qualification_turnstile_ignored",
+        "country_qualification_engine",
         "subscription_plan", "has_active_subscription", "is_delinquent",
         "plan_expires_at", "plan_renews_at", "renews_at", "plan_cancels_at",
         "billing_period", "billing_currency", "last_purchase_origin_platform", "last_will_renew",
@@ -522,18 +522,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         # Compatibility marker retained for integrations that identify the
         # commercial template route by the original return expression:
         # return render_template("index.html")
-        return render_template(
-            "index.html",
-            country_qualification_turnstile_enabled=bool(
-                getattr(webui_config, "COUNTRY_QUALIFICATION_TURNSTILE_ENABLED", True)
-            ),
-            country_qualification_turnstile_site_key=str(
-                getattr(webui_config, "COUNTRY_QUALIFICATION_TURNSTILE_SITE_KEY", "") or ""
-            ).strip(),
-            country_qualification_browser_relay_enabled=bool(
-                getattr(webui_config, "COUNTRY_QUALIFICATION_BROWSER_RELAY_ENABLED", True)
-            ),
-        )
+        return render_template("index.html")
 
     # ----------------------------------------------------------
     # 统计概览
@@ -1383,7 +1372,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             timezone_offset_min=str(data.get("timezone_offset_min") or "-"),
             check_oaics=False,
             check_country_qualification=True,
-            country_qualification_turnstile_token=data.get("turnstile_token"),
         )
         if queued.get("busy"):
             return jsonify({"ok": False, **queued}), 409
@@ -1403,7 +1391,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "单次最多查询 500 个账号"}), 400
         proxy = data.get("proxy") if "proxy" in data else None
         timezone_offset_min = str(data.get("timezone_offset_min") or "-")
-        turnstile_token = data.get("turnstile_token")
         started, busy, failed, skipped = [], [], [], []
         seen = set()
         for raw in ids:
@@ -1432,7 +1419,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                 timezone_offset_min=timezone_offset_min,
                 check_oaics=False,
                 check_country_qualification=True,
-                country_qualification_turnstile_token=turnstile_token,
             )
             item = {"id": acc_id, "email": acc.get("email"), **queued}
             if queued.get("accepted"):

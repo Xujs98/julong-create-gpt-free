@@ -67,7 +67,6 @@ def _check_plan_with_account_context(
     timezone_offset_min: str,
     check_oaics: bool = True,
     check_country_qualification: bool = False,
-    country_qualification_turnstile_token: str | None = None,
     max_attempts: int | None = None,
 ) -> dict:
     """使用账号保存的 device_id 与 Session Cookie 查询套餐，避免随机新环境触发 401。"""
@@ -93,7 +92,6 @@ def _check_plan_with_account_context(
         billing_country=str(account.get("proxy_country_code") or ""),
         check_oaics=bool(check_oaics),
         check_country_qualification=bool(check_country_qualification),
-        country_qualification_turnstile_token=country_qualification_turnstile_token,
         preserve_proxy_session=preserve_proxy_session,
     )
 
@@ -119,6 +117,37 @@ def _refresh_login_for_plan(account: dict, *, proxy: str | None) -> dict | None:
     return result
 
 
+def _finalize_country_qualification_result(
+    result: dict | None,
+    *,
+    enabled: bool,
+) -> dict:
+    """Close a country-qualification task when the shared plan request fails.
+
+    The country check runs after ``accounts/check`` succeeds.  A transport
+    failure (for example a rejected SOCKS5 credential) can therefore return
+    before the qualification engine adds its own fields.  The queue has
+    already marked the row as ``running`` at that point, so persist an
+    explicit terminal failure instead of leaving the UI spinner forever.
+    """
+    normalized = dict(result or {})
+    if not enabled or "country_qualification_status" in normalized:
+        return normalized
+    checked_at = str(normalized.get("checked_at") or datetime.now().isoformat(timespec="seconds"))
+    error = str(normalized.get("error") or "套餐请求失败，未执行各国资格检测")
+    normalized.update({
+        "country_qualification_status": "failed",
+        "country_qualification_checked_at": checked_at,
+        "country_qualification_http_status": normalized.get("http_status"),
+        "country_qualification_error": error[:240],
+        "country_qualification_results": [],
+        "country_qualification_query_count": 0,
+        "country_qualification_eligible": None,
+        "country_qualification_source": "qualification-test",
+    })
+    return normalized
+
+
 def _run_plan_check(
     *,
     account_id: int,
@@ -129,7 +158,6 @@ def _run_plan_check(
     timezone_offset_min: str,
     check_oaics: bool = False,
     check_country_qualification: bool = False,
-    country_qualification_turnstile_token: str | None = None,
 ) -> dict:
     try:
         if not db.mark_account_plan_check_running(account_id):
@@ -146,7 +174,6 @@ def _run_plan_check(
             timezone_offset_min=timezone_offset_min,
             check_oaics=check_oaics,
             check_country_qualification=check_country_qualification,
-            country_qualification_turnstile_token=country_qualification_turnstile_token,
         )
 
         if result.get("needs_live_check") or result.get("token_expired") is True:
@@ -163,7 +190,6 @@ def _run_plan_check(
                     timezone_offset_min=timezone_offset_min,
                     check_oaics=check_oaics,
                     check_country_qualification=check_country_qualification,
-                    country_qualification_turnstile_token=country_qualification_turnstile_token,
                     max_attempts=1,
                 )
                 current_token = latest_token
@@ -188,7 +214,6 @@ def _run_plan_check(
                     timezone_offset_min=timezone_offset_min,
                     check_oaics=check_oaics,
                     check_country_qualification=check_country_qualification,
-                    country_qualification_turnstile_token=country_qualification_turnstile_token,
                     max_attempts=1,
                 )
                 result["live_refresh_performed"] = True
@@ -223,7 +248,6 @@ def _run_plan_check(
                 timezone_offset_min=timezone_offset_min,
                 check_oaics=bool(check_oaics),
                 check_country_qualification=bool(check_country_qualification),
-                country_qualification_turnstile_token=country_qualification_turnstile_token,
                 max_attempts=1,
             )
             if recheck_result.get("ok"):
@@ -235,6 +259,10 @@ def _run_plan_check(
                     recheck_result.get("error") or "未知错误",
                 )
 
+        result = _finalize_country_qualification_result(
+            result,
+            enabled=bool(check_country_qualification),
+        )
         db.update_account_plan_check(acc_id=account_id, result=result)
         if result.get("ok"):
             logger.info(
@@ -258,6 +286,10 @@ def _run_plan_check(
             "checked_at": datetime.now().isoformat(timespec="seconds"),
             "error": f"{type(exc).__name__}: {str(exc)[:180]}",
         }
+        result = _finalize_country_qualification_result(
+            result,
+            enabled=bool(check_country_qualification),
+        )
         try:
             db.update_account_plan_check(acc_id=account_id, result=result)
         except Exception:
@@ -278,7 +310,6 @@ def enqueue_account_plan_check(
     timezone_offset_min: str = "-",
     check_oaics: bool = False,
     check_country_qualification: bool = False,
-    country_qualification_turnstile_token: str | None = None,
 ) -> dict:
     """把查询放入统一线程池；重复查询或队列满时不提交。"""
     account_id = int(account_id)
@@ -308,7 +339,6 @@ def enqueue_account_plan_check(
             timezone_offset_min=str(timezone_offset_min or "-"),
             check_oaics=bool(check_oaics),
             check_country_qualification=bool(check_country_qualification),
-            country_qualification_turnstile_token=country_qualification_turnstile_token,
         )
     except Exception as exc:
         _QUEUE_SLOTS.release()
