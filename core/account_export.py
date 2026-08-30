@@ -1222,6 +1222,20 @@ def save_account_data(
     """
     from core.db import insert_account
     extra = dict(extra or {})
+    # Drivers attach a normalized registration traffic snapshot before saving.
+    # Keep it nested for diagnostics while promoting the total to a list-safe
+    # top-level field used by the account table.
+    try:
+        from core.traffic import normalize_snapshot
+        traffic_snapshot = normalize_snapshot(
+            extra.get("registration_traffic") or extra.get("traffic")
+        )
+    except Exception:
+        traffic_snapshot = {}
+    if traffic_snapshot:
+        extra["registration_traffic"] = traffic_snapshot
+    traffic_bytes = int(traffic_snapshot.get("total_bytes") or 0) if traffic_snapshot else None
+    traffic_source = str(traffic_snapshot.get("source") or "").strip() or None
     proxy_geo = _capture_proxy_geo(extra, proxy_used)
     if proxy_geo:
         # 顶层字段便于列表接口/搜索直接使用；extra 中仍保留完整驱动元数据。
@@ -1266,6 +1280,8 @@ def save_account_data(
         codex_status=codex_status,
         codex_error=codex_error,
         registration_method=registration_method,
+        registration_traffic_bytes=traffic_bytes,
+        registration_traffic_source=traffic_source,
     )
     batch_folder = _append_batch_archive(
         row_id=row_id,

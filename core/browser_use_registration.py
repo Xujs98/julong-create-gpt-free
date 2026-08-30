@@ -1906,6 +1906,8 @@ def run_browser_use_registration(
             logger.info("[BrowserUse] 已拿到 accessToken：%s", email)
             # 在后置 Codex/2FA 可能关闭或清理远端浏览器前，冻结本次注册的完整登录态。
             saved_session = build_saved_session(session_info, capture_browser_cookies(page))
+            from core.traffic import browser_performance_snapshot
+            registration_traffic = browser_performance_snapshot(page)
 
             if _twofa_cfg.ENABLE_2FA:
                 logger.warning("[BrowserUse] 当前路径暂不自动设置 2FA，已跳过")
@@ -1969,6 +1971,7 @@ def run_browser_use_registration(
                     "account": session_info.get("account"),
                     "expires": session_info.get("expires"),
                     "session": saved_session,
+                    "registration_traffic": registration_traffic,
                     provider_prefix: {
                         "proxy_country_code": session_info_open.proxy_country_code,
                         "proxy_geo": {

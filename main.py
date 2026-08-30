@@ -628,6 +628,8 @@ def run_registration(
 
         # ==================== 阶段8: 持久化账号 ====================
         from core.email_provider import resolve_email_source
+        from core.traffic import normalize_snapshot
+        registration_traffic = normalize_snapshot(session.traffic_snapshot())
         account_id = save_account_data(
             email=email,
             access_token=access_token,
@@ -645,6 +647,7 @@ def run_registration(
                 "sentinel_sid": getattr(session, "sentinel_sid", None),
                 "proxy_geo": getattr(session, "exit_geo", None),
                 "browser_profile": getattr(session, "browser_profile", None),
+                "registration_traffic": registration_traffic,
                 "registration_password": openai_password,
                 "twofa": twofa_result,
                 "codex": codex_result,

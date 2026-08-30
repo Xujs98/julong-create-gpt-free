@@ -451,6 +451,7 @@ def _render_static_viewer(outlook_rows: list[dict] | None = None, account_rows: 
     tr:hover td {{ background: #fbfdff; }}
     .main-cell {{ font-weight: 700; }}
     .sub-cell {{ margin-top: 3px; color: var(--muted); font-size: 12px; }}
+    .traffic-cell {{ margin-top: 3px; color: #2f855a; font-size: 11px; }}
     .mono {{ font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; font-size: 12px; }}
     .muted {{ color: var(--muted); }}
     .pill {{ display: inline-flex; min-width: 48px; justify-content: center; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }}
@@ -535,6 +536,17 @@ let copySeq = 0;
 const copyStore = new Map();
 
 function fmt(v) {{ return v == null || v === '' ? '-' : String(v); }}
+function fmtTraffic(v) {{
+  if (v == null || v === '') return '流量未记录';
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return '流量未记录';
+  if (n < 1024) return `流量 ${{Math.round(n)}} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = n, unit = units[0];
+  for (let i = 0; i < units.length && amount >= 1024; i += 1) {{ amount /= 1024; unit = units[i]; }}
+  const digits = amount >= 100 ? 0 : (amount >= 10 ? 1 : 2);
+  return `流量 ${{amount.toFixed(digits)}} ${{unit}}`;
+}}
 function esc(v) {{
   return fmt(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }}
@@ -601,7 +613,7 @@ function render() {{
       <td><span class="mono">${{esc(short(r.access_token || '', 42))}}</span></td>
       <td title="${{esc(r.note || '')}}">${{r.note ? esc(short(r.note, 60)) : '<span class="muted">-</span>'}}</td>
       <td>${{r.totp_secret ? '已启用' : '<span class="muted">未启用</span>'}}</td>
-      <td class="muted">${{esc(r.created_at || '-')}}</td>
+      <td class="muted"><div>${{esc(r.created_at || '-')}}</div><div class="traffic-cell">${{esc(fmtTraffic(r.registration_traffic_bytes))}}</div></td>
       <td class="actions">${{btn('复制Token', r.access_token, 'primary')}} ${{btn('复制整行', r.copy_line, 'good')}}</td>
     </tr>`).join('');
   $('#outlookBody').innerHTML = outlook.map((r) => `
@@ -1215,6 +1227,8 @@ def insert_account(
     codex_status: str | None = None,   # success / failed / skipped / missing
     codex_error: str | None = None,    # 失败原因（仅 codex_status=failed 时有意义）
     registration_method: str | None = None,
+    registration_traffic_bytes: int | None = None,
+    registration_traffic_source: str | None = None,
 ) -> int:
     """插入或更新注册成功账号，返回本地文件中的 id。"""
     with _LOCK:
@@ -1241,6 +1255,12 @@ def insert_account(
             row_id = int(row["id"])
             row["group_name"] = str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip() or DEFAULT_ACCOUNT_GROUP
 
+        traffic_value = row.get("registration_traffic_bytes")
+        if registration_traffic_bytes is not None:
+            try:
+                traffic_value = max(0, int(registration_traffic_bytes))
+            except (TypeError, ValueError):
+                traffic_value = row.get("registration_traffic_bytes")
         row.update({
             "access_token": access_token,
             "totp_secret": totp_secret if totp_secret is not None else row.get("totp_secret"),
@@ -1266,6 +1286,12 @@ def insert_account(
             "expires_at": expires_at if expires_at is not None else row.get("expires_at"),
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
+            "registration_traffic_bytes": traffic_value,
+            "registration_traffic_source": (
+                str(registration_traffic_source or "").strip()[:80]
+                if registration_traffic_source is not None
+                else row.get("registration_traffic_source")
+            ),
             "proxy_geo": (
                 dict((extra or {}).get("proxy_geo"))
                 if isinstance((extra or {}).get("proxy_geo"), dict)

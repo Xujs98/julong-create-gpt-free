@@ -998,6 +998,8 @@
       font-size: 11px; line-height: 18px; white-space: nowrap;
     }
     .acc-v2-created-time { color: #909399; font-size: 12px; white-space: nowrap; }
+    .acc-v2-created-traffic { color: #67c23a; font-size: 11px; white-space: nowrap; }
+    .acc-v2-created-traffic.is-muted { color: #c0c4cc; }
     .table-selection-bar-v2 {
       display: flex; align-items: center; gap: 10px; min-height: 42px;
       padding: 7px 16px; border-top: 1px solid #ebeef5;
@@ -6227,7 +6229,22 @@ function _accountTotpCell(r, accountIcons) {
   if (status === 'skipped') return '<span class="acc-v2-totp-state is-skipped" title="当前注册路径跳过自动 2FA 设置">已跳过</span>';
   return '<span class="acc-v2-muted" title="该账号没有保存 TOTP；可能是注册时未开启 2FA，或设置阶段失败，请查看注册日志">未启用</span>';
 }
-function _accountCreatedAtCell(value) {
+function _formatRegistrationTraffic(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw < 0) return '';
+  if (raw < 1024) return `${Math.round(raw)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = raw;
+  let unit = units[0];
+  for (let i = 0; i < units.length && amount >= 1024; i += 1) {
+    amount /= 1024;
+    unit = units[i];
+  }
+  const digits = amount >= 100 ? 0 : (amount >= 10 ? 1 : 2);
+  return `${amount.toFixed(digits)} ${unit}`;
+}
+function _accountCreatedAtCell(value, trafficBytes) {
   const raw = String(value || '').trim();
   if (!raw) return '<span class="acc-v2-muted">-</span>';
   const normalized = /^\d{4}-\d{2}-\d{2} /.test(raw) ? raw.replace(' ', 'T') : raw;
@@ -6242,7 +6259,11 @@ function _accountCreatedAtCell(value) {
   const dayDiff = Math.round((today - createdDay) / 86400000);
   const dayLabel = dayDiff === 0 ? '今天' : (dayDiff >= 1 && dayDiff <= 7 ? `${dayDiff}天前` : '');
   const labelHtml = dayLabel ? `<span class="acc-v2-created-day">${esc(dayLabel)}</span>` : '';
-  return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span></div></div>`;
+  const trafficText = _formatRegistrationTraffic(trafficBytes);
+  const trafficHtml = trafficText
+    ? `<span class="acc-v2-created-traffic" title="注册阶段累计传输量">流量 ${esc(trafficText)}</span>`
+    : '<span class="acc-v2-created-traffic is-muted">流量未记录</span>';
+  return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span>${trafficHtml}</div></div>`;
 }
 function renderAccounts() {
   const total = ACCOUNTS_TOTAL;
@@ -6267,7 +6288,7 @@ function renderAccounts() {
       <td class="col-small acc-v2-totp-cell">${_accountTotpCell(r, accountIcons)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-agent">${_codexAgentCell(r)}</td>
-      <td class="col-time">${_accountCreatedAtCell(r.created_at)}</td>
+      <td class="col-time">${_accountCreatedAtCell(r.created_at, r.registration_traffic_bytes)}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
           <button type="button" class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button>

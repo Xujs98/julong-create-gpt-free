@@ -1,0 +1,120 @@
+Registration traffic verification
+Baseline commit: 99b7637
+
+$ git diff --cached --check
+exit=0
+
+$ python3 -m pytest -q tests/test_traffic.py tests/test_account_created_at_ui.py tests/test_account_export_oaics.py tests/test_account_registration_method.py tests/test_twofa_status.py tests/test_protocol_password_registration.py tests/test_registration_driver_dispatch.py
+...............................                                          [100%]
+31 passed in 1.59s
+exit=0
+
+$ python3 -m compileall -q core/traffic.py core/session.py core/account_export.py core/db.py main.py core/roxy_registration.py core/cloakbrowser_registration.py core/browser_use_registration.py webui/app.py
+exit=0
+
+$ python3 -m pytest -q
+........................................................................ [ 11%]
+........................................................................ [ 22%]
+........................................................................ [ 34%]
+........................................................................ [ 45%]
+........................................................................ [ 57%]
+..........................................F............................. [ 68%]
+........................................................................ [ 80%]
+......................................................................F. [ 91%]
+....................................................                     [100%]
+=================================== FAILURES ===================================
+________ test_protocol_browser_like_switch_defaults_off_and_is_editable ________
+
+    def test_protocol_browser_like_switch_defaults_off_and_is_editable():
+>       assert openai_protocol.PROTOCOL_BROWSER_LIKE_FLOW is False
+E       assert True is False
+E        +  where True = openai_protocol.PROTOCOL_BROWSER_LIKE_FLOW
+
+tests/test_protocol_browser_like_flow.py:70: AssertionError
+___________ CodexSmsProviderTests.test_complete_can_delete_used_cdk ____________
+
+self = <test_sms_provider_codex._Http object at 0x262dc8410>
+url = 'https://sms.kkdos.store/api/v1/code/request'
+headers = {'Content-Type': 'application/json'}, data = '{"cdk": "LONG-2"}'
+
+    def post(self, url, headers=None, data=None):
+        self.calls.append(("POST", url, headers or {}, data))
+>       return self.responses.pop(0)
+               ^^^^^^^^^^^^^^^^^^^^^
+E       IndexError: pop from empty list
+
+tests/test_sms_provider_codex.py:28: IndexError
+
+The above exception was the direct cause of the following exception:
+
+self = <test_sms_provider_codex.CodexSmsProviderTests testMethod=test_complete_can_delete_used_cdk>
+
+    def test_complete_can_delete_used_cdk(self):
+        http = _Http([_Resp({"sessionId": "sess-2", "phone": "+15550001111", "type": "bindable"})])
+        with patch.object(codex_config, "SMS_PROVIDER", "codex"), \
+                patch.object(codex_config, "CODEX_SMS_CDKS", ["LONG-1", "LONG-2"]), \
+                patch.object(codex_config, "CODEX_SMS_DELETE_USED_CDK", True), \
+                patch("core.sms_provider._remove_codex_cdk") as remove:
+>           session, _ = sms_provider.acquire_number(http=http)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_sms_provider_codex.py:78:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+http = <test_sms_provider_codex._Http object at 0x262dc8410>, service = None
+country = None
+
+    def acquire_number(
+        http: CurlSession | None = None,
+        service: str | None = None,
+        country: str | None = None,
+    ) -> tuple[str, str]:
+        """
+        取一个手机号（getNumber）。
+
+        Returns:
+            (activation_id, phone_number) —— phone_number 不带 + 前缀（如 16195366483）
+
+        Raises:
+            SmsNoNumbersError / SmsNoBalanceError / SmsProviderError
+        """
+        own_http = http is None
+        http = http or _http()
+        try:
+            if _provider() == "codex":
+                from core.codex_sms_client import CodexSmsError, CodexSmsNoNumbers
+
+                requested_type = str(getattr(_cfg, "CODEX_SMS_NUMBER_TYPE", "auto") or "auto").strip().lower()
+                cdks = _codex_cdks()
+                if bool(getattr(_cfg, "CODEX_SMS_CHECK_BEFORE_USE", True)):
+                    cdks = [x for x in cdks if _CODEX_KNOWN_TYPES.get(x) != "invalid"]
+                if requested_type in {"short", "long"}:
+                    preferred = [x for x in cdks if _codex_type(_CODEX_KNOWN_TYPES.get(x)) == requested_type]
+                    cdks = preferred + [x for x in cdks if x not in preferred]
+                if not cdks:
+                    raise SmsNoNumbersError("Codex 接码助手未配置 CDK，请在配置-接码平台中添加")
+                last_error = None
+                for cdk in cdks:
+                    try:
+                        data = _codex_client(http).request_session(cdk)
+                    except CodexSmsNoNumbers as exc:
+                        _CODEX_KNOWN_TYPES[cdk] = "invalid"
+                        last_error = exc
+                        continue
+                    except CodexSmsError as exc:
+                        # 429/协议错误属于平台级故障，换 CDK 不会修复，保留原始原因。
+                        raise SmsProviderError(str(exc)) from exc
+                    except Exception as exc:
+>                       raise SmsProviderError(f"Codex 接码助手请求失败：{exc}") from exc
+E                       core.sms_provider.SmsProviderError: Codex 接码助手请求失败：pop from empty list
+
+core/sms_provider.py:403: SmsProviderError
+=========================== short test summary info ============================
+FAILED tests/test_protocol_browser_like_flow.py::test_protocol_browser_like_switch_defaults_off_and_is_editable
+FAILED tests/test_sms_provider_codex.py::CodexSmsProviderTests::test_complete_can_delete_used_cdk
+2 failed, 626 passed in 60.62s (0:01:00)
+exit=1 (2 existing unrelated failures: protocol browser-like default; Codex CDK deletion fixture)
+
+$ artifacts/registration-traffic/rollback.sh
+output=rollback restored baseline 99b7637 for registration traffic files
+exit=0; task files restored from registration-traffic.patch afterward

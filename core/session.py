@@ -20,6 +20,7 @@ from config import (
     REQUEST_TIMEOUT, pick_proxy, pick_browser_profile, validate_browser_profile,
 )
 from core.proxy_utils import normalize_proxy_url
+from core.traffic import TrafficMeter
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,9 @@ class BrowserSession:
 
         # 创建 curl_cffi 会话
         self.session = Session(impersonate=IMPERSONATE)
+        # Registration traffic is measured at the HTTP session boundary so
+        # redirects, Sentinel calls and post-auth requests are included.
+        self.traffic_meter = TrafficMeter(source="browser_session")
 
         # 设置代理
         if self.proxy:
@@ -543,12 +547,20 @@ class BrowserSession:
         """发送 GET 请求"""
         self._raise_if_circuit_open()
         headers = self._attach_openai_target_headers_for_url(url, headers)
+        self.traffic_meter.record_request(url, headers, kwargs)
         resp = self.session.get(url, headers=headers, **kwargs)
+        self.traffic_meter.record_response(resp)
         return self._observe_response_for_circuit_breaker(resp, url)
 
     def post(self, url: str, headers: dict = None, **kwargs):
         """发送 POST 请求"""
         self._raise_if_circuit_open()
         headers = self._attach_openai_target_headers_for_url(url, headers)
+        self.traffic_meter.record_request(url, headers, kwargs)
         resp = self.session.post(url, headers=headers, **kwargs)
+        self.traffic_meter.record_response(resp)
         return self._observe_response_for_circuit_breaker(resp, url)
+
+    def traffic_snapshot(self) -> dict:
+        """返回当前会话累计请求/响应流量。"""
+        return self.traffic_meter.snapshot()

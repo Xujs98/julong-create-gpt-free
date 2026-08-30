@@ -207,6 +207,7 @@ def _compact_account_for_list(row: dict) -> dict:
     # 这些是列表固定列直接展示字段。
     for key in (
         "user_name", "email_source", "note", "archived", "created_at",
+        "registration_traffic_bytes", "registration_traffic_source",
         "link_completed", "payment_completed", "sms_completed", "proxy_country_code",
         "proxy_country_name", "proxy_region", "proxy_city", "proxy_exit_ip",
         "plan_type", "current_plan_type", "plus_trial_eligible",

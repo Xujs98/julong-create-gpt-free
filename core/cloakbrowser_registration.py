@@ -695,6 +695,8 @@ def _run_cloak_registration_impl(
         logger.info("[Cloak注册] 已拿到 accessToken：%s", email)
         # 后置 2FA/Codex 可能复用并清理当前窗口，先保存注册成功瞬间的完整登录态。
         saved_session = build_saved_session(session_info, capture_browser_cookies(driver))
+        from core.traffic import browser_performance_snapshot
+        registration_traffic = browser_performance_snapshot(driver)
 
         totp_secret = None
         twofa_result = {
@@ -761,6 +763,7 @@ def _run_cloak_registration_impl(
                 "account": session_info.get("account"),
                 "expires": session_info.get("expires"),
                 "session": saved_session,
+                "registration_traffic": registration_traffic,
                 "cloakbrowser": {
                     "profile_id": opened.profile_id,
                     "open_result": opened.raw,
