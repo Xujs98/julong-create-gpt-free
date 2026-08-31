@@ -38,6 +38,13 @@ def test_summary_exposes_aggregate_aliases_and_source_breakdown():
 
 def test_commercial_stats_markup_contains_register_breakdown_and_pool_cards():
     html = _client().get("/").get_data(as_text=True)
+    assert "register-stats-v2" in html
+    assert "register-stat-v2--accounts" in html
+    assert 'class="pool-stat-v2 register-stat-v2 register-stat-v2--total"' in html
+    assert "register-stat-available-meta" in html
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in html
+    for kicker in ("ACCOUNTS", "EMAIL POOL", "AVAILABLE", "IN USE", "FAILED"):
+        assert kicker in html
     assert 'id="statAvailableBreakdown"' in html
     assert 'id="outlookPoolStatsV2"' in html
     assert "POOL_SOURCE_META" in html
