@@ -120,10 +120,21 @@ def test_rebind_service_success_keeps_task_in_shared_jobs(tmp_path, monkeypatch)
                     break
                 time.sleep(0.02)
             assert job["job_type"] == "rebind"
+            assert job["batch_id"] == result["batch_id"]
             assert job["status"] == "success"
             assert callback_calls == [("old@example.com", "new@example.com", "protocol", True)]
             assert db.get_account_by_email("old@example.com") is None
             assert db.get_account_by_email("new@example.com")["access_token"] == "refreshed-token"
+            batches = db.list_registration_batches()
+            assert batches[0]["task_type"] == "rebind"
+            assert batches[0]["success_count"] == 1
+            assert batches[0]["failed_count"] == 0
+            app = create_app(auth_code="rebind-summary-test")
+            client = app.test_client()
+            client.environ_base["HTTP_X_AUTH_CODE"] = "rebind-summary-test"
+            summary = client.get("/api/jobs?paged=1&page=1&page_size=10").get_json()["current_batch"]
+            assert summary["task_type"] == "rebind"
+            assert summary["status"] == "completed"
         finally:
             rebind_service.set_rebind_executor(None)
             rebind_service.shutdown_executor(wait=True)

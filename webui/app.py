@@ -3252,7 +3252,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.get("/api/registration-batches")
     def api_registration_batches():
-        """返回注册批次历史，包含实时耗时与成功、失败数量。"""
+        """返回注册与换绑批次历史，包含实时耗时与成功、失败数量。"""
         limit = max(1, min(1000, request.args.get("limit", default=200, type=int) or 200))
         items = db.list_registration_batches(limit=limit)
         return jsonify({"ok": True, "items": items, "total": len(items)})

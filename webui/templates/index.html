@@ -757,6 +757,7 @@
     }
     .jobs-table-v2 .col-status { width: 110px; }
     .jobs-table-v2 .col-email { min-width: 200px; width: 24%; }
+    .jobs-table-v2 .col-task-type { width: 74px; min-width: 74px; }
     .jobs-table-v2 .jobs-v2-task-type {
       display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px;
       margin-right: 5px; border: 1px solid #dcdfe6; border-radius: 999px;
@@ -3593,7 +3594,7 @@ try {
           </span>
         </label>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnStartV2">开始注册</button>
-        <button type="button" class="jobs-tb-btn jobs-tb-btn--log" id="btnRegistrationTaskLogV2" title="查看所有注册批次记录">
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--log" id="btnRegistrationTaskLogV2" title="查看所有注册与换绑批次记录">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
           <span>任务日志</span>
         </button>
@@ -3602,7 +3603,7 @@ try {
       <div class="jobs-table-v2-wrap">
         <table class="jobs-table-v2">
           <colgroup>
-            <col class="col-check"><col class="col-id"><col class="col-status"><col class="col-email">
+            <col class="col-check"><col class="col-id"><col class="col-status"><col class="col-task-type"><col class="col-email">
             <col class="col-time"><col class="col-time"><col class="col-duration"><col class="col-error"><col class="col-actions">
           </colgroup>
           <thead>
@@ -3610,6 +3611,7 @@ try {
               <th class="col-check"><input type="checkbox" id="jobsSelectAllV2" title="全选/取消全选当前页可删除任务"></th>
               <th class="col-id">ID</th>
               <th class="col-status">状态</th>
+              <th class="col-task-type">类型</th>
               <th class="col-email">邮箱</th>
               <th class="col-time">开始</th>
               <th class="col-time">完成</th>
@@ -4081,7 +4083,7 @@ try {
     <div class="account-rebind-head">
       <div class="account-rebind-head-main">
         <h3 id="accountRebindTitle">换绑账号邮箱</h3>
-        <p>换绑成功后才会清理旧账号；任务会进入“注册”页的任务列表，可打开任务日志查看进度。</p>
+        <p>换绑成功后才会清理旧账号；任务会进入任务列表，可打开任务日志查看进度。</p>
       </div>
       <button type="button" class="account-rebind-close" id="btnCloseAccountRebind" aria-label="关闭">×</button>
     </div>
@@ -4148,7 +4150,7 @@ try {
 </div>
 <div class="body hidden" id="registrationTaskLogPanel" role="dialog" aria-modal="true" aria-labelledby="registrationTaskLogTitle">
   <div class="registration-task-log-head">
-    <h3 id="registrationTaskLogTitle">注册任务日志</h3>
+    <h3 id="registrationTaskLogTitle">注册与换绑任务日志</h3>
     <div class="registration-task-log-actions">
       <button type="button" class="registration-task-log-clear" id="btnClearRegistrationTaskLog" title="清空已完成的任务日志">
         <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
@@ -4161,7 +4163,7 @@ try {
   </div>
   <div class="registration-task-log-table-wrap">
     <table class="registration-task-log-table">
-      <thead><tr><th style="width: 170px">开始时间</th><th>注册量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>成功率</th><th>状态</th></tr></thead>
+      <thead><tr><th style="width: 170px">开始时间</th><th>类型</th><th>任务量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>成功率</th><th>状态</th></tr></thead>
       <tbody id="registrationTaskLogBody"></tbody>
     </table>
     <div class="registration-task-log-empty hidden" id="registrationTaskLogEmpty">暂无任务日志</div>
@@ -4796,7 +4798,7 @@ function setRegistrationEmailSource(value, persist=true) {
   if (persist) localStorage.setItem(REG_EMAIL_SOURCE_STORAGE_KEY, next);
 }
 
-// 渲染最近一次注册批次的实时汇总，顶部提示与历史日志使用同一份后端统计。
+// 渲染最近一次注册或换绑批次的实时汇总，顶部提示与历史日志使用同一份后端统计。
 function renderRegistrationBatchSummary() {
   const el = document.getElementById('regWarnV2');
   if (!el) return;
@@ -4815,14 +4817,15 @@ function renderRegistrationBatchSummary() {
     : formatDurationSeconds(batch.elapsed_seconds || durationSecondsBetween(batch.started_at, batch.completed_at));
   const running = Number(batch.running_count || 0);
   const pending = Number(batch.pending_count || 0);
+  const taskType = String(batch.task_type || batch.job_type || '').toLowerCase() === 'rebind' ? '换绑' : '注册';
   el.innerHTML = `
     <div class="registration-batch-summary">
-      <strong>已提交 ${total} 个任务，本次并发 ${workers}</strong>
+      <strong>${taskType}：已提交 ${total} 个任务，本次并发 ${workers}</strong>
       <span class="batch-summary-time">${active ? '本次已耗时' : '本次总耗时'}：<b data-duration-start="${attrEsc(batch.started_at || '')}" data-duration-end="${attrEsc(batch.completed_at || '')}">${duration}</b></span>
       <span class="batch-summary-success">成功：${Number(batch.success_count || 0)}</span>
       <span class="batch-summary-failed">失败：${Number(batch.failed_count || 0)}</span>
       <span class="batch-summary-rate">成功率：${formatRegistrationSuccessRate(batch)}</span>
-      ${active ? `<span>运行：${running}</span><span>排队：${pending}</span>` : '<span>状态：已完成</span>'}
+      ${active ? `<span>运行：${running}</span><span>排队：${pending}</span><span>类型：${taskType}</span>` : `<span>状态：${taskType}已完成</span>`}
       ${REGISTRATION_BATCH_WARNING ? `<span class="batch-summary-warning">${esc(REGISTRATION_BATCH_WARNING)}</span>` : ''}
     </div>`;
 }
@@ -5045,7 +5048,8 @@ function renderJobs() {
         <td class="col-check"><input type="checkbox" class="job-row-check" data-job-id="${esc(j.id)}" ${JOB_SELECTED.has(Number(j.id)) ? 'checked' : ''} ${running ? 'disabled title="运行中的任务不能选择"' : ''}></td>
         <td class="col-id">#${esc(j.id)}${j.parent_job_id ? `<div class="sub-cell" title="重试自任务 #${esc(j.parent_job_id)}">↳ #${esc(j.parent_job_id)} · ${esc(j.retry_attempt || 1)}</div>` : ''}</td>
         <td class="col-status">${pillV2(j.display_status || j.status)}</td>
-        <td class="col-email" title="${esc(taskEmailTitle)}"><span class="jobs-v2-task-type${taskType === '换绑' ? ' is-rebind' : ''}">${taskType}</span> ${esc(taskEmail)}${taskType === '换绑' && j.rebind_source_email ? `<div class="sub-cell">原：${esc(j.rebind_source_email)}</div>` : ''}</td>
+        <td class="col-task-type"><span class="jobs-v2-task-type${taskType === '换绑' ? ' is-rebind' : ''}">${taskType}</span></td>
+        <td class="col-email" title="${esc(taskEmailTitle)}">${esc(taskEmail)}${taskType === '换绑' && j.rebind_source_email ? `<div class="sub-cell">原：${esc(j.rebind_source_email)}</div>` : ''}</td>
         <td class="col-time" title="${esc(started)}">${esc(started)}</td>
         <td class="col-time" title="${esc(completed)}">${esc(completed)}</td>
         <td class="col-duration" data-duration-start="${attrEsc(j.started_at || '')}" data-duration-end="${attrEsc(j.completed_at || '')}" title="${esc(duration)}">${esc(duration)}</td>
@@ -5060,7 +5064,7 @@ function renderJobs() {
           </div>
         </td>
       </tr>`;
-    }).join('') || '<tr><td colspan="9" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
+    }).join('') || '<tr><td colspan="10" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
   }
 
 
@@ -5189,8 +5193,10 @@ function renderRegistrationTaskLogs() {
     const duration = active
       ? formatTaskDuration(batch.started_at)
       : formatDurationSeconds(batch.elapsed_seconds || durationSecondsBetween(batch.started_at, batch.completed_at));
+    const taskType = String(batch.task_type || batch.job_type || '').toLowerCase() === 'rebind' ? '换绑' : '注册';
     return `<tr>
       <td title="${esc(formatDateTime(batch.started_at))}">${esc(formatDateTime(batch.started_at))}</td>
+      <td>${taskType}</td>
       <td>${Number(batch.requested_count || batch.submitted_count || 0)}</td>
       <td>${Number(batch.workers || 0)}</td>
       <td data-duration-start="${attrEsc(batch.started_at || '')}" data-duration-end="${attrEsc(batch.completed_at || '')}">${esc(duration)}</td>
@@ -5214,7 +5220,7 @@ async function loadRegistrationTaskLogs() {
 }
 
 async function clearRegistrationTaskLogs(btn) {
-  if (!await appConfirm('确定清空已完成的注册任务日志吗？\n\n仍在执行或排队的批次会保留。')) return;
+  if (!await appConfirm('确定清空已完成的任务日志吗？\n\n注册和换绑仍在执行或排队的批次会保留。')) return;
   if (btn) btn.disabled = true;
   try {
     const result = await api('/api/registration-batches/clear', {

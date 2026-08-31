@@ -836,16 +836,54 @@ def _browser_device_id(driver) -> str:
 
 def _browser_session_info(driver) -> dict:
     """直接从当前 ChatGPT 页面读取登录 Session，避免切换到协议指纹。"""
-    result = _browser_fetch(
-        driver,
-        "/api/auth/session",
-        headers={"accept": "application/json", "cache-control": "no-cache", "pragma": "no-cache"},
-        stage="session_fetch",
-    )
-    data = _browser_response_data(result, "session")
-    if not data.get("accessToken"):
-        raise Browser2FARequestError("session", int(result.get("status") or 0), "响应缺少 accessToken")
-    return data
+    # 混合换绑在完成浏览器登录后会立即读取一次 Session。Roxy/Cloak 有时
+    # 仍停留在 auth.openai.com 或刚完成跳转的过渡页，此时页面内相对
+    # ``fetch('/api/auth/session')`` 会直接抛 ``TypeError: Failed to fetch``
+    #（HTTP 0），而不是返回可解析的 HTTP 响应。先把当前句柄稳定到
+    # ChatGPT，再对这一类只读 GET 做短重试，避免把临时网络抖动误报成换绑失败。
+    last_error: Browser2FARequestError | None = None
+    for attempt in range(3):
+        if attempt or "chatgpt.com" not in str(getattr(driver, "current_url", "") or "").lower():
+            try:
+                from core.roxy_registration import _safe_get
+
+                _safe_get(
+                    driver,
+                    "https://chatgpt.com/",
+                    timeout=35,
+                    attempts=2,
+                    accept_hosts=("chatgpt.com",),
+                )
+            except Exception:
+                # 保留原有异常作为最终诊断；下一轮仍尝试页面内请求，
+                # 兼容只实现 execute_async_script 的轻量驱动适配器。
+                logger.debug("[Session] 换绑读取前导航 ChatGPT 失败", exc_info=True)
+        try:
+            result = _browser_fetch(
+                driver,
+                "/api/auth/session",
+                headers={"accept": "application/json", "cache-control": "no-cache", "pragma": "no-cache"},
+                stage="session_fetch",
+            )
+            data = _browser_response_data(result, "session")
+            if not data.get("accessToken"):
+                raise Browser2FARequestError("session", int(result.get("status") or 0), "响应缺少 accessToken")
+            return data
+        except Browser2FARequestError as exc:
+            # 仅 HTTP 0 的浏览器网络异常可重试；401/403/5xx 等真实响应
+            # 继续按原语义交给上层处理，避免重复触发认证或提交动作。
+            if exc.status != 0 or attempt >= 2:
+                raise
+            last_error = exc
+            logger.warning(
+                "[Session] 换绑读取 ChatGPT session 暂时失败（HTTP 0），第 %s/3 次重试：%s",
+                attempt + 1,
+                str(exc.detail or "browser fetch failed")[:180],
+            )
+            time.sleep(0.5 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise Browser2FARequestError("session", 0, "浏览器请求未返回结果")
 
 
 def _browser_enroll_totp(driver, access_token: str) -> tuple[str, str]:

@@ -930,7 +930,7 @@ def _save_jobs(rows: list[dict]) -> None:
 
 
 def _load_registration_batches() -> list[dict]:
-    """读取注册批次历史；SQLite 为主存储，JSON 保留兼容镜像。"""
+    """读取注册与换绑批次历史；SQLite 为主存储，JSON 保留兼容镜像。"""
     if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
         return _sqlite_store().load_records("registration_batches")
     rows = _read_json(_REGISTRATION_BATCHES_JSON, [])
@@ -4105,6 +4105,10 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
     if str(batch.get("status") or "") == "completed" and batch.get("completed_at"):
         # 批次终态一旦落盘就保持不变；后续删除单任务记录不应改写历史成功/失败统计。
         result = dict(batch)
+        task_type = str(result.get("task_type") or "").strip().lower()
+        if task_type not in {"registration", "rebind"}:
+            task_type = "rebind" if str(result.get("email_source") or "").strip().lower() == "rebind" else "registration"
+        result["task_type"] = task_type
         result["success_rate"] = _registration_success_rate(
             result.get("success_count"), result.get("failed_count")
         )
@@ -4157,7 +4161,14 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         completed_at = (max(valid_completed) if valid_completed else current_time).isoformat(timespec="seconds")
 
     result = dict(batch)
+    task_type = str(batch.get("task_type") or "").strip().lower()
+    if task_type not in {"registration", "rebind"}:
+        task_type = "rebind" if any(
+            str(row.get("job_type") or "").strip().lower() == "rebind"
+            for row in related
+        ) else "registration"
     result.update({
+        "task_type": task_type,
         "submitted_count": len(related),
         "success_count": success_count,
         "failed_count": failed_count,
@@ -4172,8 +4183,18 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
     return result
 
 
-def create_registration_batch(*, requested_count: int, workers: int, email_source: str) -> dict:
-    """创建一次“开始注册”操作对应的持久化批次日志。"""
+def create_registration_batch(
+    *,
+    requested_count: int,
+    workers: int,
+    email_source: str,
+    task_type: str = "registration",
+) -> dict:
+    """创建一次批量任务操作对应的持久化日志。
+
+    注册和换绑共用批次历史表；``task_type`` 让 WebUI 能在同一张任务
+    日志中区分两种任务，同时保留旧调用方默认的注册语义。
+    """
     with _LOCK:
         rows = _load_registration_batches()
         jobs = _load_jobs()
@@ -4190,6 +4211,7 @@ def create_registration_batch(*, requested_count: int, workers: int, email_sourc
         ) + 1
         row = {
             "id": next_batch_id,
+            "task_type": "rebind" if str(task_type or "").strip().lower() == "rebind" else "registration",
             "started_at": now_iso,
             "completed_at": None,
             "sealed_at": None,
@@ -4422,6 +4444,7 @@ def create_rebind_job(
     headless: bool,
     login_headless: bool | None = None,
     proxy: str | None = None,
+    batch_id: int | None = None,
 ) -> dict:
     """Create one persisted rebind task in the shared registration job list."""
     with _LOCK:
@@ -4465,6 +4488,7 @@ def create_rebind_job(
             job_type="rebind",
             email=target_email,
             account_id=source_id,
+            batch_id=batch_id,
         )
         row.update({
             "rebind_status": "pending",

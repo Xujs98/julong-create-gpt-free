@@ -9,6 +9,7 @@ from core.account_export import (
     _browser_activate_totp,
     _browser_enroll_totp,
     _browser_fetch,
+    _browser_session_info,
     _browser_reauthenticate,
     _totp_code_with_margin,
     _validate_reauth_otp,
@@ -237,6 +238,38 @@ class Browser2FABridgeTests(unittest.TestCase):
         self.assertEqual(caught.exception.status, 0)
         self.assertIn("异步脚本超时", caught.exception.detail)
         driver.set_script_timeout.assert_called_once_with(25.0)
+
+    def test_browser_session_info_recovers_transient_failed_to_fetch(self):
+        driver = Mock()
+        driver.current_url = "https://chatgpt.com/"
+        failed = Browser2FARequestError("session_fetch", 0, "TypeError: Failed to fetch")
+        success = {
+            "ok": True,
+            "status": 200,
+            "url": "https://chatgpt.com/api/auth/session",
+            "data": {"accessToken": "fresh-token", "user": {"email": "target@example.test"}},
+        }
+        with patch("core.account_export._browser_fetch", side_effect=[failed, success]) as fetch:
+            result = _browser_session_info(driver)
+        self.assertEqual(result["accessToken"], "fresh-token")
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_browser_session_info_stabilizes_auth_origin_before_fetch(self):
+        driver = Mock()
+        driver.current_url = "https://auth.openai.com/email-verification"
+        success = {
+            "ok": True,
+            "status": 200,
+            "url": "https://chatgpt.com/api/auth/session",
+            "data": {"accessToken": "fresh-token", "user": {"email": "target@example.test"}},
+        }
+        with patch("core.account_export._browser_fetch", return_value=success) as fetch, patch(
+            "core.roxy_registration._safe_get", return_value=True
+        ) as safe_get:
+            result = _browser_session_info(driver)
+        self.assertEqual(result["accessToken"], "fresh-token")
+        safe_get.assert_called_once()
+        fetch.assert_called_once()
 
     @patch("core.account_export._totp_code_with_margin", side_effect=["111111", "222222"])
     @patch("core.account_export._browser_fetch")

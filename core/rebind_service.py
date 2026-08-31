@@ -707,6 +707,19 @@ def submit_rebind(
         available = sum(int(item.get("available") or 0) for item in db.rebind_email_pool_summary().values())
         raise ValueError(f"所选邮箱池可用邮箱不足：需要 {requested} 个，当前 {available} 个")
 
+    # 换绑批次与注册批次共用历史表，保证顶部状态摘要和“任务日志”
+    # 弹窗可以统一展示；批次类型由 task_type 明确标记为 rebind。
+    try:
+        batch = db.create_registration_batch(
+            requested_count=requested,
+            workers=worker_count,
+            email_source="rebind",
+            task_type="rebind",
+        )
+    except Exception:
+        db.release_rebind_reservation(reservation_id, note="换绑批次创建失败，邮箱已释放")
+        raise
+    batch_id = int(batch.get("id") or 0)
     jobs: list[dict] = []
     acquired_slots = 0
     try:
@@ -724,6 +737,7 @@ def submit_rebind(
                 headless=bool(plan["headless"]),
                 login_headless=bool(plan["login_headless"]),
                 proxy=proxy,
+                batch_id=batch_id,
             )
             jobs.append(job)
         # Reserve every queue slot before handing the batch to the dispatcher.
@@ -733,6 +747,10 @@ def submit_rebind(
             if not _queue_slots.acquire(blocking=False):
                 raise ValueError("换绑任务队列已满，请稍后重试")
             acquired_slots += 1
+        # 先封口批次再交给 dispatcher，避免封口异常时 worker 已经持有
+        # semaphore 槽位而回滚路径重复释放；封口只写入 job_ids，不会触发
+        # 外部换绑动作。
+        db.seal_registration_batch(batch_id, [int(job["id"]) for job in jobs])
         _dispatcher_pool().submit(
             _run_batch,
             [int(job["id"]) for job in jobs],
@@ -751,10 +769,13 @@ def submit_rebind(
         # A failure while creating jobs can leave reserved targets that do not
         # have a persisted task row yet.
         db.release_rebind_reservation(reservation_id, note="任务提交异常，邮箱已释放")
+        db.seal_registration_batch(batch_id, [int(job.get("id") or 0) for job in jobs])
         raise
     return {
         "ok": True,
         "reservation_id": reservation_id,
+        "batch_id": batch_id,
+        "task_type": "rebind",
         "submitted": len(jobs),
         "workers": worker_count,
         "driver": plan["driver"],

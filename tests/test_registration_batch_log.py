@@ -125,6 +125,8 @@ class RegistrationBatchWebUiTests(unittest.TestCase):
         self.assertIn('id="btnRegistrationTaskLogV2"', html)
         self.assertIn('id="btnClearRegistrationTaskLog"', html)
         self.assertIn('<th>总耗时</th>', html)
+        self.assertIn('<th>类型</th>', html)
+        self.assertIn('<th>任务量</th>', html)
         self.assertIn('<th>成功率</th>', html)
         self.assertIn('function formatDurationSeconds(value)', html)
         self.assertIn('function formatRegistrationSuccessRate(batch)', html)

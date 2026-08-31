@@ -75,6 +75,8 @@ def test_live_check_config_is_presented_as_shared_rebind_mode():
 def test_rebind_jobs_appear_in_registration_list_and_reuse_log_viewer():
     source = MODERN.read_text(encoding="utf-8")
     assert "const taskType = String(j.job_type || '').toLowerCase() === 'rebind' ? '换绑' : '注册'" in source
+    assert '<th class="col-task-type">类型</th>' in source
+    assert '<td class="col-task-type"><span class="jobs-v2-task-type' in source
     assert 'data-log-job="${esc(j.id)}"' in source
     assert "类型：${taskType} · 状态：${status}" in source
     assert "可在注册页查看日志" in source
