@@ -127,6 +127,22 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertEqual(response.get_json()["email_source"], "icloud")
         submit_registration.assert_called_once_with(count=1, workers=1, email_source="icloud")
 
+    @patch("webui.app.db.domain_email_pool_summary", return_value={"total": 1, "available": 1, "used": 0, "failed": 0})
+    @patch("webui.app.svc.submit_registration", return_value=[{"id": 1}])
+    def test_jobs_explicit_domain_source_uses_imported_url_pool(self, submit_registration, _domain_summary):
+        with patch.object(email_config, "USE_EMAIL_SERVICE", True):
+            response = self.client.post(
+                "/api/jobs",
+                json={"count": 2, "workers": 1, "email_source": "cloudflare_domain"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("邮箱 + 接码URL", response.get_json()["warning"])
+        self.assertIn("不足的会失败", response.get_json()["warning"])
+        submit_registration.assert_called_once_with(
+            count=2, workers=1, email_source="cloudflare_domain"
+        )
+
     @patch("webui.app.db.domain_email_pool_summary", return_value={"total": 0, "available": 0, "used": 0, "failed": 0})
     @patch("webui.app.db.icloud_email_pool_summary", return_value={"total": 1, "available": 1, "used": 0, "failed": 0})
     @patch("webui.app.db.generic_api_email_pool_summary", return_value={"total": 0, "available": 0, "used": 0, "failed": 0})

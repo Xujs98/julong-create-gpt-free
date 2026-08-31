@@ -68,18 +68,25 @@ class EmailProviderCloudflareTests(unittest.TestCase):
             max_wait=7,
         )
 
-    @patch("core.qqmail_client.fetch_latest_otp", return_value="123456")
     @patch("core.db.get_domain_email_by_email", return_value={
         "email": "legacy@example.test",
         "status": "available",
     })
     @patch("core.email_provider.resolve_email_source", return_value="cloudflare_domain")
-    def test_legacy_domain_row_without_url_keeps_qq_imap_path(self, _resolve, get_domain, fetch_latest_otp):
-        code = email_provider.wait_for_otp("legacy@example.test", after_ts=123.0)
+    def test_domain_row_without_url_reports_material_error(self, _resolve, get_domain):
+        with self.assertRaisesRegex(RuntimeError, "缺少接码 URL"):
+            email_provider.wait_for_otp("legacy@example.test", after_ts=123.0)
 
-        self.assertEqual(code, "123456")
         get_domain.assert_called_once_with("legacy@example.test")
-        fetch_latest_otp.assert_called_once_with("legacy@example.test", after_ts=123.0)
+
+    @patch("core.db.domain_email_pool_summary", return_value={"available": 0, "total": 2})
+    @patch("core.db.claim_next_domain_email", return_value=None)
+    def test_domain_source_requires_imported_email_url_material(self, claim, summary):
+        with self.assertRaisesRegex(RuntimeError, "email----URL"):
+            email_provider._pick_from_source("cloudflare_domain")
+
+        claim.assert_called_once_with()
+        summary.assert_called_once_with()
 
 
 if __name__ == "__main__":

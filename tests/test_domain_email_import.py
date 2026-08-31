@@ -122,6 +122,46 @@ def test_domain_pool_import_deduplicates_and_keeps_copy_line():
     save.assert_called_once_with(rows)
 
 
+def test_domain_pool_claim_matches_icloud_email_url_semantics():
+    rows = [
+        {"id": 1, "email": "legacy@example.test", "status": "available"},
+        {
+            "id": 2,
+            "email": "first@example.test",
+            "code_url": "https://mail.example.test/first",
+            "status": "available",
+        },
+        {
+            "id": 3,
+            "email": "second@example.test",
+            "code_url": "https://mail.example.test/second",
+            "status": "available",
+        },
+    ]
+    with patch.object(db, "_load_domain_pool", return_value=rows), patch.object(
+        db, "_save_domain_pool"
+    ) as save:
+        claimed = db.claim_next_domain_email()
+
+    assert claimed["email"] == "first@example.test"
+    assert claimed["code_url"] == "https://mail.example.test/first"
+    assert claimed["status"] == "used"
+    assert rows[0]["status"] == "available"
+    assert rows[1]["status"] == "used"
+    assert rows[1]["used_at"]
+    save.assert_called_once_with(rows)
+
+
+def test_domain_pool_claim_returns_none_without_available_url_material():
+    rows = [{"id": 1, "email": "legacy@example.test", "status": "available"}]
+    with patch.object(db, "_load_domain_pool", return_value=rows), patch.object(
+        db, "_save_domain_pool"
+    ) as save:
+        assert db.claim_next_domain_email() is None
+
+    save.assert_not_called()
+
+
 def test_domain_pool_is_exposed_by_modern_pool_api():
     client = _client()
     rows = [{"email": "one@example.test", "status": "available", "copy_line": "one@example.test----https://mail.example.test/code"}]
@@ -202,7 +242,9 @@ def test_legacy_domain_rows_round_trip_with_new_import_and_statuses(tmp_path, mo
         assert legacy["copy_line"] == "legacy@example.test"
         imported = next(row for row in available if row["email"] == "imported@example.test")
         assert imported["copy_line"].endswith("----https://mail.example.test/imported")
-        assert db.domain_email_pool_summary()["available"] == 2
+        summary = db.domain_email_pool_summary()
+        assert summary["available"] == 1
+        assert summary["missing_url"] == 1
         db.release_domain_email("legacy@example.test", status="disabled", note="旧 IMAP 地址停用")
         summary = db.domain_email_pool_summary()
         assert summary["available"] == 1
@@ -254,3 +296,33 @@ def test_domain_pool_delete_filter_and_summary_api_contracts():
     assert summary_body["domain_total"] == 4
     assert summary_body["domain_available"] == 1
     assert summary_body["pool_by_source"]["cloudflare_domain"]["disabled"] == 1
+
+
+def test_rebind_domain_summary_and_reservation_skip_rows_without_url():
+    rows = [
+        {"id": 1, "email": "legacy@example.test", "status": "available"},
+        {
+            "id": 2,
+            "email": "ready@example.test",
+            "code_url": "https://mail.example.test/ready",
+            "status": "available",
+        },
+    ]
+    with patch.object(db, "_load_domain_pool", return_value=rows), patch.object(
+        db, "_save_domain_pool"
+    ):
+        summary = db.list_rebind_email_pool_summary()["cloudflare_domain"]
+        reserved = db.reserve_rebind_emails(
+            ["cloudflare_domain"], 1, reservation_id="domain-url-only"
+        )
+
+    assert summary["available"] == 1
+    assert summary["missing_url"] == 1
+    assert summary["items"] == [{
+        "id": 2,
+        "email": "ready@example.test",
+        "source": "cloudflare_domain",
+    }]
+    assert reserved[0]["email"] == "ready@example.test"
+    assert reserved[0]["code_url"] == "https://mail.example.test/ready"
+    assert rows[0]["status"] == "available"

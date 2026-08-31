@@ -6424,7 +6424,7 @@ function renderAccounts() {
       <td class="col-check"><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="col-id">#${esc(r.id)}</td>
       <td class="col-email" title="${esc(r.email || '')}">
-        <div class="acc-v2-email"><div class="acc-v2-email-line"><button type="button" class="acc-v2-email-copy" data-account-copy-email="${esc(r.email)}" title="点击复制邮箱" aria-label="复制邮箱 ${esc(r.email)}"><span class="acc-v2-email-copy-label">${esc(r.email)}</span>${accountIcons.copy}</button>${_accountProxyBadge(r)}${r.email_source === 'icloud' && r.icloud_code_url_available ? `<button type="button" class="acc-v2-icloud-url-copy" data-account-copy-secret="icloud_code_url" data-account-id="${esc(r.id)}" title="复制 iCloud 接码 URL" aria-label="复制 iCloud 接码 URL">${accountIcons.urlCopy}</button>` : ''}</div>${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div>
+        <div class="acc-v2-email"><div class="acc-v2-email-line"><button type="button" class="acc-v2-email-copy" data-account-copy-email="${esc(r.email)}" title="点击复制邮箱" aria-label="复制邮箱 ${esc(r.email)}"><span class="acc-v2-email-copy-label">${esc(r.email)}</span>${accountIcons.copy}</button>${_accountProxyBadge(r)}${['icloud', 'cloudflare_domain'].includes(r.email_source) && r.email_code_url_available ? `<button type="button" class="acc-v2-icloud-url-copy" data-account-copy-secret="url" data-account-id="${esc(r.id)}" title="复制邮箱接码 URL" aria-label="复制邮箱接码 URL">${accountIcons.urlCopy}</button>` : ''}</div>${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div>
         <div class="acc-v2-sub">${esc(r.user_name || '-')}</div>${_accountPasswordCell(r)}
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
@@ -6514,7 +6514,7 @@ function clearSelectedAccountsV2() {
 // 换绑目标邮箱池只展示本地池；可用数量来自 /api/summary 的 pool_by_source。
 const REBIND_POOL_DEFS = [
   {source: 'icloud', label: 'iCloud 邮箱池', hint: '格式与 iCloud 邮箱池一致'},
-  {source: 'cloudflare_domain', label: '域名邮箱池', hint: 'Cloudflare 域名邮箱池'},
+  {source: 'cloudflare_domain', label: '域名邮箱池', hint: '邮箱 + HTML 接码 URL，与 iCloud 同协议'},
 ];
 function rebindPoolAvailable(source) {
   const value = REBIND_POOL_SUMMARY?.[source];
@@ -6961,7 +6961,7 @@ async function onAccountsBodyClick(e) {
           copySecretBtn.classList.remove('is-copied');
           copySecretBtn.innerHTML = originalHtml;
         }, 1600);
-      } else if (field === 'access_token' || field === 'session' || field === 'totp_code' || field === 'icloud_code_url') {
+      } else if (field === 'access_token' || field === 'session' || field === 'totp_code' || field === 'icloud_code_url' || field === 'url') {
         copySecretBtn.classList.add('is-copied');
         copySecretBtn.innerHTML = accountV2Icons().check;
         window.setTimeout(() => {
@@ -6970,7 +6970,7 @@ async function onAccountsBodyClick(e) {
           copySecretBtn.innerHTML = originalHtml;
         }, 1200);
       }
-      showToast(field === 'access_token' ? 'AT 已复制' : field === 'session' ? 'Session 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'totp_code' ? '2FA 动态码已复制（30 秒内有效）' : field === 'password' ? '密码已复制' : field === 'icloud_code_url' ? 'iCloud 接码 URL 已复制' : '账号整行已复制');
+      showToast(field === 'access_token' ? 'AT 已复制' : field === 'session' ? 'Session 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : field === 'totp_code' ? '2FA 动态码已复制（30 秒内有效）' : field === 'password' ? '密码已复制' : (field === 'icloud_code_url' || field === 'url') ? '邮箱接码 URL 已复制' : '账号整行已复制');
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
@@ -9148,7 +9148,7 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
-  if (['EMAIL_DOMAIN','QQ_EMAIL','QQ_IMAP_PASSWORD'].includes(key)) return ['Cloudflare 域名邮箱', 'Cloudflare 转发到 QQ 邮箱后的 IMAP 收信配置'];
+  if (['EMAIL_DOMAIN','QQ_EMAIL','QQ_IMAP_PASSWORD'].includes(key)) return ['旧版域名转发兼容', '新版域名邮箱池直接使用邮箱 + 接码 URL 素材'];
   return ['其他邮箱配置', ''];
 }
 

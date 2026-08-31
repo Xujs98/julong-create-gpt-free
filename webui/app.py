@@ -242,7 +242,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
-        "icloud_code_url_available",
+        "icloud_code_url_available", "email_code_url_available",
         # 提链成功/失败时才需要。
         "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
@@ -3407,11 +3407,11 @@ def create_app(auth_code: str | None = None) -> Flask:
         if "gptmail" in sources or "mailnest" in sources or "cloudmail" in sources or "cloudflare" in sources:
             # 临时邮箱在任务开始时动态生成，不需要本地邮箱池容量提示。
             warning = ""
-        elif "cloudflare_domain" in sources:
+        elif sources == ["cloudflare_domain"]:
             pool = db.domain_email_pool_summary()
             warning = ""
-            if sources == ["cloudflare_domain"] and pool.get("available", 0) < count:
-                warning = f"域名邮箱池仅 {pool.get('available', 0)} 个可用，少于任务数 {count}，不足的会自动生成"
+            if pool.get("available", 0) < count:
+                warning = f"域名邮箱池仅 {pool.get('available', 0)} 个‘邮箱 + 接码URL’素材可用，少于任务数 {count}，不足的会失败"
         elif sources == ["generic_api"]:
             pool = db.generic_api_email_pool_summary()
             warning = ""
@@ -3430,6 +3430,8 @@ def create_app(auth_code: str | None = None) -> Flask:
                 available += db.generic_api_email_pool_summary().get("available", 0)
             if "icloud" in sources:
                 available += db.icloud_email_pool_summary().get("available", 0)
+            if "cloudflare_domain" in sources:
+                available += db.domain_email_pool_summary().get("available", 0)
             warning = ""
             if available < count:
                 warning = f"多个邮箱池合计仅 {available} 个可用，少于任务数 {count}，不足的会失败"

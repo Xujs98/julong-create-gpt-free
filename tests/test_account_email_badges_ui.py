@@ -12,7 +12,7 @@ TEMPLATE = ROOT / "webui" / "templates" / "index.html"
 ROXY_REGISTRATION = ROOT / "core" / "roxy_registration.py"
 
 
-def test_account_email_row_has_proxy_badge_and_icloud_url_action():
+def test_account_email_row_has_proxy_badge_and_mail_url_action():
     source = TEMPLATE.read_text(encoding="utf-8")
 
     assert "proxy_country_code" in source
@@ -21,9 +21,10 @@ def test_account_email_row_has_proxy_badge_and_icloud_url_action():
     assert "table-layout: fixed" in source
     assert ".accounts-table-v2 .col-email { width: 280px; min-width: 280px; }" in source
     assert "overflow: visible; text-overflow: clip; white-space: normal" in source
-    assert "data-account-copy-secret=\"icloud_code_url\"" in source
+    assert "['icloud', 'cloudflare_domain'].includes(r.email_source)" in source
+    assert "data-account-copy-secret=\"url\"" in source
     assert "acc-v2-icloud-url-copy" in source
-    assert "iCloud 接码 URL 已复制" in source
+    assert "邮箱接码 URL 已复制" in source
 
 
 def test_proxy_country_code_accepts_geo_and_proxy_pool_formats():
@@ -112,6 +113,28 @@ def test_icloud_url_secret_is_scoped_to_icloud_accounts():
     assert response.status_code == 200
     assert response.get_json()["value"] == ""
     lookup.assert_not_called()
+
+
+def test_domain_account_url_secret_uses_domain_pool():
+    account = {"id": 8, "email": "user@example.test", "email_source": "cloudflare_domain"}
+    with patch(
+        "webui.app.db.get_domain_email_by_email",
+        return_value={"code_url": "https://mail.example.test/code/user"},
+    ) as lookup:
+        assert _account_secret_value(account, "url") == "https://mail.example.test/code/user"
+
+    lookup.assert_called_once_with("user@example.test")
+
+
+def test_account_decoration_exposes_domain_code_url_availability():
+    account = {"id": 8, "email": "user@example.test", "email_source": "cloudflare_domain"}
+    with patch.object(db, "_load_domain_pool", return_value=[{
+        "email": "user@example.test",
+        "code_url": "https://mail.example.test/code/user",
+    }]):
+        decorated = db._decorate_account(account)
+
+    assert decorated["email_code_url_available"] is True
 
 
 def test_account_token_cell_exposes_at_and_saved_session_copy_actions():

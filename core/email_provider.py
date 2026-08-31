@@ -4,7 +4,7 @@
 
 EMAIL_SOURCE 支持单个或多个来源：
     "outlook"
-    "cloudflare_domain"   # 自有域名 + QQ IMAP
+    "cloudflare_domain"   # 域名邮箱池（邮箱 + HTML 取码 URL）
     "cloudflare"          # Cloudflare Worker 临时邮箱
     "generic_api"
     "icloud"
@@ -55,8 +55,15 @@ def _pick_from_source(source: str) -> str:
         from core.cf_temp_mail_client import pick_account
         return pick_account().email
     if source == "cloudflare_domain":
-        from core.qqmail_client import pick_domain_email
-        return pick_domain_email()
+        from core import db
+        row = db.claim_next_domain_email()
+        if row is None:
+            summary = db.domain_email_pool_summary()
+            raise RuntimeError(
+                f"域名邮箱池没有可用的‘邮箱 + 接码URL’素材: {summary}，"
+                "请按 email----URL 格式导入"
+            )
+        return str(row.get("email") or "").strip()
     if source == "generic_api":
         from core.generic_api_mail_client import pick_account
         return pick_account().email
@@ -114,14 +121,6 @@ def resolve_email_source(email: str) -> str:
         return "outlook"
     if db._find_domain_email(db._load_domain_pool(), email):  # 内部轻量查询，仅本项目使用
         return "cloudflare_domain"
-    # 兜底：如果域名匹配 EMAIL_DOMAIN，则按域名邮箱处理
-    try:
-        from config import email as _email_cfg
-        domain = (_email_cfg.EMAIL_DOMAIN or "").lower().strip()
-        if domain and domain != "-" and email.lower().endswith("@" + domain):
-            return "cloudflare_domain"
-    except Exception:
-        pass
     return parse_email_sources()[0]
 
 
@@ -172,23 +171,22 @@ def wait_for_otp(
         from core.cf_temp_mail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
     if source == "cloudflare_domain":
-        # 导入的域名邮箱可沿用 iCloud 的 HTML 取码格式；历史自动生成的
-        # 记录没有 code_url，继续使用 QQ IMAP 收码，保持旧流程不变。
+        # 域名邮箱和 iCloud 邮箱来自同一类素材生成项目，均通过每条记录
+        # 自带的 HTML 接码 URL 取码，不读取 EMAIL_DOMAIN/QQ IMAP 配置。
         from core import db
         domain_row = db.get_domain_email_by_email(email)
         domain_code_url = str((domain_row or {}).get("code_url") or "").strip()
-        if domain_code_url:
-            from core.icloud_client import fetch_latest_otp
-            excluded = {str(code or "").strip() for code in (exclude_codes or []) if str(code or "").strip()}
-            return fetch_latest_otp(
-                email,
-                code_url=domain_code_url,
-                after_ts=after_ts,
-                exclude_codes=excluded,
-                **extra_kwargs,
-            )
-        from core.qqmail_client import fetch_latest_otp
-        return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
+        if not domain_code_url:
+            raise RuntimeError(f"域名邮箱缺少接码 URL，请重新导入 email----URL 素材: {email}")
+        from core.icloud_client import fetch_latest_otp
+        excluded = {str(code or "").strip() for code in (exclude_codes or []) if str(code or "").strip()}
+        return fetch_latest_otp(
+            email,
+            code_url=domain_code_url,
+            after_ts=after_ts,
+            exclude_codes=excluded,
+            **extra_kwargs,
+        )
     if source == "generic_api":
         from core.generic_api_mail_client import fetch_latest_otp
         return fetch_latest_otp(email, after_ts=after_ts, **extra_kwargs)
@@ -216,7 +214,7 @@ def release_email(email: str, status: str = "available", note: str | None = None
         from core.cf_temp_mail_client import release_account
         release_account(email, status=status, note=note)
     elif source == "cloudflare_domain":
-        from core.qqmail_client import release_domain_email
+        from core.db import release_domain_email
         release_domain_email(email, status=status, note=note)
     elif source == "generic_api":
         from core.generic_api_mail_client import release_account

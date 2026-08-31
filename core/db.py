@@ -1090,9 +1090,19 @@ def _decorate_account(row: dict) -> dict:
         out["proxy_region"] = proxy_geo.get("region") or ""
         out["proxy_city"] = proxy_geo.get("city") or ""
         out["proxy_exit_ip"] = proxy_geo.get("ip") or ""
-    if str(out.get("email_source") or "").strip().lower() == "icloud":
-        icloud_row = _find_by_email(_load_icloud_emails(), str(out.get("email") or ""))
-        out["icloud_code_url_available"] = bool(str((icloud_row or {}).get("code_url") or "").strip())
+    email_source = str(out.get("email_source") or "").strip().lower()
+    email_value = str(out.get("email") or "")
+    code_url_row = None
+    if email_source == "icloud":
+        code_url_row = _find_by_email(_load_icloud_emails(), email_value)
+    elif email_source == "cloudflare_domain":
+        code_url_row = _find_domain_email(_load_domain_pool(), email_value)
+    code_url_available = bool(str((code_url_row or {}).get("code_url") or "").strip())
+    if email_source in {"icloud", "cloudflare_domain"}:
+        out["email_code_url_available"] = code_url_available
+    if email_source == "icloud":
+        # Backward-compatible field for older WebUI clients.
+        out["icloud_code_url_available"] = code_url_available
     plan_status = out.get("plan_check_status")
     if plan_status in {"queued", "running"}:
         try:
@@ -2976,6 +2986,14 @@ def _save_rebind_pool_rows(source: str, rows: list[dict]) -> None:
         raise ValueError(f"未知邮箱池：{source}")
 
 
+def _rebind_pool_row_usable(source: str, row: dict) -> bool:
+    """Return whether a pool row contains the material its driver requires."""
+    source = str(source or "").strip().lower()
+    if source in {"icloud", "cloudflare_domain", "generic_api"}:
+        return bool(str(row.get("code_url") or row.get("url") or "").strip())
+    return True
+
+
 def list_rebind_email_pool_summary() -> dict[str, dict]:
     """Return pool counts used by the rebind dialog.
 
@@ -2990,8 +3008,12 @@ def list_rebind_email_pool_summary() -> dict[str, dict]:
             items: list[dict] = []
             for row in rows:
                 status = str(row.get("status") or "available").strip().lower()
+                usable = _rebind_pool_row_usable(source, row)
+                if status == "available" and not usable:
+                    counts["missing_url"] = counts.get("missing_url", 0) + 1
+                    continue
                 counts[status] = counts.get(status, 0) + 1
-                if status == "available":
+                if status == "available" and usable:
                     items.append({
                         "id": row.get("id"),
                         "email": row.get("email"),
@@ -3032,7 +3054,10 @@ def reserve_rebind_emails(
         available: list[tuple[str, dict]] = []
         for source in normalized:
             for row in sorted(loaded[source], key=lambda item: int(item.get("id") or 0)):
-                if str(row.get("status") or "available").strip().lower() == "available":
+                if (
+                    str(row.get("status") or "available").strip().lower() == "available"
+                    and _rebind_pool_row_usable(source, row)
+                ):
                     available.append((source, row))
         if len(available) < requested:
             return []
@@ -5411,25 +5436,44 @@ def import_domain_emails(records: list[dict]) -> tuple[int, int]:
 import_cloudflare_domain_emails = import_domain_emails
 
 
-def claim_next_domain_email(email: str) -> dict:
-    """记录一个新的域名邮箱地址到池中（标记为 available）。"""
+def claim_next_domain_email(email: str | None = None) -> dict | None:
+    """原子领取域名邮箱池中的 ``邮箱 + code_url`` 素材。
+
+    ``email`` 参数仅保留给旧版 QQ 转发生成器登记地址；正常注册不再生成
+    随机域名邮箱，也不依赖 ``EMAIL_DOMAIN``，而是与 iCloud 邮箱池一样从
+    已导入素材中领取最早的 available 记录并标记为 used。
+    """
     with _LOCK:
-        rows = _load_domain_pool()
-        if _find_domain_email(rows, email):
-            # 已存在，直接返回
-            row = _find_domain_email(rows, email)
-            return row
-        row = {
-            "id": _next_id(rows),
-            "email": email,
-            "status": "available",
-            "used_at": None,
-            "note": None,
-            "created_at": _now(),
-        }
-        rows.append(row)
+        rows = sorted(_load_domain_pool(), key=lambda item: int(item.get("id") or 0))
+        explicit_email = str(email or "").strip()
+        if explicit_email:
+            row = _find_domain_email(rows, explicit_email)
+            if row is not None:
+                return dict(row)
+            row = {
+                "id": _next_id(rows),
+                "email": explicit_email,
+                "status": "available",
+                "used_at": None,
+                "note": None,
+                "created_at": _now(),
+            }
+            rows.append(row)
+            _save_domain_pool(rows)
+            return dict(row)
+
+        row = next((
+            item for item in rows
+            if item.get("status") == "available"
+            and bool(str(item.get("code_url") or item.get("url") or "").strip())
+        ), None)
+        if row is None:
+            return None
+        row["status"] = "used"
+        row["used_at"] = _now()
+        row["note"] = None
         _save_domain_pool(rows)
-        return dict(row)
+        return _decorate_domain_email(row)
 
 
 def release_domain_email(email: str, status: str = "available", note: str | None = None) -> None:
@@ -5489,6 +5533,9 @@ def domain_email_pool_summary() -> dict:
         out: dict[str, int] = {"available": 0, "used": 0, "failed": 0}
         for row in _load_domain_pool():
             s = row.get("status") or "available"
+            if s == "available" and not str(row.get("code_url") or row.get("url") or "").strip():
+                out["missing_url"] = out.get("missing_url", 0) + 1
+                continue
             out[s] = out.get(s, 0) + 1
         out["total"] = sum(v for k, v in out.items() if k != "total")
         return out

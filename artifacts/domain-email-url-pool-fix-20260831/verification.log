@@ -1,0 +1,70 @@
+Domain email URL-pool repair verification
+Date: 2026-08-31
+Baseline commit: 0f0b4582e800fe327e9c1862b124b6979b27be39
+
+Baseline input:
+  Registration source=cloudflare_domain
+  EMAIL_DOMAIN is blank
+  Domain pool contains imported email----code_url rows
+  Literal failure: QQMailClientError: EMAIL_DOMAIN not configured
+
+Modified behavior:
+  cloudflare_domain atomically claims an imported email + code_url row.
+  OTP reads the row URL through the same HTML and dynamic /data parser as iCloud.
+  EMAIL_DOMAIN and QQ IMAP settings are no longer part of the active registration path.
+  Registration/rebind counts exclude legacy rows without a code URL.
+  Account rows expose the same URL-copy action for iCloud and domain email accounts.
+
+$ COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION=False PROTOCOL_BROWSER_LIKE_FLOW=False CODEX_SMS_NUMBER_TYPE=auto python3 -m pytest -q tests/test_email_provider_cloudflare.py tests/test_domain_email_import.py tests/test_account_email_badges_ui.py tests/test_icloud_client.py tests/test_icloud_webui.py tests/test_account_rebind_backend.py tests/test_account_rebind_ui.py
+................................................................         [100%]
+64 passed in 13.56s
+exit=0
+
+$ COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION=False PROTOCOL_BROWSER_LIKE_FLOW=False CODEX_SMS_NUMBER_TYPE=auto python3 -m pytest -q
+..................................................................       [100%]
+642 passed in 66.68s (0:01:06)
+exit=0
+
+$ python3 -m compileall -q config/email.py core/db.py core/email_provider.py webui/app.py webui/config_editor.py tests/test_account_email_badges_ui.py tests/test_domain_email_import.py tests/test_email_provider_cloudflare.py tests/test_icloud_webui.py
+output=<empty>
+exit=0
+
+$ git diff --check
+output=<empty>
+exit=0
+
+Real pool smoke input:
+  source=cloudflare_domain; claim one saved available domain-email row; request its saved code_url; release row
+Literal sanitized output:
+  claimed=true
+  source=cloudflare_domain
+  code_url_present=true
+  page_http_status=200
+  page_content_type=text/html; charset=utf-8
+  dynamic_data_detected=true
+  data_http_status=200
+  data_json_object=true
+  data_has_latest=true
+  otp_parser_executed=true
+  released=true
+  available_before=10
+  available_after=10
+exit=0
+
+$ artifacts/domain-email-url-pool-fix-20260831/rollback.sh
+rollback restored domain email URL-pool files from 0f0b4582e800fe327e9c1862b124b6979b27be39
+exit=0
+
+$ gzip -dc domain-email-url-pool-fix.patch.gz | git apply && shasum -a 256 -c modified-sha256.txt
+.env.example: OK
+config/email.py: OK
+core/db.py: OK
+core/email_provider.py: OK
+webui/app.py: OK
+webui/config_editor.py: OK
+webui/templates/index.html: OK
+tests/test_account_email_badges_ui.py: OK
+tests/test_domain_email_import.py: OK
+tests/test_email_provider_cloudflare.py: OK
+tests/test_icloud_webui.py: OK
+exit=0
