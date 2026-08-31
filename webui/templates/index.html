@@ -6367,7 +6367,7 @@ function _tokenCellV2(r) {
   const liveAt = r.live_checked_at || '';
   const liveAtText = _fmtPlanTime(liveAt, false);
   const liveUpdatedHtml = ['live', 'failed', 'deactivated'].includes(live) && liveAtText
-    ? `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:var(--muted)">更新时间: ${esc(liveAtText)}</div>`
+    ? `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:var(--muted);font-size:9px;">更新时间: ${esc(liveAtText)}</div>`
     : '';
   let liveHtml = '';
   if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}">查活: 正常</div>${liveUpdatedHtml}`;
