@@ -1,0 +1,30 @@
+$ git diff --check 3c15892 389a39b
+exit=0
+$ python3 -m compileall -q core webui config
+exit=0
+$ COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION=False PROTOCOL_BROWSER_LIKE_FLOW=False CODEX_SMS_NUMBER_TYPE=auto python3 -m pytest -q
+........................................................................ [ 11%]
+........................................................................ [ 22%]
+........................................................................ [ 34%]
+........................................................................ [ 45%]
+........................................................................ [ 57%]
+........................................................................ [ 68%]
+........................................................................ [ 80%]
+........................................................................ [ 91%]
+....................................................                     [100%]
+628 passed in 62.98s (0:01:02)
+exit=0
+$ tar -tzf artifacts/account-log-management/modified-source.tar.gz | wc -l
+       9
+exit=0
+$ bash -n artifacts/account-log-management/rollback.sh
+exit=0
+
+$ git -C /var/folders/7t/91wns6qx0d31rzn301nvv3y00000gn/T/account-log-patch-9fd641pd apply --check /Users/xujs/.docker_dir/turb-gpt-free-register/artifacts/account-log-management/account-log-management.patch
+exit=0
+
+$ ROLLBACK_MODE=dry-run bash /Users/xujs/.docker_dir/turb-gpt-free-register/artifacts/account-log-management/rollback.sh 389a39b437ea6ce2d06aa880ba7e4c460f2a33e4
+exit=0
+$ git -C /var/folders/7t/91wns6qx0d31rzn301nvv3y00000gn/T/account-log-rollback-oubfavt3 diff --cached --name-only | wc -l
+9
+exit=0

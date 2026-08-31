@@ -1,0 +1,697 @@
+diff --git a/.env.example b/.env.example
+index 9562ec6..d2218de 100644
+--- a/.env.example
++++ b/.env.example
+@@ -8,6 +8,13 @@
+ WEBUI_AUTH_CODE=
+ # 可选：Session Cookie 签名密钥；留空时从固定授权码派生，修改授权码会使已有登录失效
+ WEBUI_SESSION_SECRET=
++
++# ---- 日志管理 ----
++# 账号级日志自动清理：覆盖查活、提链、重设2FA和 Codex 补跑日志，不影响注册任务日志
++ACCOUNT_LOG_AUTO_CLEANUP=false
++# 账号级日志保留天数，超过后按文件最后修改时间清理
++ACCOUNT_LOG_RETENTION_DAYS=30
++
+ # ---- 功能开关 ----
+ # 启用 Codex OAuth: 注册成功后自动跑 Codex 授权（全新session+接码），落盘 codex-邮箱.json
+ ENABLE_CODEX_AUTO=
+diff --git a/config/__init__.py b/config/__init__.py
+index b1ec955..4aad367 100644
+--- a/config/__init__.py
++++ b/config/__init__.py
+@@ -182,6 +182,8 @@ from config.webui import (
+     WEBUI_JOB_LOG_AUTO_REFRESH,
+     WEBUI_JOB_LOG_REFRESH_INTERVAL,
+     WEBUI_REGISTRATION_JOB_RETENTION_COUNT,
++    ACCOUNT_LOG_AUTO_CLEANUP,
++    ACCOUNT_LOG_RETENTION_DAYS,
+ )
+
+ # ---------- 账号查活 ----------
+@@ -310,7 +312,7 @@ __all__ = [
+     "ENABLE_2FA",
+     # webui
+     "WEBUI_JOB_LOG_AUTO_REFRESH", "WEBUI_JOB_LOG_REFRESH_INTERVAL",
+-    "WEBUI_REGISTRATION_JOB_RETENTION_COUNT",
++    "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "ACCOUNT_LOG_AUTO_CLEANUP", "ACCOUNT_LOG_RETENTION_DAYS",
+     # live check
+     "LIVE_CHECK_DRIVER", "LIVE_CHECK_HEADLESS",
+     "REBIND_LOGIN_DRIVER", "REBIND_ACTION_DRIVER", "REBIND_HYBRID_MODE",
+diff --git a/config/webui.py b/config/webui.py
+index 16d79cc..f425039 100644
+--- a/config/webui.py
++++ b/config/webui.py
+@@ -1,5 +1,5 @@
+ # -*- coding: utf-8 -*-
+-"""WebUI 展示与日志轮询配置。"""
++"""WebUI 展示与日志管理配置。"""
+ from config.env_loader import apply_env_overrides
+
+
+@@ -13,8 +13,15 @@ WEBUI_JOB_LOG_REFRESH_INTERVAL: int = 2
+ # 其他非终态任务始终保留。超出数量的任务记录和对应日志由后台清理。
+ WEBUI_REGISTRATION_JOB_RETENTION_COUNT: int = 50
+
++# 账号页查活、提链、2FA 重设和 Codex 补跑日志的自动清理策略。
++# 关闭时保留所有账号日志；开启后按文件修改时间清理超过指定天数的日志。
++ACCOUNT_LOG_AUTO_CLEANUP: bool = False
++ACCOUNT_LOG_RETENTION_DAYS: int = 30
++
+ apply_env_overrides(globals(), {
+     'WEBUI_JOB_LOG_AUTO_REFRESH': 'bool',
+     'WEBUI_JOB_LOG_REFRESH_INTERVAL': 'int',
+     'WEBUI_REGISTRATION_JOB_RETENTION_COUNT': 'int',
++    'ACCOUNT_LOG_AUTO_CLEANUP': 'bool',
++    'ACCOUNT_LOG_RETENTION_DAYS': 'int',
+ })
+diff --git a/core/account_log_service.py b/core/account_log_service.py
+new file mode 100644
+index 0000000..0563456
+--- /dev/null
++++ b/core/account_log_service.py
+@@ -0,0 +1,154 @@
++# -*- coding: utf-8 -*-
++"""账号级日志清理服务。
++
++账号页的查活、提链、2FA 重设和 Codex 补跑日志都按邮箱写在项目根的
++``注册日志``目录中。本模块只匹配这四类固定前缀，注册任务 UUID 日志和
++其他运行日志保持不受影响。
++"""
++from __future__ import annotations
++
++import logging
++import threading
++import time
++from pathlib import Path
++
++logger = logging.getLogger(__name__)
++
++_PROJECT_ROOT = Path(__file__).resolve().parent.parent
++_LOG_DIR = _PROJECT_ROOT / "注册日志"
++_ACCOUNT_LOG_PATTERNS = (
++    "live-check-*.log",
++    "extract-link-*.log",
++    "twofa-reset-*.log",
++    "codex-retry-*.log",
++)
++_AUTO_CLEANUP_INTERVAL = 6 * 60 * 60
++_SCHEDULER_LOCK = threading.Lock()
++_SCHEDULER_STARTED = False
++
++
++def account_log_paths(log_dir: Path | None = None) -> list[Path]:
++    """返回账号级日志文件，按路径去重并限制在目标目录内。"""
++    root = Path(log_dir or _LOG_DIR).expanduser()
++    try:
++        root = root.resolve(strict=False)
++    except (OSError, RuntimeError, ValueError):
++        return []
++    if not root.exists() or not root.is_dir():
++        return []
++    found: dict[Path, None] = {}
++    for pattern in _ACCOUNT_LOG_PATTERNS:
++        for path in root.glob(pattern):
++            try:
++                resolved = path.resolve(strict=False)
++            except (OSError, RuntimeError, ValueError):
++                continue
++            if resolved.parent != root or not path.is_file():
++                continue
++            found[resolved] = None
++    return sorted(found, key=lambda item: item.name.lower())
++
++
++def _safe_days(value: object, default: int = 30) -> int:
++    try:
++        days = int(value)
++    except (TypeError, ValueError):
++        days = default
++    return max(1, min(3650, days))
++
++
++def cleanup_account_logs(
++    *,
++    older_than_days: int | None = None,
++    all_logs: bool = False,
++    log_dir: Path | None = None,
++) -> dict:
++    """清理账号级日志。
++
++    ``all_logs=True`` 清空全部账号日志；否则按文件修改时间删除超过
++    ``older_than_days`` 的日志。正在写入的日志只要尚未达到年龄阈值就会
++    保留，避免影响当前任务。
++    """
++    paths = account_log_paths(log_dir)
++    cutoff = None
++    days = None
++    if not all_logs:
++        days = _safe_days(older_than_days)
++        cutoff = time.time() - days * 24 * 60 * 60
++    deleted = 0
++    deleted_bytes = 0
++    skipped = 0
++    failed: list[dict[str, str]] = []
++    for path in paths:
++        try:
++            stat = path.stat()
++            if cutoff is not None and stat.st_mtime > cutoff:
++                skipped += 1
++                continue
++            deleted_bytes += int(stat.st_size or 0)
++            path.unlink()
++            deleted += 1
++        except FileNotFoundError:
++            continue
++        except OSError as exc:
++            failed.append({"file": path.name, "error": f"{type(exc).__name__}: {exc}"})
++    return {
++        "ok": not failed,
++        "mode": "all" if all_logs else "older_than_days",
++        "days": days,
++        "scanned": len(paths),
++        "deleted": deleted,
++        "deleted_bytes": deleted_bytes,
++        "skipped": skipped,
++        "failed": failed,
++        "failed_count": len(failed),
++        "log_dir": str(Path(log_dir or _LOG_DIR)),
++    }
++
++
++def cleanup_account_logs_from_config() -> dict:
++    """按当前配置执行一次自动清理；关闭开关时仅返回 skipped。"""
++    try:
++        from config import webui as webui_config
++
++        enabled = bool(getattr(webui_config, "ACCOUNT_LOG_AUTO_CLEANUP", False))
++        days = getattr(webui_config, "ACCOUNT_LOG_RETENTION_DAYS", 30)
++    except Exception:
++        enabled, days = False, 30
++    if not enabled:
++        return {"ok": True, "enabled": False, "mode": "disabled", "deleted": 0, "skipped": 0}
++    result = cleanup_account_logs(older_than_days=days)
++    result["enabled"] = True
++    return result
++
++
++def start_auto_cleanup_scheduler() -> bool:
++    """启动单例后台清理线程；首次启动立即按配置清理一次。"""
++    global _SCHEDULER_STARTED
++    with _SCHEDULER_LOCK:
++        if _SCHEDULER_STARTED:
++            return False
++        _SCHEDULER_STARTED = True
++
++    def _run() -> None:
++        while True:
++            try:
++                result = cleanup_account_logs_from_config()
++                if result.get("enabled") and result.get("deleted"):
++                    logger.info("[AccountLog] 自动清理完成：删除 %s 个账号日志", result.get("deleted"))
++                if result.get("failed_count"):
++                    logger.warning("[AccountLog] 有 %s 个账号日志删除失败", result.get("failed_count"))
++            except Exception:
++                logger.exception("[AccountLog] 自动清理失败")
++            time.sleep(_AUTO_CLEANUP_INTERVAL)
++
++    threading.Thread(target=_run, name="account-log-cleanup", daemon=True).start()
++    return True
++
++
++__all__ = [
++    "account_log_paths",
++    "cleanup_account_logs",
++    "cleanup_account_logs_from_config",
++    "start_auto_cleanup_scheduler",
++]
+diff --git a/tests/test_account_log_service.py b/tests/test_account_log_service.py
+new file mode 100644
+index 0000000..310b70f
+--- /dev/null
++++ b/tests/test_account_log_service.py
+@@ -0,0 +1,94 @@
++# -*- coding: utf-8 -*-
++import os
++import tempfile
++import time
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++from core import account_log_service
++from webui.app import create_app
++from webui import config_editor
++
++
++class AccountLogServiceTests(unittest.TestCase):
++    def _client(self):
++        # API tests should not observe the process-wide scheduler's immediate
++        # startup cleanup call.
++        with patch("webui.app.account_log_service.start_auto_cleanup_scheduler"):
++            client = create_app(auth_code="account-log-test").test_client()
++        client.environ_base["HTTP_X_AUTH_CODE"] = "account-log-test"
++        return client
++
++    def test_only_account_log_prefixes_are_selected(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            for name in (
++                "live-check-user@example.com.log",
++                "extract-link-user@example.com.log",
++                "twofa-reset-user@example.com.log",
++                "codex-retry-user@example.com.log",
++                "registration-job-uuid.log",
++            ):
++                (root / name).write_text("log", encoding="utf-8")
++            found = account_log_service.account_log_paths(root)
++            self.assertEqual(len(found), 4)
++            self.assertNotIn(root / "registration-job-uuid.log", found)
++
++    def test_cleanup_by_age_and_all_modes(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            old = root / "live-check-old@example.com.log"
++            fresh = root / "extract-link-fresh@example.com.log"
++            untouched = root / "7b2a4a2c-uuid.log"
++            old.write_text("old", encoding="utf-8")
++            fresh.write_text("fresh", encoding="utf-8")
++            untouched.write_text("job", encoding="utf-8")
++            old_time = time.time() - 3 * 24 * 60 * 60
++            os.utime(old, (old_time, old_time))
++
++            result = account_log_service.cleanup_account_logs(older_than_days=2, log_dir=root)
++            self.assertEqual(result["deleted"], 1)
++            self.assertFalse(old.exists())
++            self.assertTrue(fresh.exists())
++            self.assertTrue(untouched.exists())
++
++            result = account_log_service.cleanup_account_logs(all_logs=True, log_dir=root)
++            self.assertEqual(result["deleted"], 1)
++            self.assertFalse(fresh.exists())
++            self.assertTrue(untouched.exists())
++
++    def test_config_disabled_skips_automatic_cleanup(self):
++        with patch("config.webui.ACCOUNT_LOG_AUTO_CLEANUP", False), patch(
++            "core.account_log_service.cleanup_account_logs"
++        ) as cleanup:
++            result = account_log_service.cleanup_account_logs_from_config()
++        self.assertFalse(result["enabled"])
++        cleanup.assert_not_called()
++
++    def test_cleanup_api_supports_all_account_logs_action(self):
++        result = {"ok": True, "mode": "all", "scanned": 4, "deleted": 4, "failed_count": 0}
++        with patch("webui.app.account_log_service.cleanup_account_logs", return_value=result) as cleanup:
++            response = self._client().post("/api/account-logs/cleanup", json={"all": True})
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(response.get_json()["deleted"], 4)
++        cleanup.assert_called_once_with(all_logs=True)
++
++    def test_cleanup_api_parses_string_false_without_selecting_all_mode(self):
++        result = {"ok": True, "mode": "older_than_days", "scanned": 1, "deleted": 0, "failed_count": 0}
++        with patch("webui.app.account_log_service.cleanup_account_logs", return_value=result) as cleanup:
++            response = self._client().post("/api/account-logs/cleanup", json={"all": "false", "days": 7})
++        self.assertEqual(response.status_code, 200)
++        cleanup.assert_called_once_with(older_than_days=7)
++
++    def test_account_log_retention_config_has_backend_range_validation(self):
++        field = next(item for item in config_editor.EDITABLE_FIELDS if item["key"] == "ACCOUNT_LOG_RETENTION_DAYS")
++        self.assertEqual(config_editor._validate_config_value(field["key"], 30, field), 30)
++        with self.assertRaises(ValueError):
++            config_editor._validate_config_value(field["key"], 0, field)
++        with self.assertRaises(ValueError):
++            config_editor._validate_config_value(field["key"], 3651, field)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_registration_job_log_ui.py b/tests/test_registration_job_log_ui.py
+index 5a8f35d..2b00452 100644
+--- a/tests/test_registration_job_log_ui.py
++++ b/tests/test_registration_job_log_ui.py
+@@ -58,8 +58,12 @@ def test_registration_job_log_refresh_settings_are_editable():
+     assert isinstance(webui_config.WEBUI_JOB_LOG_REFRESH_INTERVAL, int)
+     assert isinstance(webui_config.WEBUI_REGISTRATION_JOB_RETENTION_COUNT, int)
+     assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["type"] == "bool"
+-    assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["group"] == "WebUI"
++    assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["group"] == "日志管理"
+     assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["type"] == "int"
+-    assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["group"] == "WebUI"
++    assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["group"] == "日志管理"
+     assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["type"] == "int"
+-    assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["group"] == "WebUI"
++    assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["group"] == "日志管理"
++    assert "ACCOUNT_LOG_AUTO_CLEANUP: bool = False" in config_source
++    assert "ACCOUNT_LOG_RETENTION_DAYS: int = 30" in config_source
++    assert fields["ACCOUNT_LOG_AUTO_CLEANUP"]["group"] == "日志管理"
++    assert fields["ACCOUNT_LOG_RETENTION_DAYS"]["group"] == "日志管理"
+diff --git a/webui/app.py b/webui/app.py
+index fbc35a7..6e9d87a 100644
+--- a/webui/app.py
++++ b/webui/app.py
+@@ -20,7 +20,7 @@ from urllib.parse import urlparse
+
+ from flask import Flask, Response, jsonify, render_template, request
+
+-from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
++from core import account_log_service, codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
+ from config import webui as webui_config
+ from webui.auth import init_auth, register_auth_routes
+ from core import registration_service as svc
+@@ -513,6 +513,7 @@ def create_app(auth_code: str | None = None) -> Flask:
+     recovered_codex_agents = db.recover_interrupted_codex_agents()
+     if recovered_codex_agents:
+         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
++    account_log_service.start_auto_cleanup_scheduler()
+
+     # ----------------------------------------------------------
+     # 页面
+@@ -3136,6 +3137,50 @@ def create_app(auth_code: str | None = None) -> Flask:
+             "service_name": account.get("extract_link_service_name") or "",
+         })
+
++    @app.get("/api/account-logs/status")
++    def api_account_logs_status():
++        """返回账号级日志数量和自动清理配置状态。"""
++        paths = account_log_service.account_log_paths()
++        try:
++            from config import webui as _webui_cfg
++            enabled = bool(getattr(_webui_cfg, "ACCOUNT_LOG_AUTO_CLEANUP", False))
++            days = int(getattr(_webui_cfg, "ACCOUNT_LOG_RETENTION_DAYS", 30) or 30)
++        except Exception:
++            enabled, days = False, 30
++        return jsonify({
++            "ok": True,
++            "count": len(paths),
++            "enabled": enabled,
++            "retention_days": max(1, min(3650, days)),
++        })
++
++    @app.post("/api/account-logs/cleanup")
++    def api_account_logs_cleanup():
++        """清理账号级日志；默认按配置清理，``all=true`` 清空全部。"""
++        data = request.get_json(silent=True) or {}
++        raw_all = data.get("all")
++        all_logs = (
++            raw_all.strip().lower() in {"1", "true", "yes", "on", "y"}
++            if isinstance(raw_all, str)
++            else bool(raw_all)
++        ) or str(data.get("mode") or "").strip().lower() == "all"
++        try:
++            if all_logs:
++                result = account_log_service.cleanup_account_logs(all_logs=True)
++            else:
++                raw_days = data.get("days")
++                if raw_days in (None, ""):
++                    from config import webui as _webui_cfg
++                    raw_days = getattr(_webui_cfg, "ACCOUNT_LOG_RETENTION_DAYS", 30)
++                result = account_log_service.cleanup_account_logs(older_than_days=raw_days)
++        except (TypeError, ValueError) as exc:
++            return jsonify({"ok": False, "error": str(exc)}), 400
++        except Exception as exc:
++            logger.exception("账号日志清理失败")
++            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
++        status_code = 200 if result.get("ok") else 207
++        return jsonify(result), status_code
++
+     # ----------------------------------------------------------
+     # 注册任务
+     # ----------------------------------------------------------
+@@ -3985,6 +4030,8 @@ def create_app(auth_code: str | None = None) -> Flask:
+             return jsonify({"ok": False, "error": "无更新内容"}), 400
+         try:
+             result = config_editor.update_config(updates)
++        except ValueError as exc:
++            return jsonify({"ok": False, "error": str(exc)}), 400
+         except Exception as exc:
+             logger.exception("配置写入失败")
+             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+diff --git a/webui/config_editor.py b/webui/config_editor.py
+index 399a5d8..bac0186 100644
+--- a/webui/config_editor.py
++++ b/webui/config_editor.py
+@@ -97,17 +97,26 @@ EDITABLE_FIELDS = [
+         "storage": "env", "secret": True,
+     },
+     {
+-        "key": "WEBUI_JOB_LOG_AUTO_REFRESH", "file": "webui.py", "type": "bool", "group": "WebUI",
++        "key": "WEBUI_JOB_LOG_AUTO_REFRESH", "file": "webui.py", "type": "bool", "group": "日志管理",
+         "label": "任务日志实时刷新", "help": "开启后，运行中的任务日志按刷新间隔自动同步；任务成功、失败、停止或取消后自动终止刷新",
+     },
+     {
+-        "key": "WEBUI_JOB_LOG_REFRESH_INTERVAL", "file": "webui.py", "type": "int", "group": "WebUI",
++        "key": "WEBUI_JOB_LOG_REFRESH_INTERVAL", "file": "webui.py", "type": "int", "group": "日志管理",
+         "label": "日志刷新间隔(秒)", "help": "任务日志实时刷新间隔，建议 1-10 秒；关闭实时刷新时此项不生效",
+     },
+     {
+-        "key": "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "file": "webui.py", "type": "int", "group": "WebUI",
++        "key": "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "file": "webui.py", "type": "int", "group": "日志管理",
+         "label": "注册任务保留条数", "help": "保留最近 N 条已结束注册任务；排队中、运行中及其他非终态任务始终保留，超出部分及对应日志由后台清理",
+     },
++    {
++        "key": "ACCOUNT_LOG_AUTO_CLEANUP", "file": "webui.py", "type": "bool", "group": "日志管理",
++        "label": "账号日志自动清理", "help": "开启后按保留天数自动清理查活、提链、重设2FA和Codex补跑日志；注册任务日志不受影响",
++    },
++    {
++        "key": "ACCOUNT_LOG_RETENTION_DAYS", "file": "webui.py", "type": "int", "group": "日志管理",
++        "label": "账号日志保留天数", "help": "按日志文件最后修改时间计算，超过该天数的账号日志会被后台自动清理",
++        "min": 1, "max": 3650,
++    },
+     # ---- 功能开关 ----
+     {
+         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",
+@@ -1295,6 +1304,29 @@ def _format_env_value(value, vtype: str) -> str:
+     return "" if value is None else str(value)
+
+
++def _validate_config_value(key: str, value, field: dict) -> object:
++    """校验带范围约束的配置值，避免 WebUI 写入不可用的运行时配置。"""
++    vtype = field.get("type")
++    if vtype != "int":
++        return value
++    if isinstance(value, bool):
++        raise ValueError(f"{key} 必须是整数")
++    try:
++        parsed = int(str(value).strip())
++    except (TypeError, ValueError):
++        raise ValueError(f"{key} 必须是整数") from None
++    # 拒绝 1.5 这类会被 int() 截断的输入；字符串整数和真正整数均可。
++    if isinstance(value, float) and not value.is_integer():
++        raise ValueError(f"{key} 必须是整数")
++    minimum = field.get("min")
++    maximum = field.get("max")
++    if minimum is not None and parsed < int(minimum):
++        raise ValueError(f"{key} 必须不小于 {minimum}")
++    if maximum is not None and parsed > int(maximum):
++        raise ValueError(f"{key} 必须不大于 {maximum}")
++    return parsed
++
++
+ def update_config(updates: dict) -> dict:
+     """批量更新配置。所有 WebUI 可编辑项只写项目根 `.env`。"""
+     from config.env_loader import write_env_values, load_env
+@@ -1372,6 +1404,7 @@ def update_config(updates: dict) -> dict:
+         if field.get("readonly"):
+             ignored.append(key)
+             continue
++        value = _validate_config_value(key, value, field)
+         env_updates[key] = _format_env_value(value, field["type"])
+         updated.append(key)
+
+diff --git a/webui/templates/index.html b/webui/templates/index.html
+index bed68ea..dfd9abe 100644
+--- a/webui/templates/index.html
++++ b/webui/templates/index.html
+@@ -2928,6 +2928,34 @@
+     }
+     .config-switch-v2-status { display: inline-flex; margin-left: auto; color: #9aa4b7; font-size: 10px; font-weight: 750; }
+     .config-switch-v2-status.is-on { color: #16966f; }
++    .account-log-management-card {
++      margin: 18px 28px 2px; padding: 18px 20px 20px; border: 1px solid #dfe6f4;
++      border-radius: 16px; background: linear-gradient(135deg, #fbfcff 0%, #f4f7ff 100%);
++      box-shadow: 0 8px 24px rgba(64, 96, 170, .08);
++    }
++    .account-log-management-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
++    .account-log-management-title { display: flex; align-items: center; gap: 10px; color: #27344b; font-size: 15px; font-weight: 760; }
++    .account-log-management-title svg { width: 18px; height: 18px; fill: none; stroke: #5b73e8; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
++    .account-log-management-state { margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: #eef1f6; color: #8994a6; font-size: 10px; font-weight: 700; }
++    .account-log-management-state.is-on { background: #e6f8f1; color: #16876a; }
++    .account-log-management-subtitle { margin-top: 5px; color: #8490a5; font-size: 11px; line-height: 1.5; }
++    .account-log-management-toggle { flex: 0 0 auto; }
++    .account-log-management-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 14px; margin-top: 16px; }
++    .account-log-management-field { display: flex; flex-direction: column; gap: 7px; color: #4a5870; font-size: 12px; font-weight: 650; }
++    .account-log-management-field input { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid #dfe4ec; border-radius: 9px; background: #fff; color: #263146; font: inherit; font-size: 13px; box-sizing: border-box; }
++    .account-log-management-field input:focus { border-color: #8798ff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); outline: none; }
++    .account-log-management-field input:disabled { color: #a5adbc; background: #f5f7fb; cursor: not-allowed; }
++    .account-log-management-action { min-height: 42px; padding: 0 16px; border: 1px solid #f2b8b8; border-radius: 9px; background: #fff6f6; color: #d85050; font: inherit; font-size: 12px; font-weight: 720; cursor: pointer; white-space: nowrap; transition: .16s ease; }
++    .account-log-management-action:hover:not(:disabled) { border-color: #e45b69; background: #e45b69; color: #fff; box-shadow: 0 6px 14px rgba(228,91,105,.2); transform: translateY(-1px); }
++    .account-log-management-action:disabled { opacity: .6; cursor: wait; }
++    .account-log-management-status { grid-column: 1 / -1; min-height: 18px; color: #7f8ba0; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
++    .account-log-management-status.is-success { color: #16876a; }
++    .account-log-management-status.is-error { color: #d85050; }
++    @media (max-width: 720px) {
++      .account-log-management-card { margin-left: 17px; margin-right: 17px; padding: 16px; }
++      .account-log-management-grid { grid-template-columns: 1fr; }
++      .account-log-management-action { width: 100%; }
++    }
+     #tab-config .roxy-workspace-box {
+       margin: 18px 24px 0 !important; padding: 16px 18px;
+       border: 1px solid #e1e6ff; border-radius: 13px; background: linear-gradient(135deg, #f7f8ff, #fbfcff);
+@@ -9217,6 +9245,7 @@ function configGroupDisplayName(name) {
+ function configNavIcon(name) {
+   const n = String(name || '');
+   if (n.includes('网站') || n.includes('WebUI')) return '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>';
++  if (n.includes('日志')) return '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>';
+   if (n.includes('开关') || n.includes('功能')) return '<rect x="1" y="8" width="22" height="8" rx="4"/><circle cx="7" cy="12" r="2.8"/>';
+   if (n === '本地指纹浏览器' || n.includes('Cloak')) return '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>';
+   if (n.includes('邮箱') || n.includes('OTP')) return '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/>';
+@@ -9237,6 +9266,7 @@ function getConfigGroupNames() {
+ function configSectionIntro(name) {
+   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
+   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
++  if (name === '日志管理') return '统一管理任务日志与账号级查活、提链、2FA、Codex 补跑日志的保留策略。';
+   if (name === '账号查活') return '分别配置查活、换绑登录和换绑提交方式；混合模式支持指纹浏览器登录后由协议完成邮箱变更。';
+   if (name === '功能开关') return '';
+   if (name === '注册方式') return '选择账号注册时使用的自动化方式，并分别控制注册完成后的 OAICS 与各国资格查询。';
+@@ -9662,6 +9692,103 @@ function bindExtractLinkToolsV2() {
+   }));
+ }
+
++function renderAccountLogManagementToolsV2() {
++  const autoField = CONFIG.find(f => f.key === 'ACCOUNT_LOG_AUTO_CLEANUP');
++  const daysField = CONFIG.find(f => f.key === 'ACCOUNT_LOG_RETENTION_DAYS');
++  if (!autoField || !daysField) return '';
++  const enabled = !!configFieldValueV2(autoField);
++  const days = configFieldValueV2(daysField) || 30;
++  return `
++    <div class="account-log-management-card" data-account-log-management>
++      <div class="account-log-management-head">
++        <div>
++          <div class="account-log-management-title">
++            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16"/><path d="M8 7h8M8 11h8"/></svg>
++            <span>账号日志自动清理</span>
++            <small class="account-log-management-state" data-account-log-cleanup-state>${enabled ? '已开启' : '已关闭'}</small>
++          </div>
++          <div class="account-log-management-subtitle">清理查活日志、提链日志、重设2FA日志和 Codex 补跑日志；注册任务日志单独保留。</div>
++        </div>
++        <label class="account-log-management-toggle" title="开启后按保留天数定时清理账号日志">
++          <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(autoField.key)}"${enabled ? ' checked' : ''} aria-label="账号日志自动清理">
++        </label>
++      </div>
++      <div class="account-log-management-grid">
++        <label class="account-log-management-field">
++          <span>日志保留天数</span>
++          <input type="number" min="1" max="3650" step="1" data-key="${attrEsc(daysField.key)}" value="${attrEsc(days)}"${enabled ? '' : ' disabled'} aria-describedby="accountLogCleanupHintV2">
++        </label>
++        <button type="button" class="account-log-management-action" id="btnClearAccountLogsV2">一键清理全部账号日志</button>
++        <div class="account-log-management-status" id="accountLogCleanupStatusV2" aria-live="polite">正在读取账号日志数量…</div>
++      </div>
++      <div class="hint" id="accountLogCleanupHintV2" style="margin-top:8px;">自动清理按日志文件最后修改时间计算；手动清理会立即删除四类账号日志。</div>
++    </div>
++  `;
++}
++
++function syncAccountLogManagementControlsV2() {
++  const enabled = !!_extractConfigValue('ACCOUNT_LOG_AUTO_CLEANUP', false);
++  const days = document.querySelector('#configSectionsV2 [data-key="ACCOUNT_LOG_RETENTION_DAYS"]');
++  const state = document.querySelector('[data-account-log-cleanup-state]');
++  if (state) {
++    state.textContent = enabled ? '已开启' : '已关闭';
++    state.classList.toggle('is-on', enabled);
++  }
++  if (days) {
++    days.disabled = !enabled;
++    days.setAttribute('aria-disabled', String(!enabled));
++  }
++}
++
++async function loadAccountLogManagementStatusV2() {
++  const status = document.getElementById('accountLogCleanupStatusV2');
++  if (!status) return;
++  try {
++    const result = await api('/api/account-logs/status');
++    const count = Number(result.count || 0);
++    status.textContent = `当前账号日志 ${count} 个 · 自动清理${result.enabled ? `已开启（保留 ${result.retention_days} 天）` : '已关闭'}`;
++    status.classList.remove('is-error');
++  } catch (e) {
++    status.textContent = `读取日志状态失败：${e.message}`;
++    status.classList.add('is-error');
++  }
++}
++
++async function clearAccountLogsV2() {
++  const btn = document.getElementById('btnClearAccountLogsV2');
++  const status = document.getElementById('accountLogCleanupStatusV2');
++  if (!btn || !status) return;
++  if (!await appConfirm('确定清理全部账号日志吗？\n\n将删除查活、提链、重设2FA和 Codex 补跑日志。')) return;
++  btn.disabled = true;
++  status.classList.remove('is-error', 'is-success');
++  status.textContent = '正在清理账号日志…';
++  try {
++    const result = await api('/api/account-logs/cleanup', {
++      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({all: true}),
++    });
++    const failed = Number(result.failed_count || 0);
++    status.textContent = `已清理 ${Number(result.deleted || 0)} 个账号日志${failed ? ` · ${failed} 个删除失败` : ''}`;
++    status.classList.add(failed ? 'is-error' : 'is-success');
++    showToast(failed ? `账号日志清理完成，${failed} 个文件失败` : '全部账号日志已清理');
++  } catch (e) {
++    status.textContent = `清理失败：${e.message}`;
++    status.classList.add('is-error');
++  } finally {
++    btn.disabled = false;
++    await loadAccountLogManagementStatusV2();
++  }
++}
++
++function bindAccountLogManagementToolsV2() {
++  const btn = document.getElementById('btnClearAccountLogsV2');
++  if (btn && !btn.dataset.bound) {
++    btn.dataset.bound = '1';
++    btn.addEventListener('click', clearAccountLogsV2);
++  }
++  syncAccountLogManagementControlsV2();
++  loadAccountLogManagementStatusV2();
++}
++
+ function renderMixedConfigSectionV2(name, fields, intro) {
+   const slug = configGroupSlug(name);
+   const switches = fields.filter(f => f.type === 'bool');
+@@ -10199,6 +10326,21 @@ function renderConfigSectionV2(name, fields) {
+       </section>
+     `;
+   }
++  if (name === '日志管理') {
++    const accountCleanupKeys = new Set(['ACCOUNT_LOG_AUTO_CLEANUP', 'ACCOUNT_LOG_RETENTION_DAYS']);
++    const normalFields = fields.filter(field => !accountCleanupKeys.has(field.key));
++    const switches = normalFields.filter(field => field.type === 'bool');
++    const inputs = normalFields.filter(field => field.type !== 'bool');
++    return `
++      <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
++        ${renderConfigSectionHead(name, configSectionIntro(name))}
++        ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
++        ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
++        ${renderAccountLogManagementToolsV2()}
++        ${renderConfigSectionActionsV2()}
++      </section>
++    `;
++  }
+   if (name === '提链') {
+     return renderExtractLinkSectionV2(fields);
+   }
+@@ -10252,6 +10394,7 @@ function renderConfigLayoutV2() {
+   bindPageAgentToolsV2();
+   bindExtractLinkToolsV2();
+   bindCodexSmsToolsV2();
++  bindAccountLogManagementToolsV2();
+   syncRegionProfileControlV2();
+   syncConfigDirtyIndicatorsV2();
+ }
+@@ -10419,6 +10562,7 @@ function trackConfigFieldChange(e) {
+   setConfigPendingValueV2(f.key, readConfigElementValue(el, f));
+   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
+   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
++  if (f.key === 'ACCOUNT_LOG_AUTO_CLEANUP') syncAccountLogManagementControlsV2();
+   if (f.type === 'bool') {
+     const status = el.closest('.config-switch-v2')?.querySelector('[data-config-switch-status-v2]');
+     if (status) {
