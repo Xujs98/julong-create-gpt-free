@@ -543,12 +543,20 @@ def create_app(auth_code: str | None = None) -> Flask:
             for k in pool:
                 pool[k] += int(one.get(k, 0) or 0)
         domain_pool = pool_by_source["cloudflare_domain"]
+        # Keep the historical ``outlook_*`` keys for existing integrations,
+        # while exposing provider-neutral names for the commercial dashboard.
+        # ``pool`` is the aggregate of every local mailbox source above.
         return jsonify({
             "accounts": db.count_accounts(),
             "outlook_total": pool.get("total", 0),
             "outlook_available": pool.get("available", 0),
             "outlook_used": pool.get("used", 0),
             "outlook_failed": pool.get("failed", 0),
+            "email_pool_total": pool.get("total", 0),
+            "email_pool_available": pool.get("available", 0),
+            "email_pool_used": pool.get("used", 0),
+            "email_pool_failed": pool.get("failed", 0),
+            "email_pool_missing_url": sum(int(one.get("missing_url", 0) or 0) for one in pool_by_source.values()),
             "domain_total": domain_pool.get("total", 0),
             "domain_available": domain_pool.get("available", 0),
             "domain_used": domain_pool.get("used", 0),
