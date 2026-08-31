@@ -1,0 +1,16 @@
+$ git diff --check 470cc46 36484ec
+exit=0
+$ COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION=False PROTOCOL_BROWSER_LIKE_FLOW=False CODEX_SMS_NUMBER_TYPE=auto python3 -m pytest -q tests/test_account_txt_export.py tests/test_account_txt_export_ui.py tests/test_account_totp_code.py
+..........                                                               [100%]
+10 passed in 3.42s
+exit=0
+$ python3 -m compileall -q webui
+exit=0
+$ git apply --check artifacts/account-txt-2fa-url/account-txt-2fa-url.patch (in BASE worktree)
+ /var/folders/7t/91wns6qx0d31rzn301nvv3y00000gn/T/account-txt-patch-szmyl0k8
+exit=0
+$ ROLLBACK_MODE=dry-run bash /Users/xujs/.docker_dir/turb-gpt-free-register/artifacts/account-txt-2fa-url/rollback.sh 36484ecc7b9819690fe33915cf179fb4bf6e07b3
+exit=0
+$ git -C /var/folders/7t/91wns6qx0d31rzn301nvv3y00000gn/T/account-txt-rollback-x03cm4aa diff --cached --name-only | wc -l
+4
+exit=0
