@@ -28,6 +28,8 @@ _LOCK = threading.Lock()
 _NETWORK_ERROR_HINTS = (
     "403", "429", "502", "503", "504", "timeout", "timed out",
     "connection", "proxy", "socks", "reset", "temporarily unavailable",
+    "network is unreachable", "name or service not known", "temporary failure",
+    "dns", "unreachable",
 )
 
 
