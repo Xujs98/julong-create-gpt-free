@@ -1,9 +1,38 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from core.account_liveness import _refresh_with_password_protocol, _restore_saved_session, check_account_liveness
-from core.live_check_service import _check_existing_access_token
+import core.live_check_service as live_check_service
+from core.live_check_service import _check_existing_access_token, _network_result, _run_live_check
+
+
+def test_kernel_download_failure_is_retryable_for_next_proxy_route():
+    assert _network_result({"ok": False, "status": "failed", "error": "Roxy API 返回失败：下载内核失败"}) is True
+
+
+def test_kernel_download_failure_falls_back_to_next_live_check_route():
+    account = {"id": 7, "email": "account@example.test"}
+    routes = [
+        {"source": "proxy_api", "proxy": "http://api-proxy:1", "network_route": "proxy", "proxy_mode": "api", "proxy_used": "http://api-proxy:1"},
+        {"source": "proxy_pool", "proxy": "http://pool-proxy:2", "network_route": "proxy", "proxy_mode": "auto", "proxy_used": "http://pool-proxy:2"},
+    ]
+    failed = {"ok": False, "status": "failed", "error": "Roxy API 返回失败 POST /browser/open: 下载内核失败"}
+    success = {"ok": True, "status": "live", "check_method": "access_token", "access_token": "TOKEN"}
+    with patch.object(live_check_service.db, "mark_account_live_check_running", return_value=True), patch(
+        "core.live_check_service.db.get_account", return_value=account
+    ), patch("core.live_check_service.db.update_account_liveness") as update, patch(
+        "core.live_check_service._live_check_routes", return_value=routes
+    ), patch(
+        "core.live_check_service._execute_live_check_route", side_effect=[failed, success]
+    ) as execute, patch("core.live_check_service._append_log"), patch(
+        "core.live_check_service._QUEUE_SLOTS", Mock()
+    ):
+        result = _run_live_check(account_id=7, email=account["email"], proxy=None, trigger="manual")
+
+    assert result is success
+    assert execute.call_count == 2
+    assert update.call_count == 1
 
 
 def test_valid_access_token_completes_live_check_without_email_otp():

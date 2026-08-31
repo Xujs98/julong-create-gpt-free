@@ -447,6 +447,16 @@ EDITABLE_FIELDS = [
         "label": "无头启动窗口", "help": "打开 Roxy 环境时向 /browser/open 传 headless；False=显示窗口，True=无头启动",
     },
     {
+        "key": "ROXY_API_TIMEOUT", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
+        "label": "Roxy API 超时(秒)", "help": "普通 Roxy 本地 API 请求超时；/browser/open 使用单独的启动超时",
+        "min": 5, "max": 600,
+    },
+    {
+        "key": "ROXY_OPEN_TIMEOUT", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
+        "label": "Roxy 启动超时(秒)", "help": "/browser/open 下载或准备浏览器内核时的最大等待时间，建议 120-300 秒",
+        "min": 30, "max": 900,
+    },
+    {
         "key": "ROXY_CLOSE_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
         "label": "关闭接口路径", "help": "默认 /browser/close",
     },

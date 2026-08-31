@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import pytest
 
 from core.roxybrowser_client import RoxyBrowserClient
 
@@ -72,3 +74,35 @@ def test_profile_create_requests_are_serialized_across_clients():
     assert not first.is_alive()
     assert not second.is_alive()
     assert overlap is False
+
+
+def test_request_uses_longer_timeout_for_browser_open():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return _Response({"code": 0, "data": {"debuggerAddress": "127.0.0.1:9222"}})
+
+    client.http.request = request
+    with patch("core.roxybrowser_client._cfg.ROXY_OPEN_TIMEOUT", 180), patch(
+        "core.roxybrowser_client._cfg.ROXY_API_TIMEOUT", 12
+    ):
+        client.request("POST", "/browser/open", json_body={})
+        client.request("GET", "/browser/workspace")
+
+    assert [item["timeout"] for item in calls] == [180, 12]
+
+
+def test_open_profile_cleans_created_profile_when_open_fails():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.create_profile = Mock(return_value="PROFILE")
+    client.request = Mock(side_effect=RuntimeError("下载内核失败"))
+    with patch.object(client, "cleanup_profile") as cleanup:
+        with pytest.raises(RuntimeError, match="下载内核失败"):
+            client.open_profile()
+
+    cleanup.assert_called_once()
+    opened = cleanup.call_args.args[0]
+    assert opened.profile_id == "PROFILE"
+    assert opened.created_by_run is True

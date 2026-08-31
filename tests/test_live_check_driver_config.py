@@ -49,6 +49,17 @@ def test_live_check_proxy_api_settings_are_exposed_with_registration_priority():
     assert isinstance(live_check.LIVE_CHECK_PROXY_API_ENABLED, bool)
 
 
+def test_roxy_api_and_open_timeouts_are_separate_editable_settings():
+    source = (ROOT / "config" / "roxybrowser.py").read_text(encoding="utf-8")
+    fields = {item["key"]: item for item in EDITABLE_FIELDS}
+    assert "ROXY_API_TIMEOUT: int = 30" in source
+    assert "ROXY_OPEN_TIMEOUT: int = 180" in source
+    assert fields["ROXY_API_TIMEOUT"]["type"] == "int"
+    assert fields["ROXY_OPEN_TIMEOUT"]["type"] == "int"
+    assert fields["ROXY_API_TIMEOUT"]["group"] == "RoxyBrowser"
+    assert fields["ROXY_OPEN_TIMEOUT"]["group"] == "RoxyBrowser"
+
+
 def test_rebind_hybrid_driver_config_defaults_to_browser_login_protocol_action():
     source = (ROOT / "config" / "live_check.py").read_text(encoding="utf-8")
     fields = {item["key"]: item for item in EDITABLE_FIELDS}

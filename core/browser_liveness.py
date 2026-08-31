@@ -860,7 +860,12 @@ def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Call
 
     client = RoxyBrowserClient()
     opened = client.open_profile(headless=headless, proxy=proxy)
-    driver = _build_driver(opened)
+    try:
+        driver = _build_driver(opened)
+    except Exception:
+        # open 已成功但 Selenium/调试地址连接失败时也回收本轮临时环境。
+        client.cleanup_profile(opened)
+        raise
     driver._registration_log_prefix = "[查活][Roxy]"
     try:
         driver.set_page_load_timeout(int(getattr(roxy_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90))

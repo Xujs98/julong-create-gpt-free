@@ -191,6 +191,22 @@ class RoxyBrowserClient:
             "正在创建",
         ))
 
+    @staticmethod
+    def _request_timeout(path: str) -> int:
+        """按接口类型选择本地 API 超时，避免 /browser/open 复用页面超时。"""
+        normalized = str(path or "").lower()
+        if "browser/open" in normalized or normalized.rstrip("/").endswith("/open"):
+            configured = getattr(_cfg, "ROXY_OPEN_TIMEOUT", None)
+            fallback = getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90)
+        else:
+            configured = getattr(_cfg, "ROXY_API_TIMEOUT", None)
+            fallback = 30
+        try:
+            value = int(configured or fallback)
+        except (TypeError, ValueError):
+            value = int(fallback)
+        return max(5, value)
+
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
         url = _join_url(self.api_base, path)
         method_u = method.upper()
@@ -220,7 +236,7 @@ class RoxyBrowserClient:
                         url,
                         params=params or None,
                         json=json_body if json_body is not None else None,
-                        timeout=max(5, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
+                        timeout=self._request_timeout(path),
                     )
                     text = resp.text or ""
                     try:
@@ -437,7 +453,7 @@ class RoxyBrowserClient:
             body["proxyInfo"] = _proxy_url_to_roxy_info(selected_proxy)
             self.last_proxy_url = selected_proxy
             logger.info(
-                "[Roxy] 创建环境使用本次注册代理：proxy=%s type=%s host=%s port=%s",
+                "[Roxy] 创建环境使用本次任务代理：proxy=%s type=%s host=%s port=%s",
                 _mask_proxy(selected_proxy),
                 body["proxyInfo"].get("protocol") or body["proxyInfo"].get("proxyCategory"),
                 body["proxyInfo"].get("host"),
@@ -534,12 +550,19 @@ class RoxyBrowserClient:
         # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
         params["headless"] = bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False)) if headless is None else bool(headless)
         logger.info("[Roxy] open 参数：profile=%s headless=%s keep_open=%s", pid, params.get("headless"), getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
-        result = self.request(
-            _cfg.ROXY_OPEN_METHOD,
-            path,
-            params=params if _cfg.ROXY_OPEN_METHOD.upper() == "GET" else None,
-            json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
-        )
+        try:
+            result = self.request(
+                _cfg.ROXY_OPEN_METHOD,
+                path,
+                params=params if _cfg.ROXY_OPEN_METHOD.upper() == "GET" else None,
+                json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
+            )
+        except Exception:
+            # 创建成功但启动失败时立即回收临时环境，否则内核下载失败/服务超时会
+            # 留下无法复用的孤儿 Profile，并持续占用 Roxy 窗口配额。
+            if created_by_run:
+                self.cleanup_profile(RoxyOpenResult(pid, {}, created_by_run=True))
+            raise
         debugger_address = self._extract_debugger_address(result)
         logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
         webdriver_url = _first(result, [

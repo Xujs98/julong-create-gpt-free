@@ -29,7 +29,7 @@ _NETWORK_ERROR_HINTS = (
     "403", "429", "502", "503", "504", "timeout", "timed out",
     "connection", "proxy", "socks", "reset", "temporarily unavailable",
     "network is unreachable", "name or service not known", "temporary failure",
-    "dns", "unreachable",
+    "dns", "unreachable", "下载内核失败", "kernel", "browser/open",
 )
 
 

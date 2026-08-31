@@ -57,6 +57,11 @@ ROXY_OPEN_EXTRA_PARAMS: dict = {}
 
 # Selenium 行为
 ROXY_SELENIUM_TIMEOUT: int = 90
+# Roxy 本地 API 请求超时。不要复用页面/Selenium 超时，避免工作区探测等轻量接口
+# 被长页面超时拖慢；/browser/open 使用下方独立的启动超时。
+ROXY_API_TIMEOUT: int = 30
+# /browser/open 可能需要先下载浏览器内核，允许比普通 API 更长的等待时间。
+ROXY_OPEN_TIMEOUT: int = 180
 ROXY_KEEP_BROWSER_OPEN: bool = False
 
 # Roxy API transient 错误重试。create 仅对“正在创建中”占用提示重试，
@@ -113,4 +118,4 @@ ROXY_PROFILE_CREATE_PAYLOAD: dict = {
 ROXY_CODEX_CALLBACK_TIMEOUT: int = 180
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})
+apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_SELENIUM_TIMEOUT': 'int', 'ROXY_API_TIMEOUT': 'int', 'ROXY_OPEN_TIMEOUT': 'int', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})
