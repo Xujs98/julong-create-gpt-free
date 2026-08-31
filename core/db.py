@@ -3651,7 +3651,9 @@ def outlook_pool_summary() -> dict:
         for row in _load_outlook():
             status = row.get("status") or "available"
             out[status] = out.get(status, 0) + 1
-        out["total"] = sum(v for k, v in out.items() if k != "total")
+        # ``total`` 保留池内全部记录数量；``available`` 只统计带接码 URL
+        # 且可实际领取的素材，历史缺 URL 行单独落在 ``missing_url``。
+        out["total"] = len(_load_domain_pool())
         return out
 
 

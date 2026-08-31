@@ -243,6 +243,7 @@ def test_legacy_domain_rows_round_trip_with_new_import_and_statuses(tmp_path, mo
         imported = next(row for row in available if row["email"] == "imported@example.test")
         assert imported["copy_line"].endswith("----https://mail.example.test/imported")
         summary = db.domain_email_pool_summary()
+        assert summary["total"] == 2
         assert summary["available"] == 1
         assert summary["missing_url"] == 1
         db.release_domain_email("legacy@example.test", status="disabled", note="旧 IMAP 地址停用")
