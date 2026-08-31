@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""WebUI 展示与日志轮询配置。"""
+"""WebUI 展示与日志管理配置。"""
 from config.env_loader import apply_env_overrides
 
 
@@ -13,8 +13,15 @@ WEBUI_JOB_LOG_REFRESH_INTERVAL: int = 2
 # 其他非终态任务始终保留。超出数量的任务记录和对应日志由后台清理。
 WEBUI_REGISTRATION_JOB_RETENTION_COUNT: int = 50
 
+# 账号页查活、提链、2FA 重设和 Codex 补跑日志的自动清理策略。
+# 关闭时保留所有账号日志；开启后按文件修改时间清理超过指定天数的日志。
+ACCOUNT_LOG_AUTO_CLEANUP: bool = False
+ACCOUNT_LOG_RETENTION_DAYS: int = 30
+
 apply_env_overrides(globals(), {
     'WEBUI_JOB_LOG_AUTO_REFRESH': 'bool',
     'WEBUI_JOB_LOG_REFRESH_INTERVAL': 'int',
     'WEBUI_REGISTRATION_JOB_RETENTION_COUNT': 'int',
+    'ACCOUNT_LOG_AUTO_CLEANUP': 'bool',
+    'ACCOUNT_LOG_RETENTION_DAYS': 'int',
 })

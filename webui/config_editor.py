@@ -97,16 +97,25 @@ EDITABLE_FIELDS = [
         "storage": "env", "secret": True,
     },
     {
-        "key": "WEBUI_JOB_LOG_AUTO_REFRESH", "file": "webui.py", "type": "bool", "group": "WebUI",
+        "key": "WEBUI_JOB_LOG_AUTO_REFRESH", "file": "webui.py", "type": "bool", "group": "日志管理",
         "label": "任务日志实时刷新", "help": "开启后，运行中的任务日志按刷新间隔自动同步；任务成功、失败、停止或取消后自动终止刷新",
     },
     {
-        "key": "WEBUI_JOB_LOG_REFRESH_INTERVAL", "file": "webui.py", "type": "int", "group": "WebUI",
+        "key": "WEBUI_JOB_LOG_REFRESH_INTERVAL", "file": "webui.py", "type": "int", "group": "日志管理",
         "label": "日志刷新间隔(秒)", "help": "任务日志实时刷新间隔，建议 1-10 秒；关闭实时刷新时此项不生效",
     },
     {
-        "key": "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "file": "webui.py", "type": "int", "group": "WebUI",
+        "key": "WEBUI_REGISTRATION_JOB_RETENTION_COUNT", "file": "webui.py", "type": "int", "group": "日志管理",
         "label": "注册任务保留条数", "help": "保留最近 N 条已结束注册任务；排队中、运行中及其他非终态任务始终保留，超出部分及对应日志由后台清理",
+    },
+    {
+        "key": "ACCOUNT_LOG_AUTO_CLEANUP", "file": "webui.py", "type": "bool", "group": "日志管理",
+        "label": "账号日志自动清理", "help": "开启后按保留天数自动清理查活、提链、重设2FA和Codex补跑日志；注册任务日志不受影响",
+    },
+    {
+        "key": "ACCOUNT_LOG_RETENTION_DAYS", "file": "webui.py", "type": "int", "group": "日志管理",
+        "label": "账号日志保留天数", "help": "按日志文件最后修改时间计算，超过该天数的账号日志会被后台自动清理",
+        "min": 1, "max": 3650,
     },
     # ---- 功能开关 ----
     {
@@ -1295,6 +1304,29 @@ def _format_env_value(value, vtype: str) -> str:
     return "" if value is None else str(value)
 
 
+def _validate_config_value(key: str, value, field: dict) -> object:
+    """校验带范围约束的配置值，避免 WebUI 写入不可用的运行时配置。"""
+    vtype = field.get("type")
+    if vtype != "int":
+        return value
+    if isinstance(value, bool):
+        raise ValueError(f"{key} 必须是整数")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} 必须是整数") from None
+    # 拒绝 1.5 这类会被 int() 截断的输入；字符串整数和真正整数均可。
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{key} 必须是整数")
+    minimum = field.get("min")
+    maximum = field.get("max")
+    if minimum is not None and parsed < int(minimum):
+        raise ValueError(f"{key} 必须不小于 {minimum}")
+    if maximum is not None and parsed > int(maximum):
+        raise ValueError(f"{key} 必须不大于 {maximum}")
+    return parsed
+
+
 def update_config(updates: dict) -> dict:
     """批量更新配置。所有 WebUI 可编辑项只写项目根 `.env`。"""
     from config.env_loader import write_env_values, load_env
@@ -1372,6 +1404,7 @@ def update_config(updates: dict) -> dict:
         if field.get("readonly"):
             ignored.append(key)
             continue
+        value = _validate_config_value(key, value, field)
         env_updates[key] = _format_env_value(value, field["type"])
         updated.append(key)
 

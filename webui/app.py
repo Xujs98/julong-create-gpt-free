@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
+from core import account_log_service, codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
 from config import webui as webui_config
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
@@ -513,6 +513,7 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_codex_agents = db.recover_interrupted_codex_agents()
     if recovered_codex_agents:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
+    account_log_service.start_auto_cleanup_scheduler()
 
     # ----------------------------------------------------------
     # 页面
@@ -3136,6 +3137,50 @@ def create_app(auth_code: str | None = None) -> Flask:
             "service_name": account.get("extract_link_service_name") or "",
         })
 
+    @app.get("/api/account-logs/status")
+    def api_account_logs_status():
+        """返回账号级日志数量和自动清理配置状态。"""
+        paths = account_log_service.account_log_paths()
+        try:
+            from config import webui as _webui_cfg
+            enabled = bool(getattr(_webui_cfg, "ACCOUNT_LOG_AUTO_CLEANUP", False))
+            days = int(getattr(_webui_cfg, "ACCOUNT_LOG_RETENTION_DAYS", 30) or 30)
+        except Exception:
+            enabled, days = False, 30
+        return jsonify({
+            "ok": True,
+            "count": len(paths),
+            "enabled": enabled,
+            "retention_days": max(1, min(3650, days)),
+        })
+
+    @app.post("/api/account-logs/cleanup")
+    def api_account_logs_cleanup():
+        """清理账号级日志；默认按配置清理，``all=true`` 清空全部。"""
+        data = request.get_json(silent=True) or {}
+        raw_all = data.get("all")
+        all_logs = (
+            raw_all.strip().lower() in {"1", "true", "yes", "on", "y"}
+            if isinstance(raw_all, str)
+            else bool(raw_all)
+        ) or str(data.get("mode") or "").strip().lower() == "all"
+        try:
+            if all_logs:
+                result = account_log_service.cleanup_account_logs(all_logs=True)
+            else:
+                raw_days = data.get("days")
+                if raw_days in (None, ""):
+                    from config import webui as _webui_cfg
+                    raw_days = getattr(_webui_cfg, "ACCOUNT_LOG_RETENTION_DAYS", 30)
+                result = account_log_service.cleanup_account_logs(older_than_days=raw_days)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("账号日志清理失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        status_code = 200 if result.get("ok") else 207
+        return jsonify(result), status_code
+
     # ----------------------------------------------------------
     # 注册任务
     # ----------------------------------------------------------
@@ -3985,6 +4030,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "无更新内容"}), 400
         try:
             result = config_editor.update_config(updates)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception as exc:
             logger.exception("配置写入失败")
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500

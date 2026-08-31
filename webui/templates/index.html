@@ -2928,6 +2928,34 @@
     }
     .config-switch-v2-status { display: inline-flex; margin-left: auto; color: #9aa4b7; font-size: 10px; font-weight: 750; }
     .config-switch-v2-status.is-on { color: #16966f; }
+    .account-log-management-card {
+      margin: 18px 28px 2px; padding: 18px 20px 20px; border: 1px solid #dfe6f4;
+      border-radius: 16px; background: linear-gradient(135deg, #fbfcff 0%, #f4f7ff 100%);
+      box-shadow: 0 8px 24px rgba(64, 96, 170, .08);
+    }
+    .account-log-management-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+    .account-log-management-title { display: flex; align-items: center; gap: 10px; color: #27344b; font-size: 15px; font-weight: 760; }
+    .account-log-management-title svg { width: 18px; height: 18px; fill: none; stroke: #5b73e8; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .account-log-management-state { margin-left: 3px; padding: 3px 7px; border-radius: 999px; background: #eef1f6; color: #8994a6; font-size: 10px; font-weight: 700; }
+    .account-log-management-state.is-on { background: #e6f8f1; color: #16876a; }
+    .account-log-management-subtitle { margin-top: 5px; color: #8490a5; font-size: 11px; line-height: 1.5; }
+    .account-log-management-toggle { flex: 0 0 auto; }
+    .account-log-management-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 14px; margin-top: 16px; }
+    .account-log-management-field { display: flex; flex-direction: column; gap: 7px; color: #4a5870; font-size: 12px; font-weight: 650; }
+    .account-log-management-field input { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid #dfe4ec; border-radius: 9px; background: #fff; color: #263146; font: inherit; font-size: 13px; box-sizing: border-box; }
+    .account-log-management-field input:focus { border-color: #8798ff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); outline: none; }
+    .account-log-management-field input:disabled { color: #a5adbc; background: #f5f7fb; cursor: not-allowed; }
+    .account-log-management-action { min-height: 42px; padding: 0 16px; border: 1px solid #f2b8b8; border-radius: 9px; background: #fff6f6; color: #d85050; font: inherit; font-size: 12px; font-weight: 720; cursor: pointer; white-space: nowrap; transition: .16s ease; }
+    .account-log-management-action:hover:not(:disabled) { border-color: #e45b69; background: #e45b69; color: #fff; box-shadow: 0 6px 14px rgba(228,91,105,.2); transform: translateY(-1px); }
+    .account-log-management-action:disabled { opacity: .6; cursor: wait; }
+    .account-log-management-status { grid-column: 1 / -1; min-height: 18px; color: #7f8ba0; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
+    .account-log-management-status.is-success { color: #16876a; }
+    .account-log-management-status.is-error { color: #d85050; }
+    @media (max-width: 720px) {
+      .account-log-management-card { margin-left: 17px; margin-right: 17px; padding: 16px; }
+      .account-log-management-grid { grid-template-columns: 1fr; }
+      .account-log-management-action { width: 100%; }
+    }
     #tab-config .roxy-workspace-box {
       margin: 18px 24px 0 !important; padding: 16px 18px;
       border: 1px solid #e1e6ff; border-radius: 13px; background: linear-gradient(135deg, #f7f8ff, #fbfcff);
@@ -9217,6 +9245,7 @@ function configGroupDisplayName(name) {
 function configNavIcon(name) {
   const n = String(name || '');
   if (n.includes('网站') || n.includes('WebUI')) return '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>';
+  if (n.includes('日志')) return '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>';
   if (n.includes('开关') || n.includes('功能')) return '<rect x="1" y="8" width="22" height="8" rx="4"/><circle cx="7" cy="12" r="2.8"/>';
   if (n === '本地指纹浏览器' || n.includes('Cloak')) return '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>';
   if (n.includes('邮箱') || n.includes('OTP')) return '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/>';
@@ -9237,6 +9266,7 @@ function getConfigGroupNames() {
 function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
+  if (name === '日志管理') return '统一管理任务日志与账号级查活、提链、2FA、Codex 补跑日志的保留策略。';
   if (name === '账号查活') return '分别配置查活、换绑登录和换绑提交方式；混合模式支持指纹浏览器登录后由协议完成邮箱变更。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式，并分别控制注册完成后的 OAICS 与各国资格查询。';
@@ -9660,6 +9690,103 @@ function bindExtractLinkToolsV2() {
     }
     renderConfigLayoutV2(); showToast('提链 API 服务已删除');
   }));
+}
+
+function renderAccountLogManagementToolsV2() {
+  const autoField = CONFIG.find(f => f.key === 'ACCOUNT_LOG_AUTO_CLEANUP');
+  const daysField = CONFIG.find(f => f.key === 'ACCOUNT_LOG_RETENTION_DAYS');
+  if (!autoField || !daysField) return '';
+  const enabled = !!configFieldValueV2(autoField);
+  const days = configFieldValueV2(daysField) || 30;
+  return `
+    <div class="account-log-management-card" data-account-log-management>
+      <div class="account-log-management-head">
+        <div>
+          <div class="account-log-management-title">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16"/><path d="M8 7h8M8 11h8"/></svg>
+            <span>账号日志自动清理</span>
+            <small class="account-log-management-state" data-account-log-cleanup-state>${enabled ? '已开启' : '已关闭'}</small>
+          </div>
+          <div class="account-log-management-subtitle">清理查活日志、提链日志、重设2FA日志和 Codex 补跑日志；注册任务日志单独保留。</div>
+        </div>
+        <label class="account-log-management-toggle" title="开启后按保留天数定时清理账号日志">
+          <input class="config-switch-v2-toggle" type="checkbox" role="switch" data-key="${attrEsc(autoField.key)}"${enabled ? ' checked' : ''} aria-label="账号日志自动清理">
+        </label>
+      </div>
+      <div class="account-log-management-grid">
+        <label class="account-log-management-field">
+          <span>日志保留天数</span>
+          <input type="number" min="1" max="3650" step="1" data-key="${attrEsc(daysField.key)}" value="${attrEsc(days)}"${enabled ? '' : ' disabled'} aria-describedby="accountLogCleanupHintV2">
+        </label>
+        <button type="button" class="account-log-management-action" id="btnClearAccountLogsV2">一键清理全部账号日志</button>
+        <div class="account-log-management-status" id="accountLogCleanupStatusV2" aria-live="polite">正在读取账号日志数量…</div>
+      </div>
+      <div class="hint" id="accountLogCleanupHintV2" style="margin-top:8px;">自动清理按日志文件最后修改时间计算；手动清理会立即删除四类账号日志。</div>
+    </div>
+  `;
+}
+
+function syncAccountLogManagementControlsV2() {
+  const enabled = !!_extractConfigValue('ACCOUNT_LOG_AUTO_CLEANUP', false);
+  const days = document.querySelector('#configSectionsV2 [data-key="ACCOUNT_LOG_RETENTION_DAYS"]');
+  const state = document.querySelector('[data-account-log-cleanup-state]');
+  if (state) {
+    state.textContent = enabled ? '已开启' : '已关闭';
+    state.classList.toggle('is-on', enabled);
+  }
+  if (days) {
+    days.disabled = !enabled;
+    days.setAttribute('aria-disabled', String(!enabled));
+  }
+}
+
+async function loadAccountLogManagementStatusV2() {
+  const status = document.getElementById('accountLogCleanupStatusV2');
+  if (!status) return;
+  try {
+    const result = await api('/api/account-logs/status');
+    const count = Number(result.count || 0);
+    status.textContent = `当前账号日志 ${count} 个 · 自动清理${result.enabled ? `已开启（保留 ${result.retention_days} 天）` : '已关闭'}`;
+    status.classList.remove('is-error');
+  } catch (e) {
+    status.textContent = `读取日志状态失败：${e.message}`;
+    status.classList.add('is-error');
+  }
+}
+
+async function clearAccountLogsV2() {
+  const btn = document.getElementById('btnClearAccountLogsV2');
+  const status = document.getElementById('accountLogCleanupStatusV2');
+  if (!btn || !status) return;
+  if (!await appConfirm('确定清理全部账号日志吗？\n\n将删除查活、提链、重设2FA和 Codex 补跑日志。')) return;
+  btn.disabled = true;
+  status.classList.remove('is-error', 'is-success');
+  status.textContent = '正在清理账号日志…';
+  try {
+    const result = await api('/api/account-logs/cleanup', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({all: true}),
+    });
+    const failed = Number(result.failed_count || 0);
+    status.textContent = `已清理 ${Number(result.deleted || 0)} 个账号日志${failed ? ` · ${failed} 个删除失败` : ''}`;
+    status.classList.add(failed ? 'is-error' : 'is-success');
+    showToast(failed ? `账号日志清理完成，${failed} 个文件失败` : '全部账号日志已清理');
+  } catch (e) {
+    status.textContent = `清理失败：${e.message}`;
+    status.classList.add('is-error');
+  } finally {
+    btn.disabled = false;
+    await loadAccountLogManagementStatusV2();
+  }
+}
+
+function bindAccountLogManagementToolsV2() {
+  const btn = document.getElementById('btnClearAccountLogsV2');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', clearAccountLogsV2);
+  }
+  syncAccountLogManagementControlsV2();
+  loadAccountLogManagementStatusV2();
 }
 
 function renderMixedConfigSectionV2(name, fields, intro) {
@@ -10199,6 +10326,21 @@ function renderConfigSectionV2(name, fields) {
       </section>
     `;
   }
+  if (name === '日志管理') {
+    const accountCleanupKeys = new Set(['ACCOUNT_LOG_AUTO_CLEANUP', 'ACCOUNT_LOG_RETENTION_DAYS']);
+    const normalFields = fields.filter(field => !accountCleanupKeys.has(field.key));
+    const switches = normalFields.filter(field => field.type === 'bool');
+    const inputs = normalFields.filter(field => field.type !== 'bool');
+    return `
+      <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
+        ${renderConfigSectionHead(name, configSectionIntro(name))}
+        ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
+        ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
+        ${renderAccountLogManagementToolsV2()}
+        ${renderConfigSectionActionsV2()}
+      </section>
+    `;
+  }
   if (name === '提链') {
     return renderExtractLinkSectionV2(fields);
   }
@@ -10252,6 +10394,7 @@ function renderConfigLayoutV2() {
   bindPageAgentToolsV2();
   bindExtractLinkToolsV2();
   bindCodexSmsToolsV2();
+  bindAccountLogManagementToolsV2();
   syncRegionProfileControlV2();
   syncConfigDirtyIndicatorsV2();
 }
@@ -10419,6 +10562,7 @@ function trackConfigFieldChange(e) {
   setConfigPendingValueV2(f.key, readConfigElementValue(el, f));
   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
+  if (f.key === 'ACCOUNT_LOG_AUTO_CLEANUP') syncAccountLogManagementControlsV2();
   if (f.type === 'bool') {
     const status = el.closest('.config-switch-v2')?.querySelector('[data-config-switch-status-v2]');
     if (status) {

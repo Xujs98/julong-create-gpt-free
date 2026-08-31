@@ -58,8 +58,12 @@ def test_registration_job_log_refresh_settings_are_editable():
     assert isinstance(webui_config.WEBUI_JOB_LOG_REFRESH_INTERVAL, int)
     assert isinstance(webui_config.WEBUI_REGISTRATION_JOB_RETENTION_COUNT, int)
     assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["type"] == "bool"
-    assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["group"] == "WebUI"
+    assert fields["WEBUI_JOB_LOG_AUTO_REFRESH"]["group"] == "日志管理"
     assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["type"] == "int"
-    assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["group"] == "WebUI"
+    assert fields["WEBUI_JOB_LOG_REFRESH_INTERVAL"]["group"] == "日志管理"
     assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["type"] == "int"
-    assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["group"] == "WebUI"
+    assert fields["WEBUI_REGISTRATION_JOB_RETENTION_COUNT"]["group"] == "日志管理"
+    assert "ACCOUNT_LOG_AUTO_CLEANUP: bool = False" in config_source
+    assert "ACCOUNT_LOG_RETENTION_DAYS: int = 30" in config_source
+    assert fields["ACCOUNT_LOG_AUTO_CLEANUP"]["group"] == "日志管理"
+    assert fields["ACCOUNT_LOG_RETENTION_DAYS"]["group"] == "日志管理"
