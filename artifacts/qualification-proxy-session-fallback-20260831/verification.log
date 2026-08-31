@@ -1,0 +1,41 @@
+[根因]
+资格查询与套餐查询复用账号注册时保存的 provider SOCKS5 session。该 session 过期/被服务端拒绝后，重试仍使用同一 -sid-，curl 返回错误 97，导致 accounts/check 尚未完成，资格 Checkout 没有执行。
+
+[修复行为]
+1. 保存代理 session 遇到 SOCKS5/ProxyError/连接层失败时，按原地区刷新 provider -sid- 后重试。
+2. 套餐接口已成功但资格 Checkout 全量传输失败时，仅刷新代理并重跑资格阶段。
+3. 结果写入 proxy_session_fallback 与脱敏回退原因，保留明确失败状态。
+
+[命令1]
+python3 -m pytest -q tests/test_chatgpt_plan_context.py tests/test_plan_check_service_refresh.py tests/test_proxy_utils.py tests/test_qualification_test.py
+........................................                                 [100%]
+40 passed in 1.47s
+[退出码] 0
+
+[命令2]
+python3 -m compileall -q core config webui
+[字面输出] (无输出)
+[退出码] 0
+
+[命令3]
+git diff --check
+[字面输出] (无输出)
+[退出码] 0
+
+[命令4]
+git apply --check -R artifacts/qualification-proxy-session-fallback-20260831/qualification-proxy-session-fallback.patch
+[字面输出] (无输出)
+[退出码] 0
+
+[命令5]
+sh -n artifacts/qualification-proxy-session-fallback-20260831/rollback.sh
+[字面输出] (无输出)
+[退出码] 0
+
+[命令6]
+python3 -m pytest -q
+[结果] 647 passed, 4 failed（4 个既有失败：注册自动资格参数断言、协议浏览器开关默认值、Codex CDK 删除测试；与本次代理回退修改无关）
+[退出码] 1
+
+[运行验证]
+WebUI 已重启并监听 127.0.0.1:5000；GET / 返回 HTTP 302（登录跳转），服务进程正常。

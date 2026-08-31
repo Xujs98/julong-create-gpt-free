@@ -535,47 +535,6 @@ def _retryable_plan_error(http_status: int | None) -> bool:
     return http_status in {408, 409, 425, 429} or http_status >= 500
 
 
-def _is_proxy_transport_error(exc: BaseException | None) -> bool:
-    """识别代理握手/连接层错误，供保存代理 session 失效时刷新出口。"""
-    if exc is None:
-        return False
-    text = f"{type(exc).__name__}: {exc}".lower()
-    return any(marker in text for marker in (
-        "proxyerror",
-        "curl: (97)",
-        "socks5",
-        "connection to proxy",
-        "proxy connection",
-        "connection to chatgpt.com",
-        "connection closed",
-        "connection reset",
-        "recv failure",
-        "timed out",
-        "timeout",
-        "network is unreachable",
-    ))
-
-
-def _country_qualification_transport_failed(result: Any) -> bool:
-    """判断各国资格结果是否为全量代理传输失败，而非业务无资格。"""
-    if not isinstance(result, dict):
-        return False
-    if str(result.get("country_qualification_status") or "").strip().lower() != "failed":
-        return False
-    failures = [
-        item for item in (result.get("country_qualification_results") or [])
-        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "failed"
-    ]
-    if failures:
-        details = " ".join(
-            str(item.get("error") or item.get("message") or "")
-            for item in failures
-        )
-    else:
-        details = str(result.get("country_qualification_error") or "")
-    return _is_proxy_transport_error(RuntimeError(details))
-
-
 def _retry_wait_seconds(resp: Any, base_delay: float, attempt: int) -> float:
     try:
         retry_after = (getattr(resp, "headers", {}) or {}).get("retry-after")
@@ -643,7 +602,6 @@ def check_account_plan(
         }
 
     last_result: dict | None = None
-    session_proxy_override: str | None = None
     for attempt in range(1, attempts + 1):
         env = session
         owns_session = session is None
@@ -651,9 +609,7 @@ def check_account_plan(
         try:
             # 独立查询创建协议会话；查活后的即时校验可借用原会话保持 Cookie/IP 连续性。
             if env is None:
-                session_proxy = session_proxy_override or (
-                    route["proxy"] if preserve_proxy_session else rotate_proxy_session(route["proxy"])
-                )
+                session_proxy = route["proxy"] if preserve_proxy_session else rotate_proxy_session(route["proxy"])
                 env = BrowserSession(proxy=session_proxy, detect_exit_geo=False)
             _restore_plan_session_context(
                 env,
@@ -738,68 +694,12 @@ def check_account_plan(
                         })
                     if check_country_qualification:
                         qualification_checker = globals().get("check_country_qualification") or _check_country_qualification
-                        qualification_result = qualification_checker(
+                        parsed.update(qualification_checker(
                             env,
                             token,
                             billing_country=billing_country,
                             timeout=timeout_seconds,
-                        )
-                        # accounts/check 已成功时，资格 Checkout 仍可能因保存的
-                        # SOCKS5 session 过期而全量失败。刷新同一地区 provider sid，
-                        # 仅重跑资格阶段，避免重复请求套餐接口。
-                        if (
-                            preserve_proxy_session
-                            and attempt < attempts
-                            and route.get("proxy")
-                            and _country_qualification_transport_failed(qualification_result)
-                        ):
-                            rotated = rotate_proxy_session(route.get("proxy"))
-                            if rotated and rotated != route.get("proxy"):
-                                fallback_env = None
-                                try:
-                                    fallback_env = BrowserSession(proxy=rotated, detect_exit_geo=False)
-                                    _restore_plan_session_context(
-                                        fallback_env,
-                                        device_id=device_id,
-                                        session_cookies=session_cookies,
-                                    )
-                                    fallback_result = qualification_checker(
-                                        fallback_env,
-                                        token,
-                                        billing_country=billing_country,
-                                        timeout=timeout_seconds,
-                                    )
-                                    qualification_result = fallback_result
-                                    if owns_session and env is not fallback_env:
-                                        try:
-                                            env.session.close()
-                                        except Exception:
-                                            pass
-                                    env = fallback_env
-                                    owns_session = True
-                                    route_meta["proxy_used"] = _mask_proxy(rotated)
-                                    route_meta["network_route"] = "proxy_session_fallback"
-                                    route_meta["proxy_fallback_reason"] = (
-                                        "资格 Checkout 代理连接失败，已刷新代理 session 后重试"
-                                    )
-                                    logger.warning(
-                                        "资格 Checkout 代理连接失败，刷新保存的代理 session 后重试: %s",
-                                        _mask_proxy(rotated),
-                                    )
-                                except Exception as exc:
-                                    if fallback_env is not None and fallback_env is not env:
-                                        try:
-                                            fallback_env.session.close()
-                                        except Exception:
-                                            pass
-                                    logger.warning(
-                                        "资格 Checkout 代理 session 回退失败: %s",
-                                        str(exc)[:240],
-                                    )
-                        parsed.update(qualification_result)
-                    # 资格阶段可能刷新了代理 session，确保结果与数据库中的
-                    # 实际网络路径保持一致。
-                    parsed.update(route_meta)
+                        ))
                     return parsed
         except Exception as exc:
             logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)
@@ -810,26 +710,6 @@ def check_account_plan(
                 "error": f"{type(exc).__name__}: {exc}",
                 "retryable": True,
             }
-            # 查活保存的代理带有地区与 Cookie 连续性要求，但 provider session
-            # 可能已过期。保持同一地区/账号上下文，仅刷新 -sid-，避免第二次仍用
-            # 已被 SOCKS5 服务端拒绝的旧 session。
-            if (
-                preserve_proxy_session
-                and route.get("proxy")
-                and _is_proxy_transport_error(exc)
-            ):
-                rotated = rotate_proxy_session(route.get("proxy"))
-                if rotated and rotated != route.get("proxy"):
-                    session_proxy_override = rotated
-                    route_meta["proxy_used"] = _mask_proxy(rotated)
-                    route_meta["network_route"] = "proxy_session_fallback"
-                    route_meta["proxy_fallback_reason"] = (
-                        "保存代理连接失败，已刷新代理 session 后重试"
-                    )
-                    logger.warning(
-                        "套餐查询代理连接失败，刷新保存的代理 session 后重试: %s",
-                        _mask_proxy(rotated),
-                    )
         finally:
             if owns_session and env is not None:
                 try:

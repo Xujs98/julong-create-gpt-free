@@ -1,0 +1,272 @@
+diff --git a/core/chatgpt_plan.py b/core/chatgpt_plan.py
+index f320067..3d656b2 100644
+--- a/core/chatgpt_plan.py
++++ b/core/chatgpt_plan.py
+@@ -535,6 +535,47 @@ def _retryable_plan_error(http_status: int | None) -> bool:
+     return http_status in {408, 409, 425, 429} or http_status >= 500
+
+
++def _is_proxy_transport_error(exc: BaseException | None) -> bool:
++    """识别代理握手/连接层错误，供保存代理 session 失效时刷新出口。"""
++    if exc is None:
++        return False
++    text = f"{type(exc).__name__}: {exc}".lower()
++    return any(marker in text for marker in (
++        "proxyerror",
++        "curl: (97)",
++        "socks5",
++        "connection to proxy",
++        "proxy connection",
++        "connection to chatgpt.com",
++        "connection closed",
++        "connection reset",
++        "recv failure",
++        "timed out",
++        "timeout",
++        "network is unreachable",
++    ))
++
++
++def _country_qualification_transport_failed(result: Any) -> bool:
++    """判断各国资格结果是否为全量代理传输失败，而非业务无资格。"""
++    if not isinstance(result, dict):
++        return False
++    if str(result.get("country_qualification_status") or "").strip().lower() != "failed":
++        return False
++    failures = [
++        item for item in (result.get("country_qualification_results") or [])
++        if isinstance(item, dict) and str(item.get("status") or "").strip().lower() == "failed"
++    ]
++    if failures:
++        details = " ".join(
++            str(item.get("error") or item.get("message") or "")
++            for item in failures
++        )
++    else:
++        details = str(result.get("country_qualification_error") or "")
++    return _is_proxy_transport_error(RuntimeError(details))
++
++
+ def _retry_wait_seconds(resp: Any, base_delay: float, attempt: int) -> float:
+     try:
+         retry_after = (getattr(resp, "headers", {}) or {}).get("retry-after")
+@@ -602,6 +643,7 @@ def check_account_plan(
+         }
+
+     last_result: dict | None = None
++    session_proxy_override: str | None = None
+     for attempt in range(1, attempts + 1):
+         env = session
+         owns_session = session is None
+@@ -609,7 +651,9 @@ def check_account_plan(
+         try:
+             # 独立查询创建协议会话；查活后的即时校验可借用原会话保持 Cookie/IP 连续性。
+             if env is None:
+-                session_proxy = route["proxy"] if preserve_proxy_session else rotate_proxy_session(route["proxy"])
++                session_proxy = session_proxy_override or (
++                    route["proxy"] if preserve_proxy_session else rotate_proxy_session(route["proxy"])
++                )
+                 env = BrowserSession(proxy=session_proxy, detect_exit_geo=False)
+             _restore_plan_session_context(
+                 env,
+@@ -694,12 +738,68 @@ def check_account_plan(
+                         })
+                     if check_country_qualification:
+                         qualification_checker = globals().get("check_country_qualification") or _check_country_qualification
+-                        parsed.update(qualification_checker(
++                        qualification_result = qualification_checker(
+                             env,
+                             token,
+                             billing_country=billing_country,
+                             timeout=timeout_seconds,
+-                        ))
++                        )
++                        # accounts/check 已成功时，资格 Checkout 仍可能因保存的
++                        # SOCKS5 session 过期而全量失败。刷新同一地区 provider sid，
++                        # 仅重跑资格阶段，避免重复请求套餐接口。
++                        if (
++                            preserve_proxy_session
++                            and attempt < attempts
++                            and route.get("proxy")
++                            and _country_qualification_transport_failed(qualification_result)
++                        ):
++                            rotated = rotate_proxy_session(route.get("proxy"))
++                            if rotated and rotated != route.get("proxy"):
++                                fallback_env = None
++                                try:
++                                    fallback_env = BrowserSession(proxy=rotated, detect_exit_geo=False)
++                                    _restore_plan_session_context(
++                                        fallback_env,
++                                        device_id=device_id,
++                                        session_cookies=session_cookies,
++                                    )
++                                    fallback_result = qualification_checker(
++                                        fallback_env,
++                                        token,
++                                        billing_country=billing_country,
++                                        timeout=timeout_seconds,
++                                    )
++                                    qualification_result = fallback_result
++                                    if owns_session and env is not fallback_env:
++                                        try:
++                                            env.session.close()
++                                        except Exception:
++                                            pass
++                                    env = fallback_env
++                                    owns_session = True
++                                    route_meta["proxy_used"] = _mask_proxy(rotated)
++                                    route_meta["network_route"] = "proxy_session_fallback"
++                                    route_meta["proxy_fallback_reason"] = (
++                                        "资格 Checkout 代理连接失败，已刷新代理 session 后重试"
++                                    )
++                                    logger.warning(
++                                        "资格 Checkout 代理连接失败，刷新保存的代理 session 后重试: %s",
++                                        _mask_proxy(rotated),
++                                    )
++                                except Exception as exc:
++                                    if fallback_env is not None and fallback_env is not env:
++                                        try:
++                                            fallback_env.session.close()
++                                        except Exception:
++                                            pass
++                                    logger.warning(
++                                        "资格 Checkout 代理 session 回退失败: %s",
++                                        str(exc)[:240],
++                                    )
++                        parsed.update(qualification_result)
++                    # 资格阶段可能刷新了代理 session，确保结果与数据库中的
++                    # 实际网络路径保持一致。
++                    parsed.update(route_meta)
+                     return parsed
+         except Exception as exc:
+             logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)
+@@ -710,6 +810,26 @@ def check_account_plan(
+                 "error": f"{type(exc).__name__}: {exc}",
+                 "retryable": True,
+             }
++            # 查活保存的代理带有地区与 Cookie 连续性要求，但 provider session
++            # 可能已过期。保持同一地区/账号上下文，仅刷新 -sid-，避免第二次仍用
++            # 已被 SOCKS5 服务端拒绝的旧 session。
++            if (
++                preserve_proxy_session
++                and route.get("proxy")
++                and _is_proxy_transport_error(exc)
++            ):
++                rotated = rotate_proxy_session(route.get("proxy"))
++                if rotated and rotated != route.get("proxy"):
++                    session_proxy_override = rotated
++                    route_meta["proxy_used"] = _mask_proxy(rotated)
++                    route_meta["network_route"] = "proxy_session_fallback"
++                    route_meta["proxy_fallback_reason"] = (
++                        "保存代理连接失败，已刷新代理 session 后重试"
++                    )
++                    logger.warning(
++                        "套餐查询代理连接失败，刷新保存的代理 session 后重试: %s",
++                        _mask_proxy(rotated),
++                    )
+         finally:
+             if owns_session and env is not None:
+                 try:
+diff --git a/tests/test_chatgpt_plan_context.py b/tests/test_chatgpt_plan_context.py
+index 941d1f1..85ec68b 100644
+--- a/tests/test_chatgpt_plan_context.py
++++ b/tests/test_chatgpt_plan_context.py
+@@ -224,3 +224,98 @@ def test_http_401_reports_backend_auth_failure_for_live_refresh():
+     assert result["needs_live_check"] is True
+     assert result["server_error_code"] == "token_expired"
+     assert "认证失败" in result["error"]
++
++
++def test_saved_proxy_session_refreshes_provider_sid_after_transport_failure():
++    """保存代理 session 被 SOCKS5 拒绝时，第二次请求刷新 sid。"""
++    first_error = RuntimeError("ProxyError: Failed to perform, curl: (97) User was rejected by the SOCKS5 server")
++    responses = [
++        first_error,
++        _Response(_plus_payload()),
++    ]
++    envs = []
++
++    def make_session(*, proxy, **_kwargs):
++        env = SimpleNamespace(
++            device_id="saved-device",
++            proxy=proxy,
++            session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
++            get_chatgpt_headers=lambda **_kwargs: {},
++            navigator_language=lambda: "zh-CN",
++            get=MagicMock(side_effect=[responses[len(envs)]]),
++        )
++        envs.append(env)
++        return env
++
++    saved_proxy = "socks5://user-region-JP-sid-OLD123-t-5:pass@proxy.example:3000"
++    with patch("core.chatgpt_plan.BrowserSession", side_effect=make_session), patch(
++        "core.chatgpt_plan.time.sleep"
++    ), patch("core.chatgpt_plan.rotate_proxy_session", return_value="socks5://user-region-JP-sid-NEW456-t-5:pass@proxy.example:3000"):
++        result = chatgpt_plan.check_account_plan(
++            "TOKEN",
++            proxy=saved_proxy,
++            account_id="account-1",
++            device_id="saved-device",
++            preserve_proxy_session=True,
++            max_attempts=2,
++        )
++
++    assert result["ok"] is True
++    assert [env.proxy for env in envs] == [saved_proxy, "socks5://user-region-JP-sid-NEW456-t-5:pass@proxy.example:3000"]
++    assert result["network_route"] == "proxy_session_fallback"
++    assert result["proxy_fallback_reason"]
++
++
++def test_saved_proxy_session_refreshes_provider_sid_for_country_qualification_failure():
++    """套餐成功但资格 Checkout 被 SOCKS5 拒绝时，只重试资格阶段。"""
++    envs = []
++    qualification_results = [
++        {
++            "country_qualification_status": "failed",
++            "country_qualification_results": [{
++                "status": "failed",
++                "error": "ProxyError: curl: (97) User was rejected by the SOCKS5 server",
++            }],
++        },
++        {
++            "country_qualification_status": "success",
++            "country_qualification_results": [{"status": "not_eligible", "eligible": False}],
++        },
++    ]
++
++    def make_session(*, proxy, **_kwargs):
++        env = SimpleNamespace(
++            device_id="saved-device",
++            proxy=proxy,
++            session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
++            get_chatgpt_headers=lambda **_kwargs: {},
++            navigator_language=lambda: "zh-CN",
++            get=MagicMock(return_value=_Response(_plus_payload())),
++        )
++        envs.append(env)
++        return env
++
++    saved_proxy = "socks5://user-region-JP-sid-OLD123-t-5:pass@proxy.example:3000"
++    with patch("core.chatgpt_plan.BrowserSession", side_effect=make_session), patch(
++        "core.chatgpt_plan.check_country_qualification", side_effect=qualification_results
++    ) as check, patch(
++        "core.chatgpt_plan.rotate_proxy_session",
++        return_value="socks5://user-region-JP-sid-NEW456-t-5:pass@proxy.example:3000",
++    ):
++        result = chatgpt_plan.check_account_plan(
++            "TOKEN",
++            proxy=saved_proxy,
++            account_id="account-1",
++            device_id="saved-device",
++            billing_country="JP",
++            check_country_qualification=True,
++            preserve_proxy_session=True,
++            max_attempts=2,
++        )
++
++    assert result["ok"] is True
++    assert result["country_qualification_status"] == "success"
++    assert check.call_count == 2
++    assert [env.proxy for env in envs] == [saved_proxy, "socks5://user-region-JP-sid-NEW456-t-5:pass@proxy.example:3000"]
++    assert envs[0].session.close.called
++    assert result["network_route"] == "proxy_session_fallback"
