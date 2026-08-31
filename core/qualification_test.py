@@ -38,6 +38,8 @@ KNOWN_PUBLISHABLE_KEYS = (
 )
 
 COUNTRY_LABELS = {
+    "JP": "日本", "US": "美国", "CA": "加拿大", "AU": "澳大利亚",
+    "DE": "德国", "FR": "法国", "IT": "意大利", "ES": "西班牙",
     "PH": "菲律宾", "GB": "英国", "NL": "荷兰", "VN": "越南",
     "ID": "印度尼西亚", "IN": "印度", "PL": "波兰", "BR": "巴西",
 }
@@ -45,6 +47,7 @@ COUNTRY_LABELS = {
 # 与开源工具的内置预设保持一致。每个预设表示一个“国家 + 币种 + 目标
 # 支付渠道”，避免把同一 Checkout 的渠道误当成另一个国家资格。
 QUALIFICATION_PRESETS: tuple[dict[str, str], ...] = (
+    {"name": "日本·银行卡", "channel": "card", "country": "JP", "currency": "JPY"},
     {"name": "菲律宾·GCash", "channel": "gcash", "country": "PH", "currency": "PHP"},
     {"name": "菲律宾·银行卡", "channel": "card", "country": "PH", "currency": "PHP"},
     {"name": "英国·PayPal", "channel": "paypal", "country": "GB", "currency": "GBP"},
@@ -57,7 +60,14 @@ QUALIFICATION_PRESETS: tuple[dict[str, str], ...] = (
     {"name": "巴西·PIX", "channel": "pix", "country": "BR", "currency": "BRL"},
 )
 
-_CURRENCY_BY_COUNTRY = {item["country"]: item["currency"] for item in QUALIFICATION_PRESETS}
+_CURRENCY_BY_COUNTRY = {
+    "AU": "AUD", "AT": "EUR", "BE": "EUR", "BR": "BRL", "CA": "CAD",
+    "CH": "CHF", "DE": "EUR", "DK": "DKK", "ES": "EUR", "FI": "EUR",
+    "FR": "EUR", "GB": "GBP", "ID": "IDR", "IE": "EUR", "IN": "INR",
+    "IT": "EUR", "JP": "JPY", "LU": "EUR", "NL": "EUR", "NO": "NOK",
+    "PH": "PHP", "PL": "PLN", "PT": "EUR", "SE": "SEK", "US": "USD",
+    "VN": "VND",
+}
 _PROFILE_LOCALE = {
     "GB": "en-GB", "NL": "nl-NL", "PH": "en-PH", "VN": "vi-VN",
     "ID": "id-ID", "IN": "en-IN", "PL": "pl-PL", "BR": "pt-BR",
@@ -102,6 +112,50 @@ def _token(value: str) -> str:
     return text
 
 
+def _country_code(value: Any) -> str:
+    code = str(value or "").strip().upper()
+    return code if re.fullmatch(r"[A-Z]{2}", code) else ""
+
+
+def _environment_country(env: Any) -> str:
+    geo = getattr(env, "exit_geo", None)
+    if isinstance(geo, dict):
+        for key in ("country_code", "country", "countryCode"):
+            code = _country_code(geo.get(key))
+            if code:
+                return code
+    return ""
+
+
+def _presets_for_country(
+    country: str,
+    presets: Iterable[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    """Return only Checkout presets compatible with the current proxy exit.
+
+    Checkout validates that ``billing_details.country`` matches the request's
+    network country. Running every built-in country through one saved account
+    proxy therefore makes all foreign presets fail with HTTP 400. Countries
+    without a local-wallet preset use a generic card check instead.
+    """
+    code = _country_code(country)
+    if not code:
+        return []
+    selected = [
+        dict(item)
+        for item in (presets or QUALIFICATION_PRESETS)
+        if _country_code(item.get("country")) == code
+    ]
+    if selected:
+        return selected
+    return [{
+        "name": f"{COUNTRY_LABELS.get(code, code)}·银行卡",
+        "channel": "card",
+        "country": code,
+        "currency": _CURRENCY_BY_COUNTRY.get(code, "USD"),
+    }]
+
+
 def _walk(value: Any) -> Iterable[Any]:
     if isinstance(value, dict):
         for child in value.values():
@@ -136,7 +190,7 @@ def _headers(env: Any, token: str, *, sentinel: str | None = None) -> dict[str, 
         except Exception:
             navigator_language = "en-US"
     navigator_language = str(navigator_language or "en-US")
-    headers.update({
+    overrides = {
         "Authorization": f"Bearer {_token(token)}",
         "Content-Type": "application/json",
         "Accept": "*/*",
@@ -145,8 +199,21 @@ def _headers(env: Any, token: str, *, sentinel: str | None = None) -> dict[str, 
         "Referer": "https://chatgpt.com/",
         "OAI-Language": navigator_language,
         "OAI-Device-Id": str(getattr(env, "device_id", "") or ""),
-    })
+    }
+    # BrowserSession already supplies several lowercase headers.  curl_cffi
+    # serializes differently cased duplicates as a comma-joined header value;
+    # in particular ``application/json, application/json`` makes the Checkout
+    # service reject an otherwise valid JSON object with HTTP 422.  Replace
+    # existing names case-insensitively before adding the canonical values.
+    for name, value in overrides.items():
+        for existing in list(headers):
+            if str(existing).lower() == name.lower():
+                del headers[existing]
+        headers[name] = value
     if sentinel:
+        for existing in list(headers):
+            if str(existing).lower() == "openai-sentinel-token":
+                del headers[existing]
         headers["openai-sentinel-token"] = sentinel
     return headers
 
@@ -434,13 +501,30 @@ def query_country_qualification(
     access_token: str,
     *,
     timeout: float = 30.0,
+    billing_country: str = "",
     presets: Iterable[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """按开源资格检测器的预设集合查询各国支付渠道资格。"""
+    """查询与账号当前代理出口国家匹配的支付渠道资格。"""
     token = _token(access_token)
     if not token:
         raise ValueError("access token is empty")
-    selected = list(presets or QUALIFICATION_PRESETS)
+    country = _country_code(billing_country) or _environment_country(env)
+    if country:
+        selected = _presets_for_country(country, presets)
+    elif presets is not None:
+        # Explicit presets remain useful for isolated protocol tests/tools,
+        # but production calls must provide the account proxy country.
+        selected = [dict(item) for item in presets]
+    else:
+        return {
+            "country_qualification_results": [],
+            "country_qualification_eligible": None,
+            "country_qualification_query_count": 0,
+            "country_qualification_status": "failed",
+            "country_qualification_error": "缺少账号代理出口国家，未发起 Checkout 资格检测",
+            "country_qualification_source": "qualification-test",
+            "country_qualification_engine": "qualification-test@d98bf731",
+        }
     results: list[dict[str, Any]] = []
     for preset in selected:
         try:
@@ -470,6 +554,7 @@ def query_country_qualification(
         "country_qualification_eligible": any(item.get("eligible") is True for item in results),
         "country_qualification_query_count": len(results),
         "country_qualification_status": "success" if succeeded else "failed",
+        "country_qualification_country": country or None,
         "country_qualification_source": "qualification-test",
         "country_qualification_engine": "qualification-test@d98bf731",
     }

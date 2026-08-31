@@ -1,0 +1,60 @@
+Country qualification country-match repair verification
+Date: 2026-08-31
+Baseline commit: fe0850a45df32047ef7f55804de07aff3530a0fe
+
+Baseline input:
+  Account #366 proxy_country_code=JP
+  Previous stored result: status=failed, HTTP 422, query_count=10
+  Previous request behavior: one JP proxy queried PH/GB/NL/VN/ID/IN/PL/BR presets.
+
+Modified behavior:
+  Billing/proxy country is passed from check_account_plan into qualification-test.
+  JP selects exactly JP/JPY/card.
+  PH selects exactly PH/PHP/gcash and PH/PHP/card.
+  Other known countries select a native-currency card preset.
+  Request headers are replaced case-insensitively so Content-Type and OAI-Device-Id are emitted once.
+
+$ COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION=False PROTOCOL_BROWSER_LIKE_FLOW=False CODEX_SMS_NUMBER_TYPE=auto python3 -m pytest -q tests/test_qualification_test.py tests/test_chatgpt_plan_context.py tests/test_plan_check_service_refresh.py
+............................                                             [100%]
+28 passed in 0.86s
+exit=0
+
+$ COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION=False PROTOCOL_BROWSER_LIKE_FLOW=False CODEX_SMS_NUMBER_TYPE=auto python3 -m pytest -q
+........................................................................ [100%]
+635 passed in 119.67s (0:01:59)
+exit=0
+
+$ python3 -m compileall -q core/chatgpt_plan.py core/qualification_test.py tests/test_chatgpt_plan_context.py tests/test_qualification_test.py
+output=<empty>
+exit=0
+
+$ git diff --check
+output=<empty>
+exit=0
+
+Real protocol smoke input:
+  account_id=366, saved proxy/session, proxy_country_code=JP,
+  check_oaics=false, check_country_qualification=true
+Literal sanitized output:
+  status=success
+  http_status=200
+  country=JP
+  currency=JPY
+  channel=card
+  eligible=true
+  checkout_provider=stripe
+  available_channels=[card, apple_pay, google_pay]
+  query_count=1
+  persisted_status=success
+exit=0
+
+$ artifacts/country-qualification-country-match-20260831/rollback.sh
+rollback restored qualification country-match files from fe0850a45df32047ef7f55804de07aff3530a0fe
+exit=0
+
+$ gzip -dc country-qualification-country-match.patch.gz | git apply && shasum -a 256 -c modified-sha256.txt
+core/chatgpt_plan.py: OK
+core/qualification_test.py: OK
+tests/test_chatgpt_plan_context.py: OK
+tests/test_qualification_test.py: OK
+exit=0

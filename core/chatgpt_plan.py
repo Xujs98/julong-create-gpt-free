@@ -326,14 +326,20 @@ def _check_country_qualification(
     env: BrowserSession,
     token: str,
     *,
+    billing_country: str = "",
     timeout: float = 15.0,
 ) -> dict[str, Any]:
-    """按 qualification-test 的 Checkout 支付渠道预设查询各国资格。"""
+    """按账号代理出口国家查询 qualification-test 支付渠道资格。"""
     checked_at = now_iso()
     try:
         from core.qualification_test import query_country_qualification
 
-        result = query_country_qualification(env, token, timeout=max(15.0, float(timeout or 0)))
+        result = query_country_qualification(
+            env,
+            token,
+            billing_country=billing_country,
+            timeout=max(15.0, float(timeout or 0)),
+        )
         # ``query_country_qualification`` keeps per-country failures in the
         # result list so partial successes remain visible.  Preserve a useful
         # aggregate error when every Checkout attempt failed instead of
@@ -691,6 +697,7 @@ def check_account_plan(
                         parsed.update(qualification_checker(
                             env,
                             token,
+                            billing_country=billing_country,
                             timeout=timeout_seconds,
                         ))
                     return parsed

@@ -148,6 +148,34 @@ def test_free_plan_keeps_plan_success_when_oaics_check_fails():
     assert "403" in result["oaics_check_error"]
 
 
+def test_country_qualification_receives_account_proxy_country():
+    env = SimpleNamespace(
+        device_id="saved-device",
+        proxy="PROXY",
+        session=SimpleNamespace(cookies=MagicMock(), close=MagicMock()),
+        get_chatgpt_headers=lambda **_kwargs: {},
+        navigator_language=lambda: "zh-CN",
+        get=MagicMock(return_value=_Response(_free_payload())),
+    )
+    country_result = {
+        "country_qualification_status": "success",
+        "country_qualification_results": [],
+    }
+    with patch("core.chatgpt_plan.BrowserSession", return_value=env), patch(
+        "core.chatgpt_plan.check_country_qualification", return_value=country_result
+    ) as check:
+        result = chatgpt_plan.check_account_plan(
+            "TOKEN",
+            proxy="PROXY",
+            billing_country="JP",
+            check_country_qualification=True,
+            max_attempts=1,
+        )
+
+    assert result["ok"] is True
+    check.assert_called_once_with(env, "TOKEN", billing_country="JP", timeout=15.0)
+
+
 def test_oaics_checkout_failure_preserves_provider_detail_and_retryability():
     failed = _Response({"detail": "Our systems have detected unusual activity. Please try again later."})
     failed.status_code = 400
