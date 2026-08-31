@@ -180,6 +180,9 @@ class RegistrationBatchWebUiTests(unittest.TestCase):
         self.assertIn('function formatDurationSeconds(value)', html)
         self.assertIn('function formatRegistrationSuccessRate(batch)', html)
         self.assertIn('成功率：${formatRegistrationSuccessRate(batch)}', html)
+        self.assertIn('.registration-task-type.is-registration', html)
+        self.assertIn('.registration-task-type.is-rebind', html)
+        self.assertIn('class="registration-task-type ${taskTypeClass}"', html)
 
     @patch("webui.app.db.list_registration_batches")
     def test_batch_log_api_returns_persistent_history(self, list_batches):
