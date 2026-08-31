@@ -78,6 +78,40 @@ def test_sqlite_job_page_only_decodes_requested_slice(tmp_path, monkeypatch):
     assert latest_batch["failed_count"] == 5
 
 
+def test_sqlite_backfills_legacy_rebind_jobs_into_batch_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("TURB_STORAGE_BACKEND", "sqlite")
+    jobs = [{
+        "id": 459,
+        "job_type": "rebind",
+        "email_source": "icloud",
+        "email": "target@example.com",
+        "status": "failed",
+        "started_at": "2026-08-31T10:00:00",
+        "completed_at": "2026-08-31T10:01:00",
+        "created_at": "2026-08-31T10:00:00",
+        "batch_id": None,
+        "rebind_source_email": "source@example.com",
+        "rebind_target_email": "target@example.com",
+    }]
+    (tmp_path / "jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
+    (tmp_path / "batches.json").write_text("[]", encoding="utf-8")
+
+    with _storage_patch(tmp_path):
+        db.initialize_sqlite_storage()
+        batches = db.list_registration_batches()
+        latest = db.get_latest_registration_batch()
+        migrated_batch_id = db._load_jobs()[0]["batch_id"]
+
+    assert len(batches) == 1
+    assert batches[0]["task_type"] == "rebind"
+    assert batches[0]["job_ids"] == [459]
+    assert batches[0]["failed_count"] == 1
+    assert batches[0]["status"] == "completed"
+    assert latest["task_type"] == "rebind"
+    assert latest["job_ids"] == [459]
+    assert migrated_batch_id == batches[0]["id"]
+
+
 def test_retry_info_batch_loads_each_json_collection_once(tmp_path, monkeypatch):
     monkeypatch.setenv("TURB_STORAGE_BACKEND", "json")
     jobs = [

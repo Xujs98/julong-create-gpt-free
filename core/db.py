@@ -929,19 +929,175 @@ def _save_jobs(rows: list[dict]) -> None:
     _write_json(_JOBS_JSON, rows)
 
 
+def _legacy_rebind_batch_row(job: dict, batch_id: int) -> dict | None:
+    """Build a persisted batch row for a pre-batch rebind task.
+
+    Rebind tasks created before the shared batch log was introduced have no
+    ``batch_id``.  Treat each historical task as one submitted-item batch so
+    the existing task list, top summary, and batch log can all use the same
+    data shape after the compatibility migration.
+    """
+    try:
+        job_id = int(job.get("id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if job_id <= 0:
+        return None
+    started_at = str(
+        job.get("rebind_started_at")
+        or job.get("started_at")
+        or job.get("created_at")
+        or _now()
+    ).strip()
+    status = str(job.get("status") or "pending").strip().lower()
+    terminal = status in _REGISTRATION_TERMINAL_STATUSES
+    completed_at = str(job.get("completed_at") or "").strip() or None
+    if terminal and not completed_at:
+        completed_at = started_at
+    batch = {
+        "id": int(batch_id),
+        "task_type": "rebind",
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "sealed_at": started_at,
+        "requested_count": 1,
+        "submitted_count": 1,
+        "workers": 1,
+        "email_source": str(job.get("email_source") or job.get("rebind_target_source") or "rebind"),
+        "job_ids": [job_id],
+        "success_count": 1 if status == "success" else 0,
+        "failed_count": 1 if status in {"failed", "stopped", "cancelled"} else 0,
+        "success_rate": 100.0 if status == "success" else 0.0,
+        "running_count": 1 if status in {"running", "stopping"} else 0,
+        "pending_count": 1 if status == "pending" else 0,
+        "status": "completed" if terminal else "running",
+        "created_at": str(job.get("created_at") or started_at),
+    }
+    # Fill elapsed/completed counts with the same logic used by live batches.
+    return _registration_batch_snapshot(batch, [job])
+
+
+def _backfill_legacy_rebind_batches(rows: list[dict], jobs: list[dict] | None = None) -> list[dict]:
+    """Migrate old rebind jobs that were created without a batch reference.
+
+    The migration is idempotent: existing batch links are reused, while only
+    missing links create new batch rows.  Both the authoritative SQLite store
+    and the JSON compatibility backend go through the same path.
+    """
+    if not isinstance(rows, list):
+        rows = []
+    jobs = _load_jobs() if jobs is None else jobs
+    if not jobs:
+        return rows
+
+    existing_by_job: dict[int, int] = {}
+    existing_ids: set[int] = set()
+    for batch in rows:
+        if not isinstance(batch, dict):
+            continue
+        try:
+            batch_id = int(batch.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if batch_id:
+            existing_ids.add(batch_id)
+        for raw_job_id in batch.get("job_ids") or []:
+            try:
+                job_id = int(raw_job_id)
+            except (TypeError, ValueError):
+                continue
+            if job_id:
+                existing_by_job[job_id] = batch_id
+
+    used_ids = set(existing_ids)
+    for job in jobs:
+        try:
+            linked_batch_id = int(job.get("batch_id") or 0)
+        except (TypeError, ValueError):
+            linked_batch_id = 0
+        if linked_batch_id:
+            used_ids.add(linked_batch_id)
+    next_batch_id = max(used_ids or {0}) + 1
+    jobs_changed = False
+    batches_changed = False
+    for job in sorted(jobs, key=lambda item: int(item.get("id") or 0)):
+        if str(job.get("job_type") or "").strip().lower() != "rebind":
+            continue
+        try:
+            job_id = int(job.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        try:
+            linked_batch_id = int(job.get("batch_id") or 0)
+        except (TypeError, ValueError):
+            linked_batch_id = 0
+        if linked_batch_id:
+            continue
+        batch_id = existing_by_job.get(job_id)
+        if batch_id is None:
+            batch_id = next_batch_id
+            next_batch_id += 1
+            batch = _legacy_rebind_batch_row(job, batch_id)
+            if batch is None:
+                continue
+            rows.append(batch)
+            existing_by_job[job_id] = batch_id
+            batches_changed = True
+        job["batch_id"] = int(batch_id)
+        jobs_changed = True
+
+    if jobs_changed:
+        _save_jobs(jobs)
+    if batches_changed:
+        _save_registration_batches_raw(rows)
+    return rows
+
+
+def _save_registration_batches_raw(rows: list[dict]) -> None:
+    """Persist batch rows without invoking the compatibility backfill."""
+    if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
+        _sqlite_store().replace_records("registration_batches", rows)
+    _write_json(_REGISTRATION_BATCHES_JSON, rows)
+
+
 def _load_registration_batches() -> list[dict]:
     """读取注册与换绑批次历史；SQLite 为主存储，JSON 保留兼容镜像。"""
     if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
-        return _sqlite_store().load_records("registration_batches")
-    rows = _read_json(_REGISTRATION_BATCHES_JSON, [])
-    return rows if isinstance(rows, list) else []
+        store = _sqlite_store()
+        rows = store.load_records("registration_batches")
+        # Avoid turning the paged jobs endpoint's latest-batch lookup into a
+        # full table decode when there are no legacy rebind rows to migrate.
+        try:
+            with store._connection() as conn:
+                legacy_rows = conn.execute(
+                    """
+                    SELECT payload_json
+                    FROM records
+                    WHERE entity=?
+                      AND json_extract(payload_json, '$.job_type')='rebind'
+                      AND (json_extract(payload_json, '$.batch_id') IS NULL
+                           OR CAST(json_extract(payload_json, '$.batch_id') AS INTEGER)=0)
+                    """,
+                    ("registration_jobs",),
+                ).fetchall()
+            if legacy_rows:
+                # The migration needs the complete job list to preserve rows
+                # that are unrelated to the legacy rebind records.
+                return _backfill_legacy_rebind_batches(rows, _load_jobs())
+        except sqlite3.OperationalError:
+            # JSON1 is available in supported SQLite builds; on an older
+            # build, fall back to the compatibility loader for correctness.
+            return _backfill_legacy_rebind_batches(rows)
+        return rows
+    else:
+        rows = _read_json(_REGISTRATION_BATCHES_JSON, [])
+        rows = rows if isinstance(rows, list) else []
+        return _backfill_legacy_rebind_batches(rows)
 
 
 def _save_registration_batches(rows: list[dict]) -> None:
     """保存注册批次历史并同步 JSON 镜像。"""
-    if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
-        _sqlite_store().replace_records("registration_batches", rows)
-    _write_json(_REGISTRATION_BATCHES_JSON, rows)
+    _save_registration_batches_raw(rows)
 
 
 def _find_by_email(rows: list[dict], email: str) -> dict | None:
@@ -4286,19 +4442,17 @@ def get_latest_registration_batch() -> dict | None:
     """
     with _LOCK:
         if _uses_sqlite(_REGISTRATION_BATCHES_JSON, _DEFAULT_REGISTRATION_BATCHES_JSON):
-            store = _sqlite_store()
-            with store._connection() as conn:
-                batch_row = conn.execute(
-                    """
-                    SELECT payload_json
-                    FROM records
-                    WHERE entity=?
-                    ORDER BY record_id DESC, position DESC
-                    LIMIT 1
-                    """,
-                    ("registration_batches",),
-                ).fetchone()
-            batch = json.loads(batch_row["payload_json"]) if batch_row is not None else None
+            # Loading through the compatibility-aware reader also performs the
+            # one-time legacy rebind backfill before selecting the latest row.
+            batches = _load_registration_batches()
+            batch = max(
+                (dict(row) for row in batches),
+                key=lambda row: (
+                    _parse_local_datetime(row.get("started_at")) or datetime.min,
+                    int(row.get("id") or 0),
+                ),
+                default=None,
+            )
         else:
             batches = sorted(
                 _load_registration_batches(),

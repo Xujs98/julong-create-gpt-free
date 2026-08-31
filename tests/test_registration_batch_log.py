@@ -110,6 +110,55 @@ class RegistrationBatchStorageTests(unittest.TestCase):
         self.assertEqual(cleared, {"cleared": 0, "kept_active": 1})
         self.assertEqual(db.list_registration_batches()[0]["status"], "running")
 
+    def test_backfills_legacy_rebind_jobs_and_exposes_latest_summary(self):
+        rows = []
+        for status, started_at, completed_at in (
+            ("failed", "2026-08-31T10:00:00", "2026-08-31T10:01:00"),
+            ("success", "2026-08-31T11:00:00", "2026-08-31T11:02:00"),
+        ):
+            job = db._new_job_row(
+                rows,
+                email_source="icloud",
+                job_type="rebind",
+                email="target@example.com",
+                account_id=1,
+            )
+            job.update({
+                "status": status,
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "created_at": started_at,
+                "rebind_started_at": started_at,
+                "rebind_source_email": "source@example.com",
+                "rebind_target_email": "target@example.com",
+            })
+            rows.append(job)
+        db._save_jobs(rows)
+
+        batches = db.list_registration_batches()
+
+        self.assertEqual(len(batches), 2)
+        self.assertEqual([item["task_type"] for item in batches], ["rebind", "rebind"])
+        self.assertEqual(batches[0]["job_ids"], [2])
+        self.assertEqual(batches[0]["success_count"], 1)
+        self.assertEqual(batches[0]["status"], "completed")
+        self.assertEqual(batches[1]["job_ids"], [1])
+        self.assertEqual(batches[1]["failed_count"], 1)
+        self.assertTrue(all(int(item["id"]) > 0 for item in batches))
+
+        migrated_jobs = db._load_jobs()
+        self.assertEqual([int(item["batch_id"]) for item in migrated_jobs], [1, 2])
+        self.assertEqual([item["id"] for item in db.list_registration_batches()], [2, 1])
+
+        app = create_app(auth_code="legacy-rebind-test")
+        client = app.test_client()
+        client.environ_base["HTTP_X_AUTH_CODE"] = "legacy-rebind-test"
+        current = client.get("/api/jobs?paged=1&page=1&page_size=10").get_json()["current_batch"]
+        self.assertEqual(current["task_type"], "rebind")
+        self.assertEqual(current["job_ids"], [2])
+        log_items = client.get("/api/registration-batches?limit=500").get_json()["items"]
+        self.assertEqual([item["task_type"] for item in log_items], ["rebind", "rebind"])
+
 
 class RegistrationBatchWebUiTests(unittest.TestCase):
     def setUp(self):
