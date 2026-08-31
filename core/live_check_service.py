@@ -11,6 +11,8 @@ from pathlib import Path
 from core import db
 from core.account_liveness import check_account_liveness, log_path
 from core.chatgpt_plan import check_account_plan, resolve_plan_check_route
+from core.live_check_proxy import fetch_proxy_api
+from core.proxy_utils import masked_proxy_url, normalize_proxy_url
 from core.session_state import extract_saved_session
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,100 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="live-ch
 _QUEUE_SLOTS = threading.BoundedSemaphore(_QUEUE_LIMIT)
 _RUNNING: set[int] = set()
 _LOCK = threading.Lock()
+
+
+_NETWORK_ERROR_HINTS = (
+    "403", "429", "502", "503", "504", "timeout", "timed out",
+    "connection", "proxy", "socks", "reset", "temporarily unavailable",
+)
+
+
+def _network_result(result: dict | None) -> bool:
+    """判断查活结果是否适合切换到下一个代理出口。"""
+    if not isinstance(result, dict) or result.get("ok") or result.get("status") != "failed":
+        return False
+    try:
+        if int(result.get("http_status") or 0) in {403, 408, 429, 500, 502, 503, 504}:
+            return True
+    except (TypeError, ValueError):
+        pass
+    error = str(result.get("error") or "").lower()
+    return any(hint in error for hint in _NETWORK_ERROR_HINTS)
+
+
+def _saved_registration_proxy(account: dict) -> str:
+    raw = str(account.get("proxy_used") or "").strip()
+    if not raw or "***" in raw:
+        return ""
+    try:
+        return str(normalize_proxy_url(raw, default_scheme="auto") or "")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _live_check_routes(account: dict, explicit_proxy: str | None = None) -> list[dict]:
+    """按注册代理 → API → 代理池顺序构造查活候选出口。"""
+    from config import live_check as live_cfg
+
+    if explicit_proxy is not None:
+        route = resolve_plan_check_route(explicit_proxy=explicit_proxy)
+        route["source"] = "request"
+        return [route]
+
+    routes: list[dict] = []
+    if bool(getattr(live_cfg, "LIVE_CHECK_USE_REGISTRATION_PROXY", True)):
+        saved = _saved_registration_proxy(account)
+        if saved:
+            routes.append({
+                "source": "registration",
+                "proxy": saved,
+                "proxy_mode": "registration",
+                "network_route": "proxy",
+                "proxy_used": masked_proxy_url(saved) or None,
+                "proxy_fallback_reason": None,
+            })
+
+    if bool(getattr(live_cfg, "LIVE_CHECK_PROXY_API_ENABLED", False)):
+        region = str(account.get("proxy_country_code") or "").strip()
+        if region:
+            try:
+                api_proxies = fetch_proxy_api(
+                    region,
+                    api_url=str(getattr(live_cfg, "LIVE_CHECK_PROXY_API_URL", "") or ""),
+                    timeout=float(getattr(live_cfg, "LIVE_CHECK_PROXY_API_TIMEOUT", 8.0) or 8.0),
+                )
+                for api_proxy in api_proxies:
+                    routes.append({
+                        "source": "proxy_api",
+                        "proxy": api_proxy,
+                        "proxy_mode": "api",
+                        "network_route": "proxy",
+                        "proxy_used": masked_proxy_url(api_proxy) or None,
+                        "proxy_fallback_reason": None,
+                    })
+            except Exception as exc:
+                routes.append({
+                    "source": "proxy_api",
+                    "proxy": "",
+                    "proxy_mode": "api",
+                    "network_route": "api_failed",
+                    "proxy_used": None,
+                    "proxy_fallback_reason": f"代理 API 获取失败：{type(exc).__name__}: {str(exc)[:160]}",
+                })
+        else:
+            routes.append({
+                "source": "proxy_api",
+                "proxy": "",
+                "proxy_mode": "api",
+                "network_route": "api_skipped",
+                "proxy_used": None,
+                "proxy_fallback_reason": "账号缺少国家/地区，跳过代理 API",
+            })
+
+    pool_route = resolve_plan_check_route(explicit_proxy=None)
+    pool_route["source"] = "proxy_pool"
+    routes.append(pool_route)
+    return routes
 
 
 def is_checking(email: str) -> bool:
@@ -99,8 +195,70 @@ def _check_existing_access_token(
         "status": "failed",
         "checked_at": checked.get("checked_at") or datetime.now().isoformat(timespec="seconds"),
         "error": f"AT 在线校验失败: {error}",
+        "http_status": checked.get("http_status"),
         "check_method": "access_token",
     }
+
+
+def _execute_live_check_route(
+    *,
+    account: dict,
+    email: str,
+    route: dict,
+    trigger: str,
+    selected_driver: str,
+    selected_headless: bool,
+) -> dict:
+    selected_proxy = route.get("proxy")
+    _append_log(
+        email,
+        "[查活] 开始后台执行 "
+        f"trigger={trigger} source={route.get('source') or '-'} network_route={route.get('network_route')} "
+        f"proxy_mode={route.get('proxy_mode')} proxy_used={route.get('proxy_used') or '-'} "
+        f"fallback_reason={route.get('proxy_fallback_reason') or '-'} "
+        f"driver={selected_driver} headless={selected_headless if selected_driver != 'protocol' else '-'}",
+    )
+    login_decision: dict = {}
+    result = _check_existing_access_token(
+        account,
+        proxy=selected_proxy,
+        email=email,
+        browser_fallback=selected_driver != "protocol",
+        decision=login_decision,
+    )
+    used_relogin = result is None
+    if used_relogin:
+        result = check_account_liveness(
+            email,
+            proxy=selected_proxy,
+            clear_log=False,
+            account=account,
+            driver=selected_driver,
+            headless=selected_headless,
+            force_fresh_login=bool(login_decision.get("force_fresh_login")),
+        )
+    # auto/proxy 模式的套餐路由保留一次直连兜底；注册代理/API 失败则交给外层切换下一候选。
+    err_text = str(result.get("error") or "")
+    if (
+        not result.get("ok")
+        and result.get("status") == "failed"
+        and "403" in err_text
+        and selected_proxy
+        and used_relogin
+        and str(route.get("proxy_mode") or "") == "auto"
+        and str(route.get("network_route") or "") == "proxy"
+    ):
+        _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
+        result = check_account_liveness(
+            email,
+            proxy="",
+            clear_log=False,
+            account=account,
+            driver=selected_driver,
+            headless=selected_headless,
+            force_fresh_login=bool(login_decision.get("force_fresh_login")),
+        )
+    return result
 
 
 def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: str) -> dict:
@@ -110,67 +268,59 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
         if not db.mark_account_live_check_running(account_id):
             _append_log(email, "[查活] 账号已删除或查活状态已被重置，取消执行")
             return {"ok": False, "status": "failed", "error": "账号已删除或查活状态已被重置"}
-        route = resolve_plan_check_route(explicit_proxy=proxy)
-        selected_proxy = route.get("proxy")
+
         from config import live_check as live_cfg
         selected_driver = str(getattr(live_cfg, "LIVE_CHECK_DRIVER", "cloak") or "cloak").strip().lower()
         if selected_driver not in {"protocol", "cloak", "roxy"}:
             raise RuntimeError(f"LIVE_CHECK_DRIVER 配置无效：{selected_driver}")
         selected_headless = bool(getattr(live_cfg, "LIVE_CHECK_HEADLESS", False))
-        _append_log(
-            email,
-            "[查活] 开始后台执行 "
-            f"trigger={trigger} network_route={route.get('network_route')} "
-            f"proxy_mode={route.get('proxy_mode')} proxy_used={route.get('proxy_used') or '-'} "
-            f"fallback_reason={route.get('proxy_fallback_reason') or '-'} "
-            f"driver={selected_driver} headless={selected_headless if selected_driver != 'protocol' else '-'}"
-        )
         account = db.get_account(account_id) or {}
-        login_decision: dict = {}
-        result = _check_existing_access_token(
-            account,
-            proxy=selected_proxy,
-            email=email,
-            browser_fallback=selected_driver != "protocol",
-            decision=login_decision,
-        )
-        used_relogin = result is None
-        if used_relogin:
-            result = check_account_liveness(
-                email,
-                proxy=selected_proxy,
-                clear_log=False,
-                account=account,
-                driver=selected_driver,
-                headless=selected_headless,
-                force_fresh_login=bool(login_decision.get("force_fresh_login")),
-            )
-        # 早期 providers/csrf 403 通常是该出口被 CF 拦截，不代表账号死亡。
-        # auto/proxy 模式下如果用了代理，额外直连兜底一次，便于和套餐查询的 auto 语义保持接近。
-        err_text = str(result.get("error") or "")
-        if (
-            not result.get("ok")
-            and result.get("status") == "failed"
-            and "403" in err_text
-            and selected_proxy
-            and used_relogin
-            and str(route.get("proxy_mode") or "") == "auto"
-            and str(route.get("network_route") or "") == "proxy"
-        ):
-            _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
-            result = check_account_liveness(
-                email,
-                proxy="",
-                clear_log=False,
-                account=account,
-                driver=selected_driver,
-                headless=selected_headless,
-                force_fresh_login=bool(login_decision.get("force_fresh_login")),
-            )
+        routes = _live_check_routes(account, explicit_proxy=proxy)
+        final_result: dict | None = None
+        final_proxy: str | None = None
+
+        for index, route in enumerate(routes):
+            source = str(route.get("source") or "proxy_pool")
+            reason = str(route.get("proxy_fallback_reason") or "")
+            if not route.get("proxy") and route.get("network_route") in {"api_failed", "api_skipped"}:
+                _append_log(email, f"[查活] 跳过 {source}：{reason or '无可用代理'}")
+                continue
+            try:
+                result = _execute_live_check_route(
+                    account=account,
+                    email=email,
+                    route=route,
+                    trigger=trigger,
+                    selected_driver=selected_driver,
+                    selected_headless=selected_headless,
+                )
+            except Exception as exc:
+                if not any(hint in str(exc).lower() for hint in _NETWORK_ERROR_HINTS):
+                    raise
+                result = {
+                    "ok": False,
+                    "status": "failed",
+                    "checked_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+                }
+            final_result = result
+            final_proxy = route.get("proxy") or ""
+            if result.get("ok") or result.get("status") == "deactivated" or not _network_result(result):
+                break
+            if index < len(routes) - 1:
+                _append_log(email, f"[查活] {source} 出口失败，切换下一候选出口")
+
+        if final_result is None:
+            final_result = {
+                "ok": False,
+                "status": "failed",
+                "checked_at": datetime.now().isoformat(timespec="seconds"),
+                "error": "查活没有可用代理出口",
+            }
+        result = final_result
         db.update_account_liveness(account_id, result)
         if result.get("ok") and result.get("check_method") != "access_token":
             # 查活重新建立登录态后，旧套餐失败状态对应的是上一枚 AT。
-            # 立即用新 AT 入队复查，表格会从“查询失败”切换为排队/真实套餐。
             from core import plan_check_service
 
             plan_queued = plan_check_service.enqueue_account_plan_check(
@@ -178,7 +328,7 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
                 email=email,
                 access_token=str(result.get("access_token") or ""),
                 trigger="live_check_refresh",
-                proxy=selected_proxy,
+                proxy=final_proxy,
             )
             if plan_queued.get("accepted"):
                 _append_log(email, "[查活] 已使用刷新后的最新 AT 自动入队查询套餐")
@@ -223,7 +373,6 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
         with _LOCK:
             _RUNNING.discard(int(account_id))
         _QUEUE_SLOTS.release()
-
 
 def enqueue_account_live_check(*, account_id: int, email: str, trigger: str = "manual", proxy: str | None = None) -> dict:
     account_id = int(account_id)

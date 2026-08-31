@@ -154,6 +154,24 @@ EDITABLE_FIELDS = [
         "label": "查活浏览器无头", "help": "仅影响查活启动的 Cloak/Roxy 浏览器；不会修改注册流程或两个浏览器各自的无头设置",
     },
     {
+        "key": "LIVE_CHECK_USE_REGISTRATION_PROXY", "file": "live_check.py", "type": "bool", "group": "账号查活",
+        "label": "查活使用注册代理", "help": "开启后优先使用账号注册时保存的代理；该代理失败后再尝试查活代理 API 和代理池",
+    },
+    {
+        "key": "LIVE_CHECK_PROXY_API_ENABLED", "file": "live_check.py", "type": "bool", "group": "账号查活",
+        "label": "启用查活代理 API", "help": "开启后按账号保存的国家/地区请求代理 API；注册代理关闭时，查活优先使用 API，再回退代理池",
+    },
+    {
+        "key": "LIVE_CHECK_PROXY_API_URL", "file": "live_check.py", "type": "str", "group": "账号查活",
+        "label": "查活代理 API 地址", "help": "支持 {region}/{country}/{country_code} 占位符；region 参数会自动替换为账号国家码",
+        "placeholder": "https://api.example/white/api?region={region}&num=1&time=10&format=n&type=json",
+    },
+    {
+        "key": "LIVE_CHECK_PROXY_API_TIMEOUT", "file": "live_check.py", "type": "float", "group": "账号查活",
+        "label": "查活代理 API 超时(秒)", "help": "获取代理 API 的最大等待时间，建议 3-15 秒",
+        "min": 0.5, "max": 60,
+    },
+    {
         "key": "REBIND_LOGIN_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
         "label": "换绑登录方式", "help": "换绑第一阶段建立登录态的方式；推荐使用 CloakBrowser/RoxyBrowser 指纹浏览器",
         "choices": ["cloak", "roxy", "protocol"],

@@ -15,6 +15,7 @@ class StatusClassificationTests(unittest.TestCase):
     def test_ui_distinguishes_403_live_check_and_agent_capability(self):
         html = Path("webui/templates/index.html").read_text(encoding="utf-8")
         self.assertIn("查活: ${blocked ? '访问受阻' : '失败'}", html)
+        self.assertIn("更新时间: ${esc(liveAtText)}", html)
         self.assertIn("s === 'unsupported'", html)
 
 

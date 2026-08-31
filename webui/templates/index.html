@@ -6365,14 +6365,18 @@ function _tokenCellV2(r) {
   const live = r.live_check_status || '';
   const liveErr = r.live_check_error || '';
   const liveAt = r.live_checked_at || '';
+  const liveAtText = _fmtPlanTime(liveAt, false);
+  const liveUpdatedHtml = ['live', 'failed', 'deactivated'].includes(live) && liveAtText
+    ? `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:var(--muted)">更新时间: ${esc(liveAtText)}</div>`
+    : '';
   let liveHtml = '';
-  if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}">查活: 正常</div>`;
+  if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}">查活: 正常</div>${liveUpdatedHtml}`;
   else if (live === 'queued') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 排队</div>`;
   else if (live === 'running') liveHtml = `<div class="acc-v2-sub" title="${esc(liveAt)}" style="color:#e6a23c">查活: 运行中</div>`;
-  else if (live === 'deactivated') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#f56c6c">查活: 已废</div>`;
+  else if (live === 'deactivated') liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#f56c6c">查活: 已废</div>${liveUpdatedHtml}`;
   else if (live === 'failed') {
     const blocked = /(?:http(?: error)?\s*)?403|forbidden/i.test(liveErr);
-    liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#e6a23c">查活: ${blocked ? '访问受阻' : '失败'}</div>`;
+    liveHtml = `<div class="acc-v2-sub" title="${esc(liveErr || liveAt)}" style="color:#e6a23c">查活: ${blocked ? '访问受阻' : '失败'}</div>${liveUpdatedHtml}`;
   }
   if (r.has_access_token || r.has_session) {
     const at = r.has_access_token
@@ -9462,7 +9466,7 @@ function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
   if (name === '日志管理') return '统一管理任务日志与账号级查活、提链、2FA、Codex 补跑日志的保留策略。';
-  if (name === '账号查活') return '分别配置查活、换绑登录和换绑提交方式；混合模式支持指纹浏览器登录后由协议完成邮箱变更。';
+  if (name === '账号查活') return '配置查活出口优先级、查活方式及换绑登录/提交方式；代理优先级为注册代理 → 代理 API → 代理池。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式，并分别控制注册完成后的 OAICS 与各国资格查询。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
@@ -9724,7 +9728,7 @@ function renderConfigPlainFieldV2(f) {
   } else {
     const shown = isPlaceholderEmpty(fv) ? '' : fv;
     const inputType = f.secret ? 'password' : 'text';
-    const ph = f.secret ? '保存在 .env，可留空' : '可留空';
+    const ph = f.secret ? '保存在 .env，可留空' : (f.placeholder || '可留空');
     const isRegionProfile = f.key === 'BROWSER_LOCALE_PROFILE';
     const autoRegion = isRegionProfile && regionProfileAutoEnabledV2();
     const regionAttrs = isRegionProfile

@@ -27,6 +27,27 @@ def test_live_check_driver_config_is_independent_from_registration_browser_setti
     assert isinstance(live_check.LIVE_CHECK_HEADLESS, bool)
 
 
+def test_live_check_proxy_api_settings_are_exposed_with_registration_priority():
+    source = (ROOT / "config" / "live_check.py").read_text(encoding="utf-8")
+    fields = {item["key"]: item for item in EDITABLE_FIELDS}
+
+    assert "LIVE_CHECK_USE_REGISTRATION_PROXY: bool = True" in source
+    assert "LIVE_CHECK_PROXY_API_ENABLED: bool = False" in source
+    assert "{region}" in source
+    assert fields["LIVE_CHECK_USE_REGISTRATION_PROXY"]["type"] == "bool"
+    assert fields["LIVE_CHECK_PROXY_API_ENABLED"]["type"] == "bool"
+    assert fields["LIVE_CHECK_PROXY_API_URL"]["type"] == "str"
+    assert fields["LIVE_CHECK_PROXY_API_TIMEOUT"]["type"] == "float"
+    assert all(fields[key]["group"] == "账号查活" for key in (
+        "LIVE_CHECK_USE_REGISTRATION_PROXY",
+        "LIVE_CHECK_PROXY_API_ENABLED",
+        "LIVE_CHECK_PROXY_API_URL",
+        "LIVE_CHECK_PROXY_API_TIMEOUT",
+    ))
+    assert isinstance(live_check.LIVE_CHECK_USE_REGISTRATION_PROXY, bool)
+    assert isinstance(live_check.LIVE_CHECK_PROXY_API_ENABLED, bool)
+
+
 def test_rebind_hybrid_driver_config_defaults_to_browser_login_protocol_action():
     source = (ROOT / "config" / "live_check.py").read_text(encoding="utf-8")
     fields = {item["key"]: item for item in EDITABLE_FIELDS}
