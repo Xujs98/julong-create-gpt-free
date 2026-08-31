@@ -61,6 +61,19 @@ _NETWORK_REPUTATION_FLAGS = (
 )
 
 
+def _geo_error_retryable(exc: Exception) -> bool:
+    """Return True for transient transport failures worth retrying once."""
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    if any(token in name for token in ("timeout", "proxyerror", "connectionerror", "connecterror")):
+        return True
+    return any(token in message for token in (
+        "timed out", "connection timed out", "connect tunnel failed",
+        "could not connect", "connection reset", "operation timed out",
+        "curl: (28)", "curl: (35)", "curl: (56)",
+    ))
+
+
 def _masked_proxy(proxy_url: str) -> str:
     """遮蔽代理 URL 中的认证信息，避免接口结果泄漏密码。"""
     return masked_proxy_url(proxy_url)
@@ -105,32 +118,41 @@ def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
         candidates = [remote_dns, proxy_url]
     headers = {"Accept": "application/json", "User-Agent": getattr(_browser_cfg, "USER_AGENT", "Mozilla/5.0")}
     errors = []
+    retry_budget = max(0, min(2, int(getattr(_browser_cfg, "IP_GEO_RETRIES", 1) or 0)))
     for candidate in candidates:
         session = Session(impersonate=getattr(_browser_cfg, "IMPERSONATE", "chrome"))
         session.proxies = {"http": candidate, "https": candidate}
         for endpoint in endpoints:
-            try:
-                response = session.get(endpoint, headers=headers, timeout=timeout)
-                if response.status_code != 200:
-                    errors.append(f"{endpoint}: HTTP {response.status_code}")
-                    continue
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    errors.append(f"{endpoint}: 响应不是 JSON 对象")
-                    continue
-                geo = _normalize_geo(payload)
-                if not geo.get("ip"):
-                    errors.append(f"{endpoint}: 响应缺少 IP")
-                    continue
-                return {
-                    "ok": True,
-                    "proxy": _masked_proxy(candidate),
-                    "endpoint": endpoint,
-                    "dns_mode": "proxy" if urlsplit(candidate).scheme.lower() == "socks5h" else "default",
-                    **geo,
-                }
-            except Exception as exc:
-                errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
+            endpoint_retried = False
+            while True:
+                try:
+                    response = session.get(endpoint, headers=headers, timeout=timeout)
+                    if response.status_code != 200:
+                        errors.append(f"{endpoint}: HTTP {response.status_code}")
+                        break
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        errors.append(f"{endpoint}: 响应不是 JSON 对象")
+                        break
+                    geo = _normalize_geo(payload)
+                    if not geo.get("ip"):
+                        errors.append(f"{endpoint}: 响应缺少 IP")
+                        break
+                    return {
+                        "ok": True,
+                        "proxy": _masked_proxy(candidate),
+                        "endpoint": endpoint,
+                        "dns_mode": "proxy" if urlsplit(candidate).scheme.lower() == "socks5h" else "default",
+                        **geo,
+                    }
+                except Exception as exc:
+                    errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
+                    if not endpoint_retried and retry_budget > 0 and _geo_error_retryable(exc):
+                        endpoint_retried = True
+                        retry_budget -= 1
+                        time.sleep(0.2)
+                        continue
+                    break
     raise ProxyTestError("代理测试失败；" + " | ".join(errors[-3:]))
 
 

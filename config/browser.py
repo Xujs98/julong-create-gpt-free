@@ -71,6 +71,8 @@ SEND_HIGH_ENTROPY_CLIENT_HINTS = False
 BROWSER_LOCALE_PROFILE = "jp"
 AUTO_BROWSER_LOCALE_FROM_IP = True
 IP_GEO_TIMEOUT = 6.0
+# GeoIP 出口检测遇到瞬时隧道/连接错误时，额外重试一次；HTTP 状态错误仍直接切换端点。
+IP_GEO_RETRIES = 1
 IP_GEO_ENDPOINTS = [
     "https://ipinfo.io/json",
     "https://ipapi.co/json",
@@ -359,4 +361,4 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'ENABLE_HIGH_FIDELITY_FINGERPRINT': 'bool', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
+apply_env_overrides(globals(), {'ENABLE_HIGH_FIDELITY_FINGERPRINT': 'bool', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'IP_GEO_RETRIES': 'int', 'REJECT_CLOUD_PROXY': 'bool'})

@@ -239,6 +239,24 @@ class ProxyTestTests(unittest.TestCase):
             },
         )
 
+    @patch("core.proxy_test.Session")
+    def test_geo_test_retries_transient_transport_failure_once(self, session_class):
+        session = MagicMock()
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"ip": "203.0.113.10", "country": "US"}
+        session.get.side_effect = [RuntimeError("curl: (28) Operation timed out"), response]
+        session_class.return_value = session
+
+        with patch("core.proxy_test._browser_cfg.IP_GEO_ENDPOINTS", ["https://geo.example/json"]), patch(
+            "core.proxy_test._browser_cfg.IP_GEO_RETRIES", 1
+        ), patch("core.proxy_test.time.sleep") as sleep:
+            result = run_proxy_test("http://proxy.example:8080", timeout=2)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["ip"], "203.0.113.10")
+        self.assertEqual(session.get.call_count, 2)
+        sleep.assert_called_once_with(0.2)
+
     @patch("core.proxy_test.test_proxy")
     def test_pool_preflight_keeps_passed_proxy_and_reports_failed_proxy(self, test_one):
         """代理池中失败项被标记移除，可用项继续保留。"""
