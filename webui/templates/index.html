@@ -4736,17 +4736,30 @@ async function copyText(text, notify=true) {
     return false;
   }
 }
-async function api(url, opts) {
-  const r = await fetch(url, opts);
-  const j = await r.json().catch(()=>({}));
-  if (!r.ok) {
-    const error = new Error(j.error || ('HTTP '+r.status));
-    error.code = j.code || '';
-    error.payload = j;
-    error.status = r.status;
-    throw error;
-  }
-  return j;
+const API_INFLIGHT = new Map();
+async function api(url, opts = {}) {
+  const method = String(opts.method || 'GET').toUpperCase();
+  const key = method === 'GET' ? String(url) : '';
+  if (key && API_INFLIGHT.has(key)) return API_INFLIGHT.get(key);
+  const run = (async () => {
+    const r = await fetch(url, {
+      ...opts,
+      headers: { 'Accept': 'application/json', ...(opts.headers || {}) },
+    });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok) {
+      const error = new Error(j.error || ('HTTP '+r.status));
+      error.code = j.code || '';
+      error.payload = j;
+      error.status = r.status;
+      throw error;
+    }
+    return j;
+  })();
+  if (!key) return run;
+  API_INFLIGHT.set(key, run);
+  try { return await run; }
+  finally { if (API_INFLIGHT.get(key) === run) API_INFLIGHT.delete(key); }
 }
 function debounce(fn, wait=250) {
   let t = null;
@@ -10853,5 +10866,9 @@ durationTimer = setInterval(updateVisibleTaskDurations, 1000);
 setInterval(loadSummary, 5000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
 </script>
+<div id="react-dashboard-root" hidden aria-hidden="true"></div>
+<script src="/static/vendor/react.production.min.js"></script>
+<script src="/static/vendor/react-dom.production.min.js"></script>
+<script src="/static/js/react-dashboard.js"></script>
 </body>
 </html>

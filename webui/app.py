@@ -448,6 +448,12 @@ def _registration_batch_for_jobs(jobs: list[dict]) -> dict | None:
 
 def create_app(auth_code: str | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates")
+    # Keep the existing DOM/CSS UI while allowing the React bridge and vendor
+    # bundles to stay warm in the browser between tab refreshes.
+    app.config.update(
+        SEND_FILE_MAX_AGE_DEFAULT=3600,
+        TEMPLATES_AUTO_RELOAD=False,
+    )
     _prepared_downloads: dict[str, dict] = {}
     _job_retention_lock = threading.Lock()
     _job_retention_scheduled = False
