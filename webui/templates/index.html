@@ -2326,6 +2326,26 @@
     .account-export-option input { width: 16px; height: 16px; margin: 0; accent-color: #377dff; }
     .account-export-option span { font-size: 14px; font-weight: 600; }
     .account-export-option small { margin-left: auto; color: #909399; font-size: 11px; font-weight: 400; }
+    .account-export-option--totp { cursor: default; }
+    .account-export-main-field,
+    .account-export-totp-url-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+    .account-export-totp-url-toggle { margin-left: auto; padding: 5px 9px; border: 1px solid #d8e3ff; border-radius: 8px; background: #f7f9ff; color: #377dff; transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease; }
+    .account-export-totp-url-toggle:hover { border-color: #9bbcff; background: #eef4ff; box-shadow: 0 3px 10px rgba(55,125,255,.10); }
+    .account-export-totp-url-toggle input {
+      position: relative; width: 38px !important; height: 22px !important; min-width: 38px; min-height: 22px;
+      margin: 0; border: 0; border-radius: 999px; background: #cfd6e2; cursor: pointer;
+      -webkit-appearance: none; appearance: none; transition: background-color .15s ease; outline: none;
+    }
+    .account-export-totp-url-toggle input::before {
+      content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+      border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(20,30,62,.22);
+      transition: transform .15s ease;
+    }
+    .account-export-totp-url-toggle input:checked { background: #377dff; }
+    .account-export-totp-url-toggle input:checked::before { transform: translateX(16px); }
+    .account-export-totp-url-toggle input:focus-visible { box-shadow: 0 0 0 3px rgba(55,125,255,.20); }
+    .account-export-totp-url-toggle span { font-size: 12px; font-weight: 650; color: inherit; }
+    .account-export-option--totp small { margin-left: 0; }
     .account-export-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; }
     .account-export-foot button { min-height: 34px; padding: 0 14px; border: 1px solid #dcdfe6; border-radius: 6px; background: #fff; color: #606266; font: inherit; font-size: 13px; cursor: pointer; }
     .account-export-foot button:hover { border-color: #b8c2d1; background: #f5f7fa; }
@@ -3947,7 +3967,7 @@ try {
     <div class="account-export-head">
       <div class="account-export-head-main">
         <h3 id="accountExportTitle">下载 TXT</h3>
-        <p>选择要写入每行的字段，默认导出邮箱、密码、2FA 和 AT。</p>
+        <p>选择要写入每行的字段，默认导出邮箱、密码、2FA 密钥和 AT；2FA 可选择带 viewer URL。</p>
       </div>
       <button type="button" class="account-export-close" id="btnCloseAccountExport" aria-label="关闭">×</button>
     </div>
@@ -3955,7 +3975,11 @@ try {
       <div class="account-export-options" role="group" aria-label="TXT 导出字段">
         <label class="account-export-option"><input type="checkbox" data-account-export-field="email" checked><span>邮箱</span><small>email</small></label>
         <label class="account-export-option"><input type="checkbox" data-account-export-field="password" checked><span>密码</span><small>password</small></label>
-        <label class="account-export-option"><input type="checkbox" data-account-export-field="totp" checked><span>2FA</span><small>viewer URL</small></label>
+        <div class="account-export-option account-export-option--totp">
+          <label class="account-export-main-field"><input type="checkbox" data-account-export-field="totp" checked><span>2FA</span></label>
+          <label class="account-export-totp-url-toggle"><input type="checkbox" data-account-export-totp-url aria-label="2FA 带URL"><span>带URL</span></label>
+          <small>密钥 / viewer URL</small>
+        </div>
         <label class="account-export-option"><input type="checkbox" data-account-export-field="url"><span>URL</span><small>邮箱池取码地址</small></label>
         <label class="account-export-option"><input type="checkbox" data-account-export-field="access_token" checked><span>AT</span><small>access token</small></label>
       </div>
@@ -7409,6 +7433,13 @@ function selectedAccountExportFields() {
   return $$('[data-account-export-field]:checked').map(input => input.dataset.accountExportField).filter(Boolean);
 }
 
+function accountExportTotpWithUrl() {
+  const input = $('[data-account-export-totp-url]');
+  // Existing API clients historically received viewer URLs; preserve that
+  // default when the optional UI control is absent.
+  return input ? !!input.checked : true;
+}
+
 async function copySelectedAccountLines() {
   const ids = Array.from(ACCOUNT_SELECTED).map(Number);
   if (!ids.length) { showToast('请先选择账号'); return; }
@@ -7451,10 +7482,11 @@ async function downloadSelectedAccountTxt() {
     let lines = [];
     try {
       const currentIds = Array.from(ACCOUNT_SELECTED).map(Number);
+      const totpWithUrl = accountExportTotpWithUrl();
       const result = await api('/api/accounts/export-txt', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({account_ids: currentIds, fields}),
+        body: JSON.stringify({account_ids: currentIds, fields, totp_with_url: totpWithUrl}),
       });
       lines = result.lines || [];
       if (!lines.length) { showToast('选中账号没有可下载内容'); return; }

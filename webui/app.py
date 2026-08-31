@@ -265,7 +265,7 @@ def _compact_account_for_list(row: dict) -> dict:
     return out
 
 
-def _account_secret_value(row: dict, field: str) -> str:
+def _account_secret_value(row: dict, field: str, *, totp_with_url: bool = True) -> str:
     field = (field or "").strip()
     if field == "access_token":
         return str(row.get("access_token") or "")
@@ -279,7 +279,8 @@ def _account_secret_value(row: dict, field: str) -> str:
     if field in {"password", "registration_password"}:
         return _account_registration_password(row)
     if field == "totp":
-        return db._totp_viewer_url(str(row.get("totp_secret") or "").strip())
+        secret = str(row.get("totp_secret") or "").strip()
+        return db._totp_viewer_url(secret) if totp_with_url else secret
     if field == "url":
         email = str(row.get("email") or "").strip()
         source = str(row.get("email_source") or "").strip().lower()
@@ -880,6 +881,12 @@ def create_app(auth_code: str | None = None) -> Flask:
         data = request.get_json(silent=True) or {}
         ids = data.get("account_ids") or data.get("ids") or []
         fields = data.get("fields") or []
+        raw_totp_with_url = data.get("totp_with_url")
+        totp_with_url = (
+            raw_totp_with_url.strip().lower() in {"1", "true", "yes", "on", "y"}
+            if isinstance(raw_totp_with_url, str)
+            else bool(raw_totp_with_url)
+        ) if raw_totp_with_url is not None else True
         allowed = ("email", "password", "totp", "url", "access_token")
         if not isinstance(ids, list) or not ids:
             return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
@@ -910,7 +917,10 @@ def create_app(auth_code: str | None = None) -> Flask:
                 continue
             values = []
             for field in selected:
-                values.append(_account_secret_value(acc, field))
+                if field == "totp":
+                    values.append(_account_secret_value(acc, field, totp_with_url=totp_with_url))
+                else:
+                    values.append(_account_secret_value(acc, field))
             rows.append({
                 "id": acc_id,
                 "email": str(acc.get("email") or ""),
@@ -920,6 +930,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         return jsonify({
             "ok": True,
             "fields": selected,
+            "totp_with_url": totp_with_url,
             "rows": rows,
             "lines": [row["line"] for row in rows],
             "count": len(rows),

@@ -31,6 +31,24 @@ def test_export_txt_assembles_selected_fields_in_stable_order():
     assert payload["lines"] == [
         "person@icloud.com----secret-pass----https://2fa.fb.tools/JBSWY3DPEHPK3PXP----https://mail.example/code----at-value"
     ]
+    assert payload["totp_with_url"] is True
+
+
+def test_export_txt_can_return_raw_totp_secret_when_url_is_disabled():
+    account = {
+        "id": 5,
+        "email": "person@example.com",
+        "totp_secret": "TRRDQU62TGRWZI42BT2G3OOGNC44UBFY",
+    }
+    with patch("webui.app.db.get_account", return_value=account):
+        response = _client().post(
+            "/api/accounts/export-txt",
+            json={"account_ids": [5], "fields": ["totp"], "totp_with_url": "false"},
+        )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["totp_with_url"] is False
+    assert payload["lines"] == ["TRRDQU62TGRWZI42BT2G3OOGNC44UBFY"]
 
 
 def test_export_txt_keeps_empty_selected_columns_and_skips_missing_accounts():

@@ -10,6 +10,11 @@ def test_account_txt_export_modal_has_requested_fields_and_defaults():
     for field in ("email", "password", "totp", "url", "access_token"):
         assert f'data-account-export-field="{field}"' in source
     assert 'data-account-export-field="url"><span>URL</span>' in source
+    assert 'data-account-export-totp-url' in source
+    assert 'account-export-totp-url-toggle' in source
+    assert 'account-export-totp-url-toggle input:checked' in source
+    assert '带URL' in source
+    assert 'totp_with_url: totpWithUrl' in source
     assert "api('/api/accounts/export-txt'" in source
     assert "至少选择一个导出字段" in source
     assert 'id="btnDownloadSelectedTxtV2"' in source
