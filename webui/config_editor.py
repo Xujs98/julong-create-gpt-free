@@ -164,7 +164,7 @@ EDITABLE_FIELDS = [
     {
         "key": "LIVE_CHECK_PROXY_API_URL", "file": "live_check.py", "type": "str", "group": "账号查活",
         "label": "查活代理 API 地址", "help": "支持 {region}/{country}/{country_code} 占位符；region 参数会自动替换为账号国家码",
-        "placeholder": "https://api.example/white/api?region={region}&num=1&time=10&format=n&type=json",
+        "placeholder": "https://api.example/white/api?region={region}&num=2&time=10&format=n&type=json",
     },
     {
         "key": "LIVE_CHECK_PROXY_API_TIMEOUT", "file": "live_check.py", "type": "float", "group": "账号查活",

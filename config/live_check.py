@@ -18,7 +18,7 @@ LIVE_CHECK_HEADLESS: bool = False
 LIVE_CHECK_USE_REGISTRATION_PROXY: bool = True
 LIVE_CHECK_PROXY_API_ENABLED: bool = False
 LIVE_CHECK_PROXY_API_URL: str = (
-    "https://api.cliproxy.io/white/api?region={region}&num=1&time=10&format=n&type=json"
+    "https://api.cliproxy.io/white/api?region={region}&num=2&time=10&format=n&type=json"
 )
 LIVE_CHECK_PROXY_API_TIMEOUT: float = 8.0
 

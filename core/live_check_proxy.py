@@ -12,7 +12,7 @@ from core.proxy_utils import normalize_proxy_url
 
 
 DEFAULT_PROXY_API_URL = (
-    "https://api.cliproxy.io/white/api?region={region}&num=1&time=10&format=n&type=json"
+    "https://api.cliproxy.io/white/api?region={region}&num=2&time=10&format=n&type=json"
 )
 
 

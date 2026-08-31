@@ -34,6 +34,7 @@ def test_live_check_proxy_api_settings_are_exposed_with_registration_priority():
     assert "LIVE_CHECK_USE_REGISTRATION_PROXY: bool = True" in source
     assert "LIVE_CHECK_PROXY_API_ENABLED: bool = False" in source
     assert "{region}" in source
+    assert "num=2" in source
     assert fields["LIVE_CHECK_USE_REGISTRATION_PROXY"]["type"] == "bool"
     assert fields["LIVE_CHECK_PROXY_API_ENABLED"]["type"] == "bool"
     assert fields["LIVE_CHECK_PROXY_API_URL"]["type"] == "str"
