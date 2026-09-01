@@ -1369,11 +1369,17 @@ def _run_roxy_codex_oauth_once(
         otp_provider = wait_for_otp
 
     client = None if reuse_existing_profile else RoxyBrowserClient()
-    opened = existing_opened if reuse_existing_profile else client.open_profile(headless=headless_override)
-    browser_kind_token = _CODEX_BROWSER_KIND.set(_detect_browser_kind(opened))
+    opened = existing_opened if reuse_existing_profile else None
+    browser_kind_token = None
     driver = existing_driver if reuse_existing_profile else None
     owns_driver = not reuse_existing_profile
+    task_succeeded = False
     try:
+        if opened is None and client is not None:
+            opened = client.open_profile(headless=headless_override)
+        if opened is None:
+            raise RuntimeError("Roxy OAuth 缺少浏览器环境")
+        browser_kind_token = _CODEX_BROWSER_KIND.set(_detect_browser_kind(opened))
         auth_source = proto._codex_auth_url_source()
         code_verifier = None
         if auth_source == "cpa":
@@ -1422,7 +1428,7 @@ def _run_roxy_codex_oauth_once(
                 submit_payload=submit_payload,
             )
             msg = submit_payload.get("message") or submit_payload.get("status_message") or "CPA callback submitted"
-            return proto._codex_result(
+            result = proto._codex_result(
                 status="success",
                 ok=True,
                 email=email,
@@ -1430,6 +1436,8 @@ def _run_roxy_codex_oauth_once(
                 callback_url=callback_url,
                 message=f"{_codex_driver_name()}: {msg}",
             )
+            task_succeeded = True
+            return result
 
         if auth_source == "sub2":
             submit_payload = proto._submit_sub2_callback(
@@ -1445,7 +1453,7 @@ def _run_roxy_codex_oauth_once(
                 submit_payload=submit_payload,
             )
             msg = submit_payload.get("message") or submit_payload.get("status_message") or "sub2 callback uploaded"
-            return proto._codex_result(
+            result = proto._codex_result(
                 status="success",
                 ok=True,
                 email=email,
@@ -1453,6 +1461,8 @@ def _run_roxy_codex_oauth_once(
                 callback_url=callback_url,
                 message=f"{_codex_driver_name()}: {msg}",
             )
+            task_succeeded = True
+            return result
 
         if not code_verifier:
             raise RuntimeError("[Codex][Browser] local 模式缺少 code_verifier")
@@ -1463,7 +1473,7 @@ def _run_roxy_codex_oauth_once(
         effective_email = id_claims.get("email") or email
         storage = proto.build_codex_storage(token_resp, id_claims)
         path = proto.save_codex_credential(storage, effective_email, id_claims.get("plan_type", ""))
-        return proto._codex_result(
+        result = proto._codex_result(
             status="success",
             ok=True,
             email=effective_email,
@@ -1471,6 +1481,8 @@ def _run_roxy_codex_oauth_once(
             callback_url=callback_url,
             message=f"{_codex_driver_name()} plan={id_claims.get('plan_type') or 'unknown'}",
         )
+        task_succeeded = True
+        return result
     except AccountUnusableError as exc:
         logger.warning("[Codex][Browser] 账号已废：%s，%s", email, exc.error_code)
         return proto._codex_result(
@@ -1485,17 +1497,19 @@ def _run_roxy_codex_oauth_once(
     finally:
         # 注册后复用窗口时，driver/profile 生命周期由注册流程统一清理，
         # 这里不能 quit/delete，否则会提前销毁注册环境。
-        if owns_driver and driver and not bool(_roxy_cfg.ROXY_KEEP_BROWSER_OPEN):
+        failed = not task_succeeded
+        if owns_driver and driver and (failed or not bool(_roxy_cfg.ROXY_KEEP_BROWSER_OPEN)):
             try:
                 driver.quit()
             except Exception:
                 pass
-        if owns_driver and client and not bool(_roxy_cfg.ROXY_KEEP_BROWSER_OPEN):
-            client.cleanup_profile(opened)
-        try:
-            _CODEX_BROWSER_KIND.reset(browser_kind_token)
-        except Exception:
-            pass
+        if owns_driver and client and opened is not None:
+            client.cleanup_profile(opened, force=failed)
+        if browser_kind_token is not None:
+            try:
+                _CODEX_BROWSER_KIND.reset(browser_kind_token)
+            except Exception:
+                pass
 
 
 def run_roxy_codex_oauth(

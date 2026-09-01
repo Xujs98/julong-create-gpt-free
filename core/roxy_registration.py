@@ -2771,11 +2771,13 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         except Exception:
             proxy = None
     client = RoxyBrowserClient()
-    opened = client.open_profile(proxy=proxy)
+    opened = None
     driver = None
     create_acknowledged = False
     openai_password: str | None = None
+    task_succeeded = False
     try:
+        opened = client.open_profile(proxy=proxy)
         driver = _build_driver(opened)
         _center_browser_window(driver)
         driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
@@ -3008,7 +3010,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             },
         )
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
-        return {
+        result = {
             "success": bool(codex_ok),
             "email": email,
             "account_id": account_id,
@@ -3017,6 +3019,8 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             "codex": codex_result,
             "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
         }
+        task_succeeded = bool(result["success"])
+        return result
     except Exception as exc:
         logger.error("[Roxy注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Roxy注册] 失败详情", exc_info=True)
@@ -3028,10 +3032,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             pass
         return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
     finally:
-        if driver and not bool(_cfg.ROXY_KEEP_BROWSER_OPEN):
+        failed = not task_succeeded
+        if driver and (failed or not bool(_cfg.ROXY_KEEP_BROWSER_OPEN)):
             try:
                 driver.quit()
             except Exception:
                 pass
-        if not bool(_cfg.ROXY_KEEP_BROWSER_OPEN):
-            client.cleanup_profile(opened)
+        if opened is not None:
+            client.cleanup_profile(opened, force=failed)

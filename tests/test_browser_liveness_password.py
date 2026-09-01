@@ -17,6 +17,7 @@ from core.browser_liveness import (
     _wait_after_password,
     check_account_liveness_browser,
 )
+from core.roxybrowser_client import RoxyOpenResult
 
 
 def test_browser_session_timeout_is_recoverable_and_rearms_script_deadline():
@@ -66,7 +67,30 @@ def test_roxy_opener_passes_explicit_proxy_to_profile_creation():
         headless=True, proxy="socks5h://user:pass@proxy.example:3000"
     )
     closer()
-    client.close_profile.assert_called_once_with("PROFILE")
+    client.cleanup_profile.assert_called_once_with(opened, force=False)
+
+
+def test_browser_liveness_failure_forces_roxy_profile_cleanup():
+    opened = RoxyOpenResult("PROFILE", {}, created_by_run=True)
+    client = MagicMock()
+    client.open_profile.return_value = opened
+    driver = MagicMock()
+
+    with patch("core.roxybrowser_client.RoxyBrowserClient", return_value=client), patch(
+        "core.roxy_registration._build_driver", return_value=driver
+    ), patch(
+        "core.browser_liveness._browser_login", side_effect=RuntimeError("page failed")
+    ), patch("core.roxy_registration._page_snapshot", return_value={}):
+        result = check_account_liveness_browser(
+            "user@example.com",
+            {},
+            proxy=None,
+            driver_name="roxy",
+            headless=True,
+        )
+
+    assert result["ok"] is False
+    client.cleanup_profile.assert_called_once_with(opened, force=True)
 
 
 def test_fill_login_password_uses_marked_form_controls_and_verified_value():

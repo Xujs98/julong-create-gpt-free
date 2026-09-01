@@ -557,34 +557,34 @@ class RoxyBrowserClient:
                 params=params if _cfg.ROXY_OPEN_METHOD.upper() == "GET" else None,
                 json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
             )
+            debugger_address = self._extract_debugger_address(result)
+            logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
+            webdriver_url = _first(result, [
+                ("webdriver",), ("webDriver",), ("webdriver_url",), ("webdriverUrl",),
+                ("selenium",), ("selenium_url",), ("seleniumUrl",),
+                ("data", "webdriver"), ("data", "webDriver"), ("data", "webdriver_url"), ("data", "webdriverUrl"),
+                ("data", "selenium"), ("data", "selenium_url"), ("data", "seleniumUrl"),
+            ]) or None
+            ws_endpoint = _first(result, [
+                ("ws",), ("wsEndpoint",), ("ws_endpoint",), ("debuggerWsUrl",),
+                ("data", "ws"), ("data", "wsEndpoint"), ("data", "ws_endpoint"), ("data", "debuggerWsUrl"),
+            ]) or None
+            if not debugger_address and not webdriver_url:
+                raise RuntimeError(f"Roxy 已打开环境但未返回 Selenium/调试地址，请检查 ROXY_OPEN_PATH 或接口响应: {result}")
+            return RoxyOpenResult(
+                pid,
+                result,
+                debugger_address=debugger_address,
+                webdriver_url=webdriver_url,
+                ws_endpoint=ws_endpoint,
+                created_by_run=created_by_run,
+            )
         except Exception:
-            # 创建成功但启动失败时立即回收临时环境，否则内核下载失败/服务超时会
-            # 留下无法复用的孤儿 Profile，并持续占用 Roxy 窗口配额。
+            # 创建成功但启动、响应解析或调试地址校验失败时立即强制回收临时环境，
+            # 即使开启了保留现场配置，也不能留下失败任务的孤儿 Profile。
             if created_by_run:
-                self.cleanup_profile(RoxyOpenResult(pid, {}, created_by_run=True))
+                self.cleanup_profile(RoxyOpenResult(pid, {}, created_by_run=True), force=True)
             raise
-        debugger_address = self._extract_debugger_address(result)
-        logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
-        webdriver_url = _first(result, [
-            ("webdriver",), ("webDriver",), ("webdriver_url",), ("webdriverUrl",),
-            ("selenium",), ("selenium_url",), ("seleniumUrl",),
-            ("data", "webdriver"), ("data", "webDriver"), ("data", "webdriver_url"), ("data", "webdriverUrl"),
-            ("data", "selenium"), ("data", "selenium_url"), ("data", "seleniumUrl"),
-        ]) or None
-        ws_endpoint = _first(result, [
-            ("ws",), ("wsEndpoint",), ("ws_endpoint",), ("debuggerWsUrl",),
-            ("data", "ws"), ("data", "wsEndpoint"), ("data", "ws_endpoint"), ("data", "debuggerWsUrl"),
-        ]) or None
-        if not debugger_address and not webdriver_url:
-            raise RuntimeError(f"Roxy 已打开环境但未返回 Selenium/调试地址，请检查 ROXY_OPEN_PATH 或接口响应: {result}")
-        return RoxyOpenResult(
-            pid,
-            result,
-            debugger_address=debugger_address,
-            webdriver_url=webdriver_url,
-            ws_endpoint=ws_endpoint,
-            created_by_run=created_by_run,
-        )
 
     def close_profile(self, profile_id: str) -> None:
         if not profile_id:
@@ -625,22 +625,26 @@ class RoxyBrowserClient:
         except Exception as exc:
             logger.warning("[Roxy] 删除环境失败：%s", exc)
 
-    def cleanup_profile(self, opened: RoxyOpenResult | None) -> None:
-        """任务结束清理：关闭窗口；一号一环境时删除本轮创建的 Profile。"""
+    def cleanup_profile(self, opened: RoxyOpenResult | None, *, force: bool = False) -> None:
+        """任务结束清理；失败任务 ``force=True`` 时忽略保留现场配置并删除临时 Profile。"""
         if not opened or not opened.profile_id:
             return
         keep_open = bool(getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
-        if not keep_open:
+        if force and keep_open:
+            logger.warning("[Roxy] 任务失败，忽略 ROXY_KEEP_BROWSER_OPEN，强制清理环境：%s", opened.profile_id)
+        if force or not keep_open:
             self.close_profile(opened.profile_id)
 
-        should_delete = (
-            bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
-            and bool(getattr(_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
-            and bool(opened.created_by_run)
+        should_delete = bool(opened.created_by_run) and (
+            force
+            or (
+                bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
+                and bool(getattr(_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
+            )
         )
         if should_delete:
             # 删除前尽量确保已关闭；若 keep_open=True 则不删除，便于调试保留现场。
-            if keep_open:
+            if keep_open and not force:
                 logger.info("[Roxy] ROXY_KEEP_BROWSER_OPEN=True，跳过删除环境：%s", opened.profile_id)
                 return
             self.delete_profile(opened.profile_id)

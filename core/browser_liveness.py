@@ -843,16 +843,23 @@ def _browser_login(
     raise RuntimeError(f"指纹浏览器登录进入未知状态: {state}")
 
 
-def _open_cloak(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[[], None]]:
+def _open_cloak(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[..., None]]:
     """启动查活专用 CloakBrowser。"""
     from core.cloakbrowser_driver import build_cloak_driver
 
     driver, _opened = build_cloak_driver(proxy=proxy, headless=headless)
     driver._registration_log_prefix = "[查活][Cloak]"
-    return driver, getattr(driver, "upstream_proxy_url", None) or proxy, driver.quit
+
+    def _close(*, failed: bool = False) -> None:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    return driver, getattr(driver, "upstream_proxy_url", None) or proxy, _close
 
 
-def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[[], None]]:
+def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[..., None]]:
     """启动查活专用 RoxyBrowser，并使用本次独立无头参数。"""
     from config import roxybrowser as roxy_cfg
     from core.roxy_registration import _build_driver
@@ -864,7 +871,7 @@ def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Call
         driver = _build_driver(opened)
     except Exception:
         # open 已成功但 Selenium/调试地址连接失败时也回收本轮临时环境。
-        client.cleanup_profile(opened)
+        client.cleanup_profile(opened, force=True)
         raise
     driver._registration_log_prefix = "[查活][Roxy]"
     try:
@@ -873,18 +880,12 @@ def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Call
         pass
     _set_browser_script_timeout(driver, _BROWSER_FETCH_TIMEOUT_MS)
 
-    def _close() -> None:
+    def _close(*, failed: bool = False) -> None:
         try:
             driver.quit()
         except Exception:
             pass
-        client.close_profile(opened.profile_id)
-        if (
-            bool(getattr(roxy_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
-            and bool(getattr(roxy_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
-            and bool(opened.created_by_run)
-        ):
-            client.delete_profile(opened.profile_id)
+        client.cleanup_profile(opened, force=failed)
 
     return driver, client.last_proxy_url or proxy, _close
 
@@ -905,7 +906,8 @@ def check_account_liveness_browser(
         raise ValueError(f"不支持的浏览器查活方式: {selected}")
 
     driver = None
-    closer: Callable[[], None] | None = None
+    closer: Callable[..., None] | None = None
+    task_succeeded = False
     try:
         logger.info("[查活] 使用 %s 指纹浏览器，headless=%s", selected, bool(headless))
         driver, proxy_used, closer = opener(proxy, bool(headless))
@@ -924,6 +926,7 @@ def check_account_liveness_browser(
             raise RuntimeError(f"浏览器 Session 已返回 AT，但在线校验未通过：HTTP {token_status or 0}")
         result = _session_result(driver, session_info, driver_name=selected, proxy_used=proxy_used)
         logger.info("[查活][浏览器] 完成：driver=%s 已刷新 Session/AT", selected)
+        task_succeeded = bool(result.get("ok"))
         return result
     except Exception as exc:
         page_text = ""
@@ -947,4 +950,4 @@ def check_account_liveness_browser(
         }
     finally:
         if closer is not None:
-            closer()
+            closer(failed=not task_succeeded)

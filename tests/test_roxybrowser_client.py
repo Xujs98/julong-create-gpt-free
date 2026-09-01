@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from core.roxybrowser_client import RoxyBrowserClient
+from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 
 
 class _Response:
@@ -106,3 +106,41 @@ def test_open_profile_cleans_created_profile_when_open_fails():
     opened = cleanup.call_args.args[0]
     assert opened.profile_id == "PROFILE"
     assert opened.created_by_run is True
+
+
+def test_open_profile_cleans_created_profile_when_debugger_address_missing():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.create_profile = Mock(return_value="PROFILE")
+    client.request = Mock(return_value={"code": 0, "data": {}})
+    with patch.object(client, "cleanup_profile") as cleanup:
+        with pytest.raises(RuntimeError, match="未返回 Selenium/调试地址"):
+            client.open_profile()
+
+    cleanup.assert_called_once()
+    assert cleanup.call_args.kwargs == {"force": True}
+
+
+def test_failed_cleanup_ignores_keep_open_and_deletes_created_profile():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    opened = RoxyOpenResult("PROFILE", {}, created_by_run=True)
+    with patch("core.roxybrowser_client._cfg.ROXY_KEEP_BROWSER_OPEN", True), patch(
+        "core.roxybrowser_client._cfg.ROXY_ONE_PROFILE_PER_ACCOUNT", False
+    ), patch(
+        "core.roxybrowser_client._cfg.ROXY_DELETE_PROFILE_AFTER_RUN", False
+    ), patch.object(client, "close_profile") as close, patch.object(client, "delete_profile") as delete:
+        client.cleanup_profile(opened, force=True)
+
+    close.assert_called_once_with("PROFILE")
+    delete.assert_called_once_with("PROFILE")
+
+
+def test_success_cleanup_still_honors_keep_open_setting():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    opened = RoxyOpenResult("PROFILE", {}, created_by_run=True)
+    with patch("core.roxybrowser_client._cfg.ROXY_KEEP_BROWSER_OPEN", True), patch.object(
+        client, "close_profile"
+    ) as close, patch.object(client, "delete_profile") as delete:
+        client.cleanup_profile(opened, force=False)
+
+    close.assert_not_called()
+    delete.assert_not_called()

@@ -273,9 +273,12 @@ def test_remote_verification_rejects_wrong_email_and_closes_registered_resource(
     assert closed == [True]
 
 
-def test_debug_failure_mode_keeps_browser_resources_for_inspection(monkeypatch):
+def test_rebind_failure_cleans_browser_resources_even_in_debug_mode(monkeypatch):
     closed = []
     monkeypatch.setenv("REBIND_DEBUG_KEEP_BROWSER_ON_FAILURE", "1")
+
+    def close(*, failed=False):
+        closed.append(failed)
 
     def login(context, **_kwargs):
         context.driver = object()
@@ -284,7 +287,7 @@ def test_debug_failure_mode_keeps_browser_resources_for_inspection(monkeypatch):
             "user": {"email": OLD},
             "loginConfirmed": True,
         }
-        return {"close": lambda: closed.append(True)}
+        return {"close": close}
 
     with pytest.raises(rebind_driver.RebindVerificationError, match="邮箱"):
         rebind_driver.rebind_account(
@@ -305,7 +308,7 @@ def test_debug_failure_mode_keeps_browser_resources_for_inspection(monkeypatch):
             },
         )
 
-    assert closed == []
+    assert closed == [True]
 
 
 class FakeBuiltinEmailChangeSession(FakeTransport):

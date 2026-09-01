@@ -156,13 +156,24 @@ class RebindContext:
         if callable(closer):
             self.closers.append(closer)
 
-    def close(self) -> None:
+    def close(self, *, failed: bool = False) -> None:
         if self.closed:
             return
         self.closed = True
         for closer in reversed(self.closers):
             try:
-                closer()
+                try:
+                    parameters = inspect.signature(closer).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                accepts_failed = "failed" in parameters or any(
+                    item.kind is inspect.Parameter.VAR_KEYWORD
+                    for item in parameters.values()
+                )
+                if accepts_failed:
+                    closer(failed=failed)
+                else:
+                    closer()
             except Exception:
                 logger.debug("换绑资源关闭失败", exc_info=True)
         self.closers.clear()
@@ -2643,18 +2654,11 @@ def rebind_account(
         completed = True
         return result
     finally:
-        keep_on_failure = _as_bool(
-            os.getenv("REBIND_DEBUG_KEEP_BROWSER_ON_FAILURE"),
-            False,
-        ) and not completed
-        if keep_on_failure:
-            _safe_log(
-                log,
-                "调试保留：换绑异常后保留本次协议会话和指纹浏览器环境，等待现场检查与手动清理",
-            )
-        else:
+        if completed:
             _safe_log(log, "资源清理：换绑流程已结束，关闭本次协议会话和指纹浏览器环境")
-            context.close()
+        else:
+            _safe_log(log, "资源清理：换绑失败，强制关闭并删除本次临时指纹浏览器环境")
+        context.close(failed=not completed)
 
 
 __all__ = [
