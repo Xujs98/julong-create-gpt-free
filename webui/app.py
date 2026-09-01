@@ -239,7 +239,8 @@ def _compact_account_for_list(row: dict) -> dict:
         "discount_amount", "discount_type", "discount_duration_num_periods",
         "discount_expires_at", "discount_cancellation_policy", "discount_promo_campaign_id",
         "token_expired", "token_expires_at",
-        "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
+        "twofa_error", "twofa_failure_code", "twofa_failure_stage", "twofa_failure_status", "twofa_attempts",
+        "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at", "live_check_proxy_used",
         "icloud_code_url_available", "email_code_url_available",

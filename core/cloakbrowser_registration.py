@@ -10,7 +10,7 @@ from pathlib import Path
 from config import cloakbrowser as _cfg
 from config import proxy as _proxy_cfg
 from config import twofa as _twofa_cfg
-from core.account_export import save_account_data, setup_2fa_from_browser
+from core.account_export import describe_twofa_error, save_account_data, setup_2fa_from_browser
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
@@ -717,9 +717,19 @@ def _run_cloak_registration_impl(
                 twofa_result["status"] = "success"
                 logger.info("[Cloak注册][2FA] TOTP 设置完成")
             except Exception as exc:
+                details = describe_twofa_error(exc)
                 twofa_result["status"] = "failed"
-                twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
-                logger.error("[Cloak注册][2FA] 设置失败：%s: %s", type(exc).__name__, exc)
+                twofa_result["error"] = (
+                    f"{details['code']} stage={details['stage']} "
+                    f"http={details['status'] or '-'}: {details['detail']}"
+                )
+                twofa_result.update({
+                    "failure_code": details["code"],
+                    "failure_stage": details["stage"],
+                    "failure_status": details["status"],
+                    "attempts": 3,
+                })
+                logger.error("[Cloak注册][2FA] 设置失败：code=%s stage=%s http=%s detail=%s", details["code"], details["stage"], details["status"] or "-", details["detail"])
                 logger.debug("[Cloak注册][2FA] 失败详情", exc_info=True)
                 # 2FA 属于注册后处理；失败时保留浏览器现场，便于查看实际页面而不是误以为闪退。
                 keep_browser_on_error = bool(getattr(_cfg, "CLOAK_KEEP_BROWSER_OPEN_ON_ERROR", True))

@@ -29,6 +29,7 @@ _TWOFA_BROWSER_FETCH_TIMEOUT_MS = 20_000
 _TWOFA_BROWSER_SCRIPT_TIMEOUT_SECONDS = 25.0
 _TWOFA_ACTIVATE_ATTEMPTS = 3
 _TWOFA_REAUTH_OTP_ATTEMPTS = 3
+_TWOFA_FULL_ATTEMPTS = 3
 # Browser fetch can spend several seconds in proxy/anti-bot queues.  Keep a
 # larger safety margin so the first activation request is not submitted near a
 # TOTP boundary and then invalidates the enrollment session.
@@ -367,7 +368,7 @@ def _trigger_reauth(session: BrowserSession, email: str) -> str:
     csrf_resp = session.get(csrf_url, headers=session.get_nextauth_headers(referer="https://chatgpt.com/"))
     csrf_resp.raise_for_status()
     csrf_token = csrf_resp.json()["csrfToken"]
-    logger.info(f"[2FA] 重认证 CSRF: {csrf_token[:20]}...")
+    logger.info("[2FA] 重认证 CSRF 已获取：length=%s", len(csrf_token))
 
     # POST /api/auth/signin/openai 带 reauth 参数
     query = {
@@ -418,7 +419,7 @@ def _validate_reauth_otp(session: BrowserSession, code: str) -> str:
     headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
     body = json.dumps({"code": code})
 
-    logger.info(f"[2FA] 提交重认证 OTP: {code}")
+    logger.info("[2FA] 提交重认证 OTP：length=%s", len(str(code or "")))
     resp = session.post(url, headers=headers, data=body)
     if resp.status_code != 200:
         error_text = _response_error_text(resp)
@@ -447,7 +448,7 @@ def _exchange_new_token(session: BrowserSession, continue_url: str) -> str:
     # 拿新的 accessToken
     new_session = fetch_session(session)
     new_token = new_session["accessToken"]
-    logger.info(f"[2FA] 新 accessToken（含新鲜 pwd_auth_time）: {new_token[:40]}...")
+    logger.info("[2FA] 新 accessToken 已获取（含新鲜 pwd_auth_time）：length=%s", len(new_token))
     return new_token
 
 
@@ -481,7 +482,7 @@ def _enroll_totp(session: BrowserSession, access_token: str) -> tuple[str, str]:
     session_id = data.get("session_id")
     if not secret or not session_id:
         raise RuntimeError(f"enroll 响应字段缺失: {data}")
-    logger.info(f"[2FA] TOTP secret 已获取: {secret[:4]}...{secret[-4:]}")
+    logger.info("[2FA] TOTP secret 已获取：length=%s", len(str(secret)))
     return secret, session_id
 
 
@@ -549,7 +550,7 @@ def _activate_totp(
     return True
 
 
-def setup_2fa(
+def _setup_2fa_once(
     session: BrowserSession,
     email: str,
     otp_code: str | None = None,
@@ -661,9 +662,56 @@ def setup_2fa(
     _activate_totp(session, new_token, secret, session_id)
 
     logger.info("=" * 60)
-    logger.info(f"✅ 2FA 设置完成! Secret: {secret[:4]}...{secret[-4:]}")
+    logger.info("✅ 2FA 设置完成：secret_length=%s", len(str(secret)))
     logger.info("=" * 60)
     return secret
+
+
+def setup_2fa(
+    session: BrowserSession,
+    email: str,
+    otp_code: str | None = None,
+    previous_otp: str | None = None,
+) -> str:
+    """执行最多三轮完整的协议 2FA 设置流程。
+
+    每轮都会重新建立重认证、enrollment 和激活动作。首轮传入的手工 OTP
+    只使用一次，后续轮次重新等待邮箱验证码，避免重复提交已失效的验证码。
+    """
+    last_error: BaseException | None = None
+    for attempt in range(1, _TWOFA_FULL_ATTEMPTS + 1):
+        logger.info("[2FA] 完整流程尝试 %s/%s：route=protocol", attempt, _TWOFA_FULL_ATTEMPTS)
+        try:
+            return _setup_2fa_once(
+                session,
+                email,
+                otp_code=otp_code if attempt == 1 else None,
+                previous_otp=previous_otp,
+            )
+        except Exception as exc:
+            last_error = exc
+            details = describe_twofa_error(exc)
+            logger.warning(
+                "[2FA] 完整流程失败 %s/%s：stage=%s code=%s http=%s detail=%s",
+                attempt,
+                _TWOFA_FULL_ATTEMPTS,
+                details["stage"],
+                details["code"],
+                details["status"] or "-",
+                details["detail"],
+            )
+            if attempt < _TWOFA_FULL_ATTEMPTS:
+                # BrowserSession 对 403/429 会开启熔断；完整 2FA 重试需要
+                # 重新发起 CSRF/reauth 请求，清掉本轮短路状态而不是直接
+                # 在本地冷却异常上失败。
+                try:
+                    session.blocked_until = 0.0
+                    session.blocked_reason = ""
+                except Exception:
+                    pass
+                time.sleep(min(2.0 * attempt, 5.0))
+    assert last_error is not None
+    raise last_error
 
 
 class Browser2FARequestError(RuntimeError):
@@ -674,6 +722,55 @@ class Browser2FARequestError(RuntimeError):
         self.status = int(status or 0)
         self.detail = str(detail or "")[:700]
         super().__init__(f"{self.stage} HTTP {self.status}: {self.detail}".rstrip())
+
+
+def describe_twofa_error(exc: BaseException) -> dict[str, str | int]:
+    """把 2FA 异常归一化为不含凭据的可检索诊断字段。"""
+    stage = str(getattr(exc, "stage", "") or "request").strip() or "request"
+    try:
+        status = int(getattr(exc, "status", 0) or 0)
+    except (TypeError, ValueError):
+        status = 0
+    detail = str(getattr(exc, "detail", "") or str(exc) or type(exc).__name__).strip()
+    response = getattr(exc, "response", None)
+    if not status and response is not None:
+        status = int(getattr(response, "status_code", 0) or 0)
+    text = f"{stage} {detail}".lower()
+    if not status:
+        match = re.search(r"\b(?:http(?:error)?|status|code)\D{0,8}(\d{3})\b", text)
+        if match:
+            status = int(match.group(1))
+    if any(marker in text for marker in ("proxy", "socks", "curl: (97)", "407")):
+        code = "proxy_rejected"
+    elif status == 403 and (stage == "reauth_csrf" or "csrf" in text):
+        code = "reauth_csrf_failed"
+    elif stage in {"reauth_otp", "reauth_otp_fetch"} and status == 0:
+        code = "reauth_otp_timeout"
+    elif any(marker in text for marker in ("email otp", "email-otp", "验证码", "one-time code")):
+        code = "reauth_otp_failed"
+    elif status == 0 and any(marker in text for marker in ("timeout", "timed out", "failed to fetch", "connection")):
+        code = "browser_fetch_timeout" if "browser" in text or "fetch" in text else "network_timeout"
+    elif stage.startswith("enroll") or "enroll" in text:
+        code = "enroll_failed"
+    elif (stage.startswith("activate") or "activate" in text) and _is_invalid_totp_response(status, text):
+        code = "activate_invalid_totp"
+    elif stage.startswith("activate") or "activate" in text:
+        code = "activate_failed"
+    elif status == 403:
+        code = "http_403"
+    elif status:
+        code = f"http_{status}"
+    else:
+        code = "twofa_failed"
+    # 日志中只保留短摘要，过滤常见 bearer/cookie/密码字段，避免把认证材料写入任务日志。
+    safe = re.sub(r"(?i)\bbearer\s+[^,;\s]+", "Bearer [REDACTED]", detail)
+    safe = re.sub(
+        r"(?i)([\"']?(?:authorization|access[_-]?token|refresh[_-]?token|password|token|cookie|secret|session[_-]?id|csrf[_-]?token|code)[\"']?\s*[:=]\s*[\"']?)([^,;\s}\]\"']+)",
+        r"\1[REDACTED]",
+        safe,
+    )
+    safe = re.sub(r"\s+", " ", safe)[:360]
+    return {"code": code, "stage": stage, "status": status, "detail": safe or type(exc).__name__}
 
 
 def _response_error_text(response) -> str:
@@ -922,7 +1019,7 @@ def _browser_enroll_totp(driver, access_token: str) -> tuple[str, str]:
     session_id = str(data.get("session_id") or "").strip()
     if not secret or not session_id:
         raise Browser2FARequestError("enroll", int(result.get("status") or 0), f"响应字段缺失: {data}")
-    logger.info("[2FA] 浏览器内 TOTP enrollment 已创建：secret=%s...%s", secret[:4], secret[-4:])
+    logger.info("[2FA] 浏览器内 TOTP enrollment 已创建：secret_length=%s", len(secret))
     return secret, session_id
 
 
@@ -1195,7 +1292,7 @@ def _browser_reauthenticate(driver, email: str, previous_otp: str | None = None)
     return str(_browser_session_info(driver)["accessToken"])
 
 
-def setup_2fa_from_browser(
+def _setup_2fa_from_browser_once(
     driver,
     email: str,
     proxy: str | None = None,
@@ -1239,8 +1336,54 @@ def setup_2fa_from_browser(
             human_delay("api")
     if last_activation_error is not None:
         raise last_activation_error
-    logger.info("[2FA] 浏览器内 TOTP 设置完成：secret=%s...%s", secret[:4], secret[-4:])
+    logger.info("[2FA] 浏览器内 TOTP 设置完成：secret_length=%s", len(secret))
     return secret
+
+
+def setup_2fa_from_browser(
+    driver,
+    email: str,
+    proxy: str | None = None,
+    previous_otp: str | None = None,
+    access_token: str | None = None,
+) -> str:
+    """在当前指纹浏览器中执行最多三轮完整 2FA 设置。"""
+    last_error: BaseException | None = None
+    current_access_token = str(access_token or "").strip() or None
+    for attempt in range(1, _TWOFA_FULL_ATTEMPTS + 1):
+        logger.info(
+            "[2FA] 浏览器完整流程尝试 %s/%s：route=registration_browser",
+            attempt,
+            _TWOFA_FULL_ATTEMPTS,
+        )
+        try:
+            return _setup_2fa_from_browser_once(
+                driver,
+                email,
+                proxy=proxy,
+                previous_otp=previous_otp,
+                access_token=current_access_token,
+            )
+        except Exception as exc:
+            last_error = exc
+            details = describe_twofa_error(exc)
+            logger.warning(
+                "[2FA] 浏览器完整流程失败 %s/%s：stage=%s code=%s http=%s detail=%s",
+                attempt,
+                _TWOFA_FULL_ATTEMPTS,
+                details["stage"],
+                details["code"],
+                details["status"] or "-",
+                details["detail"],
+            )
+            if attempt < _TWOFA_FULL_ATTEMPTS:
+                # 首轮 enrollment 可能已经完成一次邮箱重认证并拿到新 AT；
+                # 后续完整轮次重新从浏览器 Session 读取最新 token，避免继续
+                # 使用调用方传入的已失效旧 AT。
+                current_access_token = None
+                time.sleep(min(2.0 * attempt, 5.0))
+    assert last_error is not None
+    raise last_error
 
 
 def save_account_data(

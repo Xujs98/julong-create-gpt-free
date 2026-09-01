@@ -76,6 +76,43 @@ class Browser2FABridgeTests(unittest.TestCase):
         enroll.assert_called_once_with(driver, "ACCESS_TOKEN")
         activate.assert_called_once_with(driver, "ACCESS_TOKEN", "TOTPSECRET", "SESSION_ID")
 
+    def test_browser_setup_retries_complete_flow_three_times(self):
+        driver = Mock()
+        failures = [
+            Browser2FARequestError("reauth_csrf", 403, "forbidden"),
+            Browser2FARequestError("enroll", 0, "browser fetch timeout"),
+            "TOTPSECRET",
+        ]
+        with patch("core.account_export._setup_2fa_from_browser_once", side_effect=failures) as once, patch(
+            "core.account_export.time.sleep"
+        ) as sleep:
+            result = setup_2fa_from_browser(driver, "user@example.test", access_token="ACCESS")
+
+        self.assertEqual(result, "TOTPSECRET")
+        self.assertEqual(once.call_count, 3)
+        self.assertEqual(once.call_args_list[0].kwargs["access_token"], "ACCESS")
+        self.assertIsNone(once.call_args_list[1].kwargs["access_token"])
+        sleep.assert_any_call(2.0)
+        sleep.assert_any_call(4.0)
+
+    def test_describe_twofa_error_normalizes_stage_and_http_status(self):
+        details = __import__("core.account_export", fromlist=["describe_twofa_error"]).describe_twofa_error(
+            Browser2FARequestError("reauth_csrf", 403, "authorization=Bearer SECRET")
+        )
+
+        self.assertEqual(details["code"], "reauth_csrf_failed")
+        self.assertEqual(details["stage"], "reauth_csrf")
+        self.assertEqual(details["status"], 403)
+        self.assertNotIn("SECRET", details["detail"])
+
+    def test_describe_twofa_error_extracts_status_from_http_error_text(self):
+        from core.account_export import describe_twofa_error
+
+        details = describe_twofa_error(RuntimeError("HTTPError: HTTP Error 403: forbidden"))
+
+        self.assertEqual(details["code"], "http_403")
+        self.assertEqual(details["status"], 403)
+
     @patch("core.account_export._browser_activate_totp")
     @patch("core.account_export._browser_reauthenticate", return_value="FRESH_TOKEN")
     @patch("core.account_export._browser_enroll_totp")

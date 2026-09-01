@@ -11,7 +11,7 @@ from pathlib import Path
 
 from config import roxybrowser as _cfg
 from config import twofa as _twofa_cfg
-from core.account_export import save_account_data, setup_2fa_from_browser
+from core.account_export import describe_twofa_error, save_account_data, setup_2fa_from_browser
 from core.email_provider import wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.session_state import build_saved_session, capture_browser_cookies
@@ -2952,9 +2952,19 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                 twofa_result["status"] = "success"
                 logger.info("[Roxy注册][2FA] TOTP 设置完成")
             except Exception as exc:
+                details = describe_twofa_error(exc)
                 twofa_result["status"] = "failed"
-                twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
-                logger.error("[Roxy注册][2FA] 设置失败：%s: %s", type(exc).__name__, exc)
+                twofa_result["error"] = (
+                    f"{details['code']} stage={details['stage']} "
+                    f"http={details['status'] or '-'}: {details['detail']}"
+                )
+                twofa_result.update({
+                    "failure_code": details["code"],
+                    "failure_stage": details["stage"],
+                    "failure_status": details["status"],
+                    "attempts": 3,
+                })
+                logger.error("[Roxy注册][2FA] 设置失败：code=%s stage=%s http=%s detail=%s", details["code"], details["stage"], details["status"] or "-", details["detail"])
                 logger.debug("[Roxy注册][2FA] 失败详情", exc_info=True)
 
         codex_result = {

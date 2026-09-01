@@ -123,6 +123,39 @@ def test_twofa_prefers_account_saved_proxy_over_plan_check_route():
     assert source == "account:live_check_proxy_used"
 
 
+def test_twofa_routes_include_direct_and_fresh_proxy_pool_after_saved_proxy():
+    account = {"live_check_proxy_used": "socks5://user:pass@saved.example:3000"}
+    with patch(
+        "core.twofa_setup_service.resolve_plan_check_route",
+        return_value={"proxy": "socks5://pool.example:4000"},
+    ):
+        routes = twofa_setup_service._resolve_twofa_routes(account, None)
+
+    assert routes == [
+        ("socks5://user:pass@saved.example:3000", "account:live_check_proxy_used"),
+        (None, "direct_fallback"),
+        ("socks5://pool.example:4000", "proxy_pool"),
+    ]
+
+
+def test_protocol_twofa_retries_complete_flow_and_drops_reused_manual_otp():
+    session = object()
+    failures = [RuntimeError("HTTP 403 csrf"), RuntimeError("enroll timeout"), "SECRET"]
+    with patch("core.account_export._setup_2fa_once", side_effect=failures) as once, patch(
+        "core.account_export.time.sleep"
+    ) as sleep:
+        result = __import__("core.account_export", fromlist=["setup_2fa"]).setup_2fa(
+            session, "user@example.test", otp_code="123456", previous_otp="000000"
+        )
+
+    assert result == "SECRET"
+    assert once.call_count == 3
+    assert once.call_args_list[0].kwargs["otp_code"] == "123456"
+    assert once.call_args_list[1].kwargs["otp_code"] is None
+    sleep.assert_any_call(2.0)
+    sleep.assert_any_call(4.0)
+
+
 def test_twofa_explicit_proxy_overrides_account_saved_proxy():
     account = {"proxy_used": "socks5://user:pass@proxy.example:3000"}
     with patch("core.twofa_setup_service.resolve_plan_check_route", return_value={"proxy": "REQUEST_PROXY"}) as route:

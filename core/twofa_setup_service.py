@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core import db
-from core.account_export import setup_2fa
+from core.account_export import describe_twofa_error, setup_2fa
 from core.account_liveness import check_account_liveness
 from core.chatgpt_plan import resolve_plan_check_route
 from core.fingerprint_profile import session_fingerprint_kwargs
@@ -85,6 +85,30 @@ def _resolve_twofa_proxy(account: dict, explicit_proxy: str | None) -> tuple[str
     return route.get("proxy"), "plan_check_route"
 
 
+def _resolve_twofa_routes(account: dict, explicit_proxy: str | None) -> list[tuple[str | None, str]]:
+    """生成 2FA 重设出口顺序：账号出口 → 直连 → 代理池出口。"""
+    selected_proxy, selected_source = _resolve_twofa_proxy(account, explicit_proxy)
+    routes: list[tuple[str | None, str]] = [(selected_proxy, selected_source)]
+
+    # 账号保存的代理通常能保持设备/IP 连续性，但历史代理可能已失效；
+    # 直连和代理池出口都保留为后续独立尝试。
+    if selected_proxy:
+        routes.append((None, "direct_fallback"))
+
+    try:
+        pool_route = resolve_plan_check_route(None)
+        pool_proxy = pool_route.get("proxy")
+    except Exception as exc:
+        pool_proxy = None
+        logger.info("[2FA重设] 解析代理池出口失败，跳过 proxy_pool：%s", str(exc)[:180])
+    if pool_proxy:
+        normalized_pool = str(pool_proxy).strip()
+        duplicate = any(str(route_proxy or "").strip() == normalized_pool for route_proxy, _ in routes)
+        if not duplicate:
+            routes.append((pool_proxy, "proxy_pool"))
+    return routes
+
+
 def _restore_session_cookies(env: BrowserSession, saved_session: dict | None) -> int:
     restored = 0
     for item in list((saved_session or {}).get("cookies") or []):
@@ -109,6 +133,7 @@ def _run_twofa_setup(*, account_id: int, email: str, proxy: str | None, trigger:
     root_logger = logging.getLogger()
     thread_name = threading.current_thread().name
     key = str(email or "").strip().lower()
+    route_attempts = 0
     try:
         path = log_path(email)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,16 +155,14 @@ def _run_twofa_setup(*, account_id: int, email: str, proxy: str | None, trigger:
         if not str(account.get("registration_password") or "").strip():
             raise RuntimeError("账号未保存注册密码，无法自动完成 2FA 重认证")
 
-        selected_proxy, proxy_source = _resolve_twofa_proxy(account, proxy)
-        route_candidates = [(selected_proxy, proxy_source)]
-        if selected_proxy:
-            route_candidates.append((None, "direct_fallback"))
+        route_candidates = _resolve_twofa_routes(account, proxy)
 
         secret = ""
-        effective_proxy: str | None = selected_proxy
-        effective_source = proxy_source
+        effective_proxy: str | None = route_candidates[0][0] if route_candidates else None
+        effective_source = route_candidates[0][1] if route_candidates else "direct"
         last_error: BaseException | None = None
         for route_index, (route_proxy, route_source) in enumerate(route_candidates, start=1):
+            route_attempts = route_index
             logger.info(
                 "[2FA重设] 登录态与 TOTP 尝试 %s/%s：proxy_source=%s proxy=%s",
                 route_index,
@@ -157,8 +180,17 @@ def _run_twofa_setup(*, account_id: int, email: str, proxy: str | None, trigger:
             )
             if not refreshed.get("ok"):
                 last_error = RuntimeError(refreshed.get("error") or "刷新登录态失败")
+                details = describe_twofa_error(last_error)
+                logger.warning(
+                    "[2FA重设] 路由失败：route=%s stage=%s code=%s http=%s detail=%s",
+                    route_source,
+                    details["stage"],
+                    details["code"],
+                    details["status"] or "-",
+                    details["detail"],
+                )
                 if route_index < len(route_candidates) and _retryable_route_error(last_error):
-                    logger.warning("[2FA重设] 代理路径失败，切换直连重试：%s", str(last_error)[:280])
+                    logger.warning("[2FA重设] 当前出口失败，切换下一出口重试")
                     continue
                 raise last_error
 
@@ -167,23 +199,32 @@ def _run_twofa_setup(*, account_id: int, email: str, proxy: str | None, trigger:
             latest = db.get_account(account_id) or account
             account = latest
             saved_session = extract_saved_session(latest) or refreshed.get("session") or {}
-            env = BrowserSession(
-                proxy=route_proxy,
-                detect_exit_geo=False,
-                **session_fingerprint_kwargs(email),
-            )
-            saved_device_id = str(latest.get("device_id") or "").strip()
-            if saved_device_id:
-                env.device_id = saved_device_id
-            if not _restore_session_cookies(env, saved_session):
-                raise RuntimeError("刷新登录态后未保存可用于 2FA 重认证的 Session Cookie")
             try:
+                env = BrowserSession(
+                    proxy=route_proxy,
+                    detect_exit_geo=False,
+                    **session_fingerprint_kwargs(email),
+                )
+                saved_device_id = str(latest.get("device_id") or "").strip()
+                if saved_device_id:
+                    env.device_id = saved_device_id
+                if not _restore_session_cookies(env, saved_session):
+                    raise RuntimeError("刷新登录态后未保存可用于 2FA 重认证的 Session Cookie")
                 secret = setup_2fa(env, email)
                 effective_proxy = route_proxy
                 effective_source = route_source
                 break
             except Exception as exc:
                 last_error = exc
+                details = describe_twofa_error(exc)
+                logger.warning(
+                    "[2FA重设] 2FA 阶段失败：route=%s stage=%s code=%s http=%s detail=%s",
+                    route_source,
+                    details["stage"],
+                    details["code"],
+                    details["status"] or "-",
+                    details["detail"],
+                )
                 if env is not None:
                     try:
                         env.session.close()
@@ -191,7 +232,7 @@ def _run_twofa_setup(*, account_id: int, email: str, proxy: str | None, trigger:
                         pass
                     env = None
                 if route_index < len(route_candidates) and _retryable_route_error(exc):
-                    logger.warning("[2FA重设] 代理路径在 TOTP 阶段失败，切换直连重试：%s", str(exc)[:280])
+                    logger.warning("[2FA重设] 当前出口在 TOTP 阶段失败，切换下一出口重试")
                     continue
                 raise
 
@@ -205,16 +246,22 @@ def _run_twofa_setup(*, account_id: int, email: str, proxy: str | None, trigger:
             "trigger": trigger,
             "proxy_source": effective_source,
             "proxy_used": masked_proxy_url(effective_proxy) or None,
+            "route_attempts": route_index,
         }
         db.update_account_twofa_setup(account_id, result)
         logger.info("[2FA重设] 成功: %s", email)
         return result
     except Exception as exc:
+        details = describe_twofa_error(exc)
         result = {
             "ok": False,
             "status": "failed",
             "checked_at": datetime.now().isoformat(timespec="seconds"),
-            "error": f"{type(exc).__name__}: {str(exc)[:360]}",
+            "error": f"{details['code']} stage={details['stage']} http={details['status'] or '-'}: {details['detail']}",
+            "failure_code": details["code"],
+            "failure_stage": details["stage"],
+            "failure_status": details["status"],
+            "attempts": route_attempts,
             "trigger": trigger,
         }
         try:

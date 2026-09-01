@@ -1441,6 +1441,24 @@ def insert_account(
                 str(twofa.get("error") or "").strip()
                 or row.get("twofa_error")
             ),
+            "twofa_failure_code": (
+                str(twofa.get("failure_code") or "").strip()
+                or row.get("twofa_failure_code")
+            ),
+            "twofa_failure_stage": (
+                str(twofa.get("failure_stage") or "").strip()
+                or row.get("twofa_failure_stage")
+            ),
+            "twofa_failure_status": (
+                int(twofa.get("failure_status") or 0)
+                if twofa.get("failure_status") is not None
+                else row.get("twofa_failure_status")
+            ),
+            "twofa_attempts": (
+                int(twofa.get("attempts") or 0)
+                if twofa.get("attempts") is not None
+                else row.get("twofa_attempts")
+            ),
             "twofa_requested": (
                 bool(twofa.get("requested"))
                 if "requested" in twofa
@@ -1560,6 +1578,10 @@ def claim_account_twofa_setup(acc_id: int, trigger: str = "manual") -> bool:
         row["twofa_started_at"] = None
         row["twofa_completed_at"] = None
         row["twofa_error"] = None
+        row["twofa_failure_code"] = None
+        row["twofa_failure_stage"] = None
+        row["twofa_failure_status"] = None
+        row["twofa_attempts"] = 0
         row["updated_at"] = now
         _save_accounts(rows)
         return True
@@ -1597,6 +1619,10 @@ def update_account_twofa_setup(acc_id: int, result: dict | None = None) -> bool:
         row["twofa_ok"] = ok
         row["twofa_completed_at"] = now
         row["twofa_error"] = None if ok else str(result.get("error") or "2FA 设置失败")[:500]
+        row["twofa_failure_code"] = None if ok else str(result.get("failure_code") or "twofa_failed")[:80]
+        row["twofa_failure_stage"] = None if ok else str(result.get("failure_stage") or "request")[:80]
+        row["twofa_failure_status"] = None if ok else int(result.get("failure_status") or 0)
+        row["twofa_attempts"] = int(result.get("attempts") or result.get("route_attempts") or 0)
         row["twofa_trigger"] = result.get("trigger") or row.get("twofa_trigger")
         if ok:
             secret = str(result.get("totp_secret") or "").replace(" ", "").strip()
@@ -1630,6 +1656,10 @@ def recover_interrupted_twofa_setups() -> int:
             row["twofa_status"] = "failed"
             row["twofa_ok"] = False
             row["twofa_error"] = "WebUI 重启导致 2FA 重设中断，请重新设置"
+            row["twofa_failure_code"] = "worker_interrupted"
+            row["twofa_failure_stage"] = "queue"
+            row["twofa_failure_status"] = 0
+            row["twofa_attempts"] = 0
             row["twofa_completed_at"] = now
             row["updated_at"] = now
             recovered += 1
@@ -2361,7 +2391,8 @@ def list_account_plan_check_statuses(
         "country_qualification_checked_at", "country_qualification_http_status",
         "country_qualification_results", "country_qualification_query_count", "country_qualification_source",
         "country_qualification_engine",
-        "twofa_status", "twofa_error", "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
+        "twofa_status", "twofa_error", "twofa_failure_code", "twofa_failure_stage", "twofa_failure_status", "twofa_attempts",
+        "twofa_trigger", "twofa_queued_at", "twofa_started_at", "twofa_completed_at",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -2454,6 +2485,10 @@ def list_account_plan_check_statuses(
                     "country_qualification_query_count": row.get("country_qualification_query_count"),
                     "twofa_status": row.get("twofa_status"),
                     "twofa_error": row.get("twofa_error"),
+                    "twofa_failure_code": row.get("twofa_failure_code"),
+                    "twofa_failure_stage": row.get("twofa_failure_stage"),
+                    "twofa_failure_status": row.get("twofa_failure_status"),
+                    "twofa_attempts": row.get("twofa_attempts"),
                     "twofa_queued_at": row.get("twofa_queued_at"),
                     "twofa_started_at": row.get("twofa_started_at"),
                     "twofa_completed_at": row.get("twofa_completed_at"),

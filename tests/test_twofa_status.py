@@ -21,6 +21,10 @@ def test_insert_account_persists_twofa_failure_without_secret(monkeypatch):
                 "requested": True,
                 "status": "failed",
                 "error": "TypeError: stale worker signature",
+                "failure_code": "twofa_failed",
+                "failure_stage": "request",
+                "failure_status": 0,
+                "attempts": 3,
             }
         },
     )
@@ -30,6 +34,9 @@ def test_insert_account_persists_twofa_failure_without_secret(monkeypatch):
     assert accounts[0]["twofa_requested"] is True
     assert accounts[0]["twofa_status"] == "failed"
     assert accounts[0]["twofa_error"] == "TypeError: stale worker signature"
+    assert accounts[0]["twofa_failure_code"] == "twofa_failed"
+    assert accounts[0]["twofa_failure_stage"] == "request"
+    assert accounts[0]["twofa_attempts"] == 3
 
 
 def test_compact_account_exposes_twofa_failure_reason():

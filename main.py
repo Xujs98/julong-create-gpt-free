@@ -37,6 +37,7 @@ from core.account_export import (
     follow_oauth_callback,
     fetch_session,
     setup_2fa,
+    describe_twofa_error,
     save_account_data,
     create_batch_archive_dir,
 )
@@ -589,9 +590,19 @@ def run_registration(
                 totp_secret = setup_2fa(session, email, previous_otp=current_otp)
                 twofa_result["status"] = "success"
             except Exception as exc:
+                details = describe_twofa_error(exc)
                 twofa_result["status"] = "failed"
-                twofa_result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
-                logger.error(f"2FA 设置失败: {exc}")
+                twofa_result["error"] = (
+                    f"{details['code']} stage={details['stage']} "
+                    f"http={details['status'] or '-'}: {details['detail']}"
+                )
+                twofa_result.update({
+                    "failure_code": details["code"],
+                    "failure_stage": details["stage"],
+                    "failure_status": details["status"],
+                    "attempts": 3,
+                })
+                logger.error("2FA 设置失败: code=%s stage=%s http=%s detail=%s", details["code"], details["stage"], details["status"] or "-", details["detail"])
                 logger.debug("2FA 错误详情:", exc_info=True)
                 logger.warning("将继续保存账号信息（不含 TOTP secret），可后续手动设置")
         else:
