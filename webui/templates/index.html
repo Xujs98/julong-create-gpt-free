@@ -4796,6 +4796,11 @@ function activateTab(tab, persist=true) {
   if (tab === 'register') refreshJobs();
   requestAnimationFrame(syncV2TableViewportHeights);
 }
+// React 导航壳在捕获阶段接管点击后，通过这个稳定桥接调用旧面板加载器。
+// 没有显式挂载时，React 只会切换 hidden class，账号/邮箱池等页面不会发起
+// 首次 API 请求，表现为“切换后空白，刷新才有数据”。
+window.__dashboardLegacy = window.__dashboardLegacy || {};
+window.__dashboardLegacy.activateTab = activateTab;
 $$('nav button').forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
 window.addEventListener('resize', debounce(syncV2TableViewportHeights, 80));
 

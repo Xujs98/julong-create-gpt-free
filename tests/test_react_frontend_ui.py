@@ -31,6 +31,10 @@ def test_react_bridge_keeps_legacy_tab_contract_and_avoids_duplicate_requests():
     assert "tabIds = ['register', 'accounts', 'codex', 'outlook', 'config']" in bridge
     assert "const API_INFLIGHT = new Map();" in html
     assert "API_INFLIGHT.set(key, run);" in html
+    assert "window.__dashboardLegacy.activateTab = activateTab;" in html
+    assert html.index("window.__dashboardLegacy.activateTab = activateTab;") < html.index(
+        '<script src="/static/js/react-dashboard.js"></script>'
+    )
 
 
 def test_local_react_vendor_bundles_are_present_and_nonempty():
