@@ -124,37 +124,43 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PROTOCOL_BROWSER_LIKE_FLOW", "file": "openai_protocol.py", "type": "bool", "group": "功能开关",
-        "label": "协议注册网页化流程", "help": "仅 protocol 纯协议驱动生效；开启后先访问 ChatGPT 登录页、补齐 CES/Statsig 前端上下文，并使用 login_or_signup 入口；关闭保持原协议流程",
+        "label": "协议注册网页化流程", "help": "仅 default 注册模式下的 protocol 驱动生效；开启后补齐前端上下文并使用 login_or_signup 入口；稳定/节流模式会自动关闭这组额外预热请求",
     },
     {
         "key": "PROTOCOL_PREFLIGHT_MODE", "file": "openai_protocol.py", "type": "str", "group": "功能开关",
-        "label": "协议预检强度", "help": "protocol 注册前预检：minimal 只检查 ChatGPT 登录页，full 追加 Auth/Sentinel，off 跳过预检；核心 providers/CSRF 请求始终保留",
+        "label": "协议预检强度", "help": "default 注册模式沿用此值；stable/throttle 固定使用 minimal；核心 providers/CSRF 请求始终保留",
         "choices": ["minimal", "full", "off"],
         "choice_labels": {"minimal": "轻量", "full": "完整", "off": "关闭"},
     },
     {
         "key": "CHATGPT_ANON_BOOTSTRAP_ENABLED", "file": "openai_protocol.py", "type": "bool", "group": "功能开关",
-        "label": "协议匿名预热", "help": "注册核心流程不依赖 backend-anon 首屏/模型预热；关闭可减少额外请求，遇到特殊出口再开启",
+        "label": "协议匿名预热", "help": "default 注册模式沿用此值；stable/throttle 会自动跳过 backend-anon 首屏/模型预热",
     },
     {
         "key": "CHATGPT_AUTH_BOOTSTRAP_ENABLED", "file": "openai_protocol.py", "type": "bool", "group": "功能开关",
-        "label": "协议登录态预热", "help": "注册成功后不必预热 ChatGPT 首页数据；关闭可减少 backend-api 请求，账号已保存的 accessToken 不受影响",
+        "label": "协议登录态预热", "help": "default 注册模式沿用此值；stable/throttle 会自动跳过 backend-api 首页数据预热",
     },
     {
         "key": "REGISTRATION_TRAFFIC_OPTIMIZATION", "file": "traffic.py", "type": "bool", "group": "功能开关",
-        "label": "注册流量优化", "help": "为 Roxy/Cloak/Browser Use/Skyvern 注册浏览器启用 CDP URL 拦截；关闭后恢复原始请求",
+        "label": "注册流量优化（高级）", "help": "仅 stable/throttle 注册模式生效；控制是否为浏览器驱动安装 CDP URL 拦截",
     },
     {
         "key": "REGISTRATION_BLOCK_ANALYTICS", "file": "traffic.py", "type": "bool", "group": "功能开关",
-        "label": "阻断分析上报", "help": "阻断 Datadog、Statsig、Segment 等非注册必需的分析请求；核心 Auth/Sentinel 请求不受影响",
+        "label": "阻断分析上报（高级）", "help": "仅 stable/throttle 注册模式生效；阻断 Datadog、Segment、Sentry 等低风险遥测，核心 Auth/Sentinel 始终保留",
     },
     {
         "key": "REGISTRATION_BLOCK_MEDIA", "file": "traffic.py", "type": "bool", "group": "功能开关",
-        "label": "阻断媒体资源", "help": "阻断登录表单不需要的图片、字体、音视频资源；Cloudflare/Turnstile 挑战域名保持放行",
+        "label": "阻断媒体资源（高级）", "help": "仅 stable/throttle 注册模式生效；阻断图片、字体、音视频，Cloudflare/Turnstile 挑战域名保持放行",
     },
     {
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
+    },
+    {
+        "key": "REGISTRATION_TRAFFIC_MODE", "file": "traffic.py", "type": "str", "group": "注册方式",
+        "label": "注册模式", "help": "默认保持原始请求；稳定模式阻断媒体和低风险遥测但放行 A/B；节流模式追加阻断 A/B 初始化",
+        "choices": ["default", "stable", "throttle"],
+        "choice_labels": {"default": "默认（保持原来的不变）", "stable": "稳定模式", "throttle": "节流模式"},
     },
     {
         "key": "REGISTRATION_TRANSIENT_RETRIES", "file": "register.py", "type": "int", "group": "注册方式",

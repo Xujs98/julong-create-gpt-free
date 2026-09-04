@@ -2786,6 +2786,35 @@
     .config-section-v2-body--single {
       grid-template-columns: minmax(0, 420px);
     }
+    .config-registration-fields-v2 {
+      grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+      align-items: stretch;
+    }
+    .registration-mode-card-v2 {
+      min-width: 0; padding: 15px 16px 16px; box-sizing: border-box;
+      border: 1px solid #dfe5ff; border-radius: 13px;
+      background: linear-gradient(145deg, #f8f9ff 0%, #f4f7ff 100%);
+      display: grid; gap: 11px;
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+    .registration-mode-card-v2:focus-within {
+      border-color: #9eacf8; background: #fff; box-shadow: 0 0 0 3px rgba(79,107,255,.08);
+    }
+    .registration-mode-card-v2[data-mode="stable"] { border-color: #bfe7d6; background: linear-gradient(145deg, #f6fffb, #f2fbf7); }
+    .registration-mode-card-v2[data-mode="throttle"] { border-color: #f2d49d; background: linear-gradient(145deg, #fffaf1, #fff7e8); }
+    .registration-mode-card-v2-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .registration-mode-card-v2-title { color: #2b3548; font-size: 13px; font-weight: 760; line-height: 1.4; }
+    .registration-mode-card-v2-badge {
+      flex-shrink: 0; padding: 4px 8px; border-radius: 999px; background: #eef1ff;
+      color: #4f6bff; font-size: 10px; font-weight: 760; letter-spacing: .02em;
+    }
+    .registration-mode-card-v2 select { width: 100%; min-height: 42px; border-color: #dfe4ec; border-radius: 9px; background: #fff; }
+    .registration-mode-card-v2-desc { color: #68748b; font-size: 11px; line-height: 1.55; }
+    .registration-mode-card-v2-effects { display: flex; gap: 6px; flex-wrap: wrap; }
+    .registration-mode-card-v2-effects span {
+      padding: 4px 7px; border: 1px solid rgba(79,107,255,.12); border-radius: 7px;
+      background: rgba(255,255,255,.72); color: #65708a; font-size: 10px; font-weight: 650;
+    }
     .config-select-v2-field select {
       max-width: 100%;
     }
@@ -9486,7 +9515,7 @@ function configSectionIntro(name) {
   if (name === '日志管理') return '统一管理任务日志与账号级查活、提链、2FA、Codex 补跑日志的保留策略。';
   if (name === '账号查活') return '配置查活出口优先级、查活方式及换绑登录/提交方式；代理优先级为注册代理 → 代理 API → 代理池。';
   if (name === '功能开关') return '';
-  if (name === '注册方式') return '选择账号注册时使用的自动化方式，并分别控制注册完成后的 OAICS 与各国资格查询。';
+  if (name === '注册方式') return '选择自动化驱动与注册流量模式，可在默认、稳定和节流三档之间对比。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
   if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
   if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
@@ -9599,10 +9628,12 @@ function renderConfigOverviewCardsV2() {
   const pending = Object.keys(CONFIG_PENDING_UPDATES).filter(key => editable.some(field => field.key === key)).length;
   const driver = getRegistrationDriverValue();
   const driverLabel = registrationDriverLabel(driver);
+  const trafficMode = getRegistrationTrafficModeValue();
+  const trafficModeInfo = registrationTrafficModeInfo(trafficMode);
   const cards = [
     {
-      tone: '', label: '当前注册策略', value: driverLabel, badge: '运行中',
-      hint: `驱动标识 · ${driver}`,
+      tone: '', label: '当前注册策略', value: driverLabel, badge: trafficModeInfo.shortLabel,
+      hint: `注册模式 · ${trafficModeInfo.label}`,
       icon: '<path d="M4 6h7"/><path d="M4 12h7"/><path d="M4 18h7"/><path d="M15 6l5 6-5 6"/>'
     },
     {
@@ -9655,6 +9686,25 @@ function registrationDriverChoices() {
     { value: 'skyvern', label: 'skyvern' },
   ];
 }
+function registrationTrafficModeChoices() {
+  return [
+    {
+      value: 'default', label: '默认（保持原来的不变）', shortLabel: '默认',
+      description: '完全沿用原有注册请求和协议设置，便于作为三档对比基线。',
+      effects: ['不安装流量拦截', '协议设置照常', '保留浏览器缓存'],
+    },
+    {
+      value: 'stable', label: '稳定模式', shortLabel: '稳定',
+      description: '削减媒体和低风险遥测，保留 A/B 初始化与认证、验证码资源。',
+      effects: ['阻断图片/字体/音视频', '阻断低风险遥测', '放行 A/B 初始化'],
+    },
+    {
+      value: 'throttle', label: '节流模式', shortLabel: '节流',
+      description: '在稳定模式基础上追加阻断 A/B 初始化，用于对比更低的单次注册流量。',
+      effects: ['包含稳定模式规则', '阻断 A/B 初始化', '保留认证/验证码'],
+    },
+  ];
+}
 function getRegistrationDriverField() {
   return (CONFIG || []).find(f => f.key === 'REGISTRATION_DRIVER') || null;
 }
@@ -9668,6 +9718,20 @@ function registrationDriverLabel(value) {
   const cur = String(value || '').trim().toLowerCase();
   const hit = registrationDriverChoices().find(c => String(c.value) === cur);
   return hit ? String(hit.label || hit.value) : (cur || '—');
+}
+function getRegistrationTrafficModeField() {
+  return (CONFIG || []).find(f => f.key === 'REGISTRATION_TRAFFIC_MODE') || null;
+}
+function getRegistrationTrafficModeValue() {
+  const f = getRegistrationTrafficModeField();
+  if (!f) return 'default';
+  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
+  const value = String(fv == null ? 'default' : fv).trim().toLowerCase();
+  return registrationTrafficModeChoices().some(item => item.value === value) ? value : 'default';
+}
+function registrationTrafficModeInfo(value) {
+  const cur = String(value || 'default').trim().toLowerCase();
+  return registrationTrafficModeChoices().find(item => item.value === cur) || registrationTrafficModeChoices()[0];
 }
 function renderRegistrationDriverCard() {
   renderConfigOverviewCardsV2();
@@ -9688,6 +9752,42 @@ function renderRegistrationDriverField(f) {
       </div>
     </label>
   `;
+}
+function renderRegistrationModeCard(f) {
+  const cur = getRegistrationTrafficModeValue();
+  const info = registrationTrafficModeInfo(cur);
+  const options = registrationTrafficModeChoices().map(choice => `
+    <option value="${attrEsc(choice.value)}"${choice.value === cur ? ' selected' : ''}>${esc(choice.label)}</option>
+  `).join('');
+  return `
+    <article class="registration-mode-card-v2" data-registration-mode-card-v2 data-mode="${attrEsc(cur)}">
+      <div class="registration-mode-card-v2-head">
+        <div>
+          <div class="registration-mode-card-v2-title">注册模式</div>
+          <div class="hint">选择本次注册使用的流量策略</div>
+        </div>
+        <span class="registration-mode-card-v2-badge" data-registration-mode-badge-v2>${esc(info.shortLabel)}</span>
+      </div>
+      <select id="configRegistrationModeSelectV3" data-key="${attrEsc(f.key)}">${options}</select>
+      <div class="registration-mode-card-v2-desc" data-registration-mode-desc-v2>${esc(info.description)}</div>
+      <div class="registration-mode-card-v2-effects" data-registration-mode-effects-v2>
+        ${info.effects.map(effect => `<span>${esc(effect)}</span>`).join('')}
+      </div>
+    </article>
+  `;
+}
+function syncRegistrationModeCardV2() {
+  const card = document.querySelector('[data-registration-mode-card-v2]');
+  if (!card) return;
+  const mode = getRegistrationTrafficModeValue();
+  const info = registrationTrafficModeInfo(mode);
+  card.dataset.mode = mode;
+  const badge = card.querySelector('[data-registration-mode-badge-v2]');
+  const desc = card.querySelector('[data-registration-mode-desc-v2]');
+  const effects = card.querySelector('[data-registration-mode-effects-v2]');
+  if (badge) badge.textContent = info.shortLabel;
+  if (desc) desc.textContent = info.description;
+  if (effects) effects.innerHTML = info.effects.map(effect => `<span>${esc(effect)}</span>`).join('');
 }
 function renderFeatureSwitchField(f, opts = {}) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
@@ -10527,15 +10627,20 @@ function renderConfigSectionV2(name, fields) {
     `;
   }
   if (name === '注册方式') {
-    const field = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
+    const field = fields.find(f => f.key === 'REGISTRATION_DRIVER');
+    const modeField = fields.find(f => f.key === 'REGISTRATION_TRAFFIC_MODE');
     const oaicsField = fields.find(f => f.key === 'OAICS_CHECK_AFTER_REGISTRATION');
     const countryQualificationField = fields.find(f => f.key === 'COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION');
+    const specialKeys = new Set(['REGISTRATION_DRIVER', 'REGISTRATION_TRAFFIC_MODE', 'OAICS_CHECK_AFTER_REGISTRATION', 'COUNTRY_QUALIFICATION_CHECK_AFTER_REGISTRATION']);
+    const otherFields = fields.filter(f => !specialKeys.has(f.key));
     return `
       <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
         ${renderConfigSectionHead(name, configSectionIntro(name))}
-        <div class="config-section-v2-body config-section-v2-body--single">
+        <div class="config-section-v2-body config-registration-fields-v2">
           ${field ? renderRegistrationDriverField(field) : '<div class="banner warn">未找到注册方式配置项</div>'}
+          ${modeField ? renderRegistrationModeCard(modeField) : '<div class="banner warn">未找到注册模式配置项</div>'}
         </div>
+        ${otherFields.length ? `<div class="config-section-v2-body">${otherFields.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
         <div class="config-switches-v2 config-switches-v2--registration">
           ${/* legacy extension hook: renderFeatureSwitchField(oaicsField, { withIcon: true }) */ [oaicsField, countryQualificationField].filter(Boolean).map(f => renderFeatureSwitchField(f, { withIcon: true })).join('') || '<div class="banner warn">未找到注册完成查询开关</div>'}
         </div>
@@ -10780,6 +10885,7 @@ function trackConfigFieldChange(e) {
   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
   if (f.key === 'ACCOUNT_LOG_AUTO_CLEANUP') syncAccountLogManagementControlsV2();
+  if (f.key === 'REGISTRATION_TRAFFIC_MODE') syncRegistrationModeCardV2();
   if (f.type === 'bool') {
     const status = el.closest('.config-switch-v2')?.querySelector('[data-config-switch-status-v2]');
     if (status) {

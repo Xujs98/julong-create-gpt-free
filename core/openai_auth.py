@@ -158,10 +158,12 @@ def network_preflight(session: BrowserSession, mode: str | None = None) -> None:
     if mode is None:
         try:
             from config import openai_protocol as _protocol_cfg
-            mode = getattr(_protocol_cfg, "PROTOCOL_PREFLIGHT_MODE", "minimal")
+            from config import traffic as _traffic_cfg
+            configured_mode = getattr(_protocol_cfg, "PROTOCOL_PREFLIGHT_MODE", "full")
+            mode = _traffic_cfg.effective_protocol_preflight_mode(configured_mode)
         except Exception:
-            mode = "minimal"
-    mode = str(mode or "minimal").strip().lower()
+            mode = "full"
+    mode = str(mode or "full").strip().lower()
     if mode in {"off", "none", "disabled", "false", "0"}:
         logger.info("[预检] 已按 PROTOCOL_PREFLIGHT_MODE=%s 跳过", mode)
         return

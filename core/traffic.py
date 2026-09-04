@@ -125,7 +125,7 @@ def normalize_snapshot(value: Any) -> dict[str, Any]:
     if isinstance(optimization, dict):
         # 只保留优化层的低敏诊断字段，不把 URL 规则或运行时对象写入账号。
         safe_optimization = {}
-        for key in ("enabled", "method", "label", "blocked_pattern_count", "error"):
+        for key in ("enabled", "method", "mode", "label", "blocked_pattern_count", "error"):
             item = optimization.get(key)
             if key == "enabled":
                 safe_optimization[key] = bool(item)

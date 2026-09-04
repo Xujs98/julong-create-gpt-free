@@ -17,6 +17,7 @@ from config import email as _email_cfg
 from config import roxybrowser as _roxy_cfg
 from config import register as _register_cfg
 from config import openai_protocol as _protocol_cfg
+from config import traffic as _traffic_cfg
 from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
 from core.openai_auth import (
@@ -65,7 +66,14 @@ def _protocol_create_password_enabled() -> bool:
 
 def _protocol_browser_like_flow_enabled() -> bool:
     """是否启用纯协议的网页化登录页/前端上下文分支。"""
-    return bool(getattr(_protocol_cfg, "PROTOCOL_BROWSER_LIKE_FLOW", False))
+    configured = bool(getattr(_protocol_cfg, "PROTOCOL_BROWSER_LIKE_FLOW", False))
+    return _traffic_cfg.effective_protocol_browser_like_enabled(configured)
+
+
+def _protocol_bootstrap_enabled(config_key: str) -> bool:
+    """按注册模式决定是否执行协议首页数据预热。"""
+    configured = bool(getattr(_protocol_cfg, config_key, True))
+    return _traffic_cfg.effective_protocol_bootstrap_enabled(configured)
 
 
 def _protocol_signin_screen_hint(password_requested: bool, browser_like: bool) -> str | None:
@@ -334,7 +342,7 @@ def run_registration(
             human_delay("navigate")
 
         # 根据 2026-07-19 HAR 补齐匿名态 ChatGPT 首屏/模型预热链路。
-        if getattr(_protocol_cfg, "CHATGPT_ANON_BOOTSTRAP_ENABLED", True):
+        if _protocol_bootstrap_enabled("CHATGPT_ANON_BOOTSTRAP_ENABLED"):
             from core.chatgpt_bootstrap import anonymous_bootstrap
             anonymous_bootstrap(
                 session,
@@ -520,7 +528,7 @@ def run_registration(
                 email,
                 callback_referer="https://auth.openai.com/email-verification",
             )
-            if getattr(_protocol_cfg, "CHATGPT_AUTH_BOOTSTRAP_ENABLED", True):
+            if _protocol_bootstrap_enabled("CHATGPT_AUTH_BOOTSTRAP_ENABLED"):
                 from core.chatgpt_bootstrap import authenticated_bootstrap
                 authenticated_bootstrap(
                     session,
@@ -568,7 +576,7 @@ def run_registration(
 
             # 步骤13: 拉 /api/auth/session 提取 accessToken
             session_info, access_token = _finalize_registration_session(session, continue_url, email)
-            if getattr(_protocol_cfg, "CHATGPT_AUTH_BOOTSTRAP_ENABLED", True):
+            if _protocol_bootstrap_enabled("CHATGPT_AUTH_BOOTSTRAP_ENABLED"):
                 from core.chatgpt_bootstrap import authenticated_bootstrap
                 authenticated_bootstrap(
                     session,

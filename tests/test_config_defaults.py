@@ -109,6 +109,33 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
             )
         )
 
+    def test_registration_traffic_mode_has_three_choices_and_original_default(self):
+        fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
+        field = fields["REGISTRATION_TRAFFIC_MODE"]
+        self.assertEqual(field["group"], "注册方式")
+        self.assertEqual(field["choices"], ["default", "stable", "throttle"])
+        self.assertEqual(
+            field["choice_labels"],
+            {"default": "默认（保持原来的不变）", "stable": "稳定模式", "throttle": "节流模式"},
+        )
+
+        traffic_source = (config_editor._CONFIG_DIR / "traffic.py").read_text(encoding="utf-8")
+        protocol_source = (config_editor._CONFIG_DIR / "openai_protocol.py").read_text(encoding="utf-8")
+        self.assertEqual(
+            config_editor._parse_value_from_source(traffic_source, "REGISTRATION_TRAFFIC_MODE", "str"),
+            "default",
+        )
+        self.assertEqual(
+            config_editor._parse_value_from_source(protocol_source, "PROTOCOL_PREFLIGHT_MODE", "str"),
+            "full",
+        )
+        self.assertTrue(
+            config_editor._parse_value_from_source(protocol_source, "CHATGPT_ANON_BOOTSTRAP_ENABLED", "bool")
+        )
+        self.assertTrue(
+            config_editor._parse_value_from_source(protocol_source, "CHATGPT_AUTH_BOOTSTRAP_ENABLED", "bool")
+        )
+
     def test_proxy_warmup_has_multidimensional_cleanliness_fields(self):
         fields = {field["key"]: field for field in config_editor.EDITABLE_FIELDS}
 

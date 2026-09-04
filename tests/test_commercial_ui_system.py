@@ -58,6 +58,12 @@ def test_registration_and_codex_drivers_use_the_unified_select_system() -> None:
     source = INDEX.read_text(encoding="utf-8")
 
     assert 'id="configRegistrationSelectV3" data-key="REGISTRATION_DRIVER"' in source
+    assert 'id="configRegistrationModeSelectV3" data-key="${attrEsc(f.key)}"' in source
+    assert "function registrationTrafficModeChoices()" in source
+    assert "function renderRegistrationModeCard(f)" in source
+    assert "默认（保持原来的不变）" in source
+    assert "稳定模式" in source
+    assert "节流模式" in source
     assert 'id="configCodexOauthSelectV3" data-key="CODEX_OAUTH_DRIVER"' in source
     assert "configRegistrationSelectV2" not in source
     assert "data-ep-toggle" not in source

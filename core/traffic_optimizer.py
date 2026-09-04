@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """浏览器注册阶段的低风险请求拦截。
 
-实现使用 Chromium CDP ``Network.setBlockedURLs``，不安装 Playwright route，
-避免 route interception 关闭 HTTP cache。默认只阻断明确的分析主机，以及
-登录表单不依赖的媒体扩展；核心请求和挑战资源保持原样。
+stable/throttle 使用 Chromium CDP ``Network.setBlockedURLs``，不安装
+Playwright route，避免 route interception 关闭 HTTP cache。default 不安装
+拦截；其余模式只处理明确的分析主机和登录表单不依赖的媒体扩展。
 """
 from __future__ import annotations
 
@@ -26,11 +26,13 @@ class TrafficOptimizationHandle:
     label: str = "registration"
     blocked_patterns: list[str] = field(default_factory=list)
     error: str = ""
+    mode: str = "default"
 
     def snapshot(self) -> dict:
         out = {
             "enabled": bool(self.enabled),
             "method": str(self.method or "disabled"),
+            "mode": str(self.mode or "default"),
             "blocked_pattern_count": len(self.blocked_patterns),
         }
         if self.label:
@@ -40,8 +42,12 @@ class TrafficOptimizationHandle:
         return out
 
 
+def _mode() -> str:
+    return _cfg.normalize_registration_traffic_mode()
+
+
 def _enabled() -> bool:
-    return bool(getattr(_cfg, "REGISTRATION_TRAFFIC_OPTIMIZATION", True))
+    return _mode() != "default" and bool(getattr(_cfg, "REGISTRATION_TRAFFIC_OPTIMIZATION", True))
 
 
 def _host_matches(host: str, pattern: str) -> bool:
@@ -55,7 +61,10 @@ def _host_matches(host: str, pattern: str) -> bool:
 def _host_patterns() -> list[str]:
     if not bool(getattr(_cfg, "REGISTRATION_BLOCK_ANALYTICS", True)):
         return []
-    return [str(item).strip() for item in (getattr(_cfg, "REGISTRATION_ANALYTICS_HOSTS", ()) or ()) if str(item).strip()]
+    hosts = list(getattr(_cfg, "REGISTRATION_ANALYTICS_HOSTS", ()) or ())
+    if _mode() == "throttle":
+        hosts.extend(getattr(_cfg, "REGISTRATION_THROTTLE_ONLY_HOSTS", ()) or ())
+    return [str(item).strip() for item in hosts if str(item).strip()]
 
 
 def _media_patterns() -> list[str]:
@@ -133,6 +142,7 @@ def install_selenium_network_optimization(driver, *, label: str = "Roxy") -> Tra
         method="cdp" if patterns else "disabled",
         label=label,
         blocked_patterns=patterns,
+        mode=_mode(),
     )
     if not patterns:
         return _store_handle(driver, handle)
@@ -144,7 +154,7 @@ def install_selenium_network_optimization(driver, *, label: str = "Roxy") -> Tra
             driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": False})
         except Exception:
             pass
-        logger.info("[%s] 注册流量优化已启用：阻断 %s 条 URL 规则", label, len(patterns))
+        logger.info("[%s] 注册模式=%s：阻断 %s 条 URL 规则", label, handle.mode, len(patterns))
     except Exception as exc:
         handle.enabled = False
         handle.method = "disabled"
@@ -163,10 +173,12 @@ def _install_playwright_page(context, page, patterns: list[str], label: str) -> 
             cdp.send("Network.setCacheDisabled", {"cacheDisabled": False})
         except Exception:
             pass
-        handle = TrafficOptimizationHandle(True, "cdp", label, list(patterns))
-        logger.info("[%s] 注册流量优化已启用：阻断 %s 条 URL 规则", label, len(patterns))
+        handle = TrafficOptimizationHandle(True, "cdp", label, list(patterns), mode=_mode())
+        logger.info("[%s] 注册模式=%s：阻断 %s 条 URL 规则", label, handle.mode, len(patterns))
     except Exception as exc:
-        handle = TrafficOptimizationHandle(False, "disabled", label, list(patterns), f"{type(exc).__name__}: {exc}")
+        handle = TrafficOptimizationHandle(
+            False, "disabled", label, list(patterns), f"{type(exc).__name__}: {exc}", mode=_mode()
+        )
         logger.warning("[%s] 注册流量优化安装失败，保持原始请求：%s", label, handle.error[:180])
     _store_handle(page, handle)
     return handle
@@ -180,13 +192,15 @@ def install_playwright_network_optimization(context, page=None, *, label: str = 
     """
     patterns = blocked_url_patterns()
     if not patterns:
-        handle = TrafficOptimizationHandle(False, "disabled", label)
+        handle = TrafficOptimizationHandle(False, "disabled", label, mode=_mode())
         _store_handle(context, handle)
         if page is not None:
             _store_handle(page, handle)
         return handle
     if context is None or page is None:
-        handle = TrafficOptimizationHandle(False, "disabled", label, patterns, "context/page unavailable")
+        handle = TrafficOptimizationHandle(
+            False, "disabled", label, patterns, "context/page unavailable", mode=_mode()
+        )
         return _store_handle(context, handle) if context is not None else handle
 
     handle = _install_playwright_page(context, page, patterns, label)

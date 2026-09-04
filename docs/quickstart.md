@@ -108,11 +108,13 @@ ENABLE_2FA=False
 AUTO_BROWSER_LOCALE_FROM_IP=True
 # 仅 protocol 纯协议驱动：开启后增加登录页/前端上下文预热，关闭保持原流程
 PROTOCOL_BROWSER_LIKE_FLOW=False
-# 轻量协议预检；关闭首屏与登录态数据预热
-PROTOCOL_PREFLIGHT_MODE=minimal
-CHATGPT_ANON_BOOTSTRAP_ENABLED=False
-CHATGPT_AUTH_BOOTSTRAP_ENABLED=False
-# Roxy/Cloak/Browser Use/Skyvern 共用：保留认证和挑战资源，削减分析与媒体流量
+# 三档注册模式：default / stable / throttle
+REGISTRATION_TRAFFIC_MODE=stable
+# default 模式沿用下列原始协议设置
+PROTOCOL_PREFLIGHT_MODE=full
+CHATGPT_ANON_BOOTSTRAP_ENABLED=True
+CHATGPT_AUTH_BOOTSTRAP_ENABLED=True
+# stable/throttle 的高级开关
 REGISTRATION_TRAFFIC_OPTIMIZATION=True
 REGISTRATION_BLOCK_ANALYTICS=True
 REGISTRATION_BLOCK_MEDIA=True
@@ -222,13 +224,16 @@ python -m pip install -r requirements.txt
 和 Skyvern 驱动不受影响。前端预热默认是 best-effort，失败会记录日志并继续主注册；如需把
 预热错误作为硬失败，可同时设置 `CHATGPT_BOOTSTRAP_STRICT=True`。
 
-### 注册流量优化
+### 注册模式与流量对比
 
-WebUI「配置 → 功能开关」中的「注册流量优化」同时覆盖 Roxy、Cloak、Browser Use
-和 Skyvern，无头与可见窗口使用相同规则。优化层通过 Chromium CDP 阻断 Datadog、
-Statsig/A-B 等分析请求，以及登录表单不需要的图片、字体和音视频；认证 document、
-script、XHR/fetch、WebSocket 及 Cloudflare/Turnstile 挑战资源保持原样。CDP 不支持时
-会自动继续原始请求流程。
+WebUI「配置 → 注册方式」的「注册模式」提供三档：
 
-`protocol` 驱动建议使用 `PROTOCOL_PREFLIGHT_MODE=minimal`，并关闭匿名态和登录态
-bootstrap。需要完整诊断链路时可把预检设为 `full` 或重新打开两个 bootstrap 开关。
+| 模式 | 浏览器请求 | 纯协议预检/预热 | 用途 |
+| --- | --- | --- | --- |
+| 默认 | 不安装 CDP 拦截，保持原来不变 | 沿用高级配置 | 作为原始流量基线 |
+| 稳定模式 | 阻断图片、字体、音视频及 Datadog/Segment/Sentry 等遥测，放行 A/B | minimal，跳过 bootstrap/网页化预热 | 优先稳定地降低流量 |
+| 节流模式 | 包含稳定规则，追加阻断 A/B 初始化 | minimal，跳过 bootstrap/网页化预热 | 对比更低单次注册流量 |
+
+三档都保留核心 HTML/CSS/JS、认证 API、OTP 和 Cloudflare/Turnstile 挑战资源。
+stable/throttle 使用 Chromium CDP 规则，不安装 Playwright route，并显式保持浏览器缓存开启。
+CDP 安装失败时会记录诊断并继续原始注册请求。

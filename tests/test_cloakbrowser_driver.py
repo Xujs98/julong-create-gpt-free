@@ -73,7 +73,7 @@ class CloakLaunchOptionsTests(unittest.TestCase):
         page = Mock()
         browser.new_context.return_value = context
         context.new_page.return_value = page
-        with patch.object(module._cfg, "CLOAK_USE_PROXY", False), patch.object(
+        with patch("config.traffic.REGISTRATION_TRAFFIC_MODE", "stable"), patch.object(module._cfg, "CLOAK_USE_PROXY", False), patch.object(
             module._cfg, "CLOAK_HEADLESS", True
         ), patch.object(module._cfg, "CLOAK_HUMANIZE", False), patch.object(
             module._cfg, "CLOAK_GEOIP", False
