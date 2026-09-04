@@ -148,30 +148,46 @@ def _is_transient_network_error(exc: Exception) -> bool:
     return any(k in msg for k in transient_keywords)
 
 
-def network_preflight(session: BrowserSession) -> None:
+def network_preflight(session: BrowserSession, mode: str | None = None) -> None:
     """
     注册前网络预检：只建立边缘节点/cookie/基础连通性，不携带邮箱、不触发 OTP。
 
     这样真正会“烧邮箱”的 authorize 重定向发生前，已经确认当前代理、TLS
     impersonate、ChatGPT/Auth/Sentinel 三段链路都可达。
     """
+    if mode is None:
+        try:
+            from config import openai_protocol as _protocol_cfg
+            mode = getattr(_protocol_cfg, "PROTOCOL_PREFLIGHT_MODE", "minimal")
+        except Exception:
+            mode = "minimal"
+    mode = str(mode or "minimal").strip().lower()
+    if mode in {"off", "none", "disabled", "false", "0"}:
+        logger.info("[预检] 已按 PROTOCOL_PREFLIGHT_MODE=%s 跳过", mode)
+        return
+
     checks = [
         ("chatgpt-login", lambda: session.get(
             "https://chatgpt.com/login",
             headers=session.get_chatgpt_navigate_headers(referer="https://chatgpt.com/"),
             allow_redirects=True,
         )),
-        ("auth-login", lambda: session.get(
-            "https://auth.openai.com/log-in",
-            headers=session.get_auth_navigate_headers(referer="https://chatgpt.com/login"),
-            allow_redirects=True,
-        )),
-        ("sentinel-frame", lambda: session.get(
-            "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=" + __import__("config", fromlist=["SENTINEL_SV"]).SENTINEL_SV,
-            headers=session.get_auth_navigate_headers(referer="https://auth.openai.com/log-in", target_origin="https://sentinel.openai.com"),
-            allow_redirects=True,
-        )),
     ]
+    if mode in {"full", "all", "strict"}:
+        checks.extend([
+            ("auth-login", lambda: session.get(
+                "https://auth.openai.com/log-in",
+                headers=session.get_auth_navigate_headers(referer="https://chatgpt.com/login"),
+                allow_redirects=True,
+            )),
+            ("sentinel-frame", lambda: session.get(
+                "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=" + __import__("config", fromlist=["SENTINEL_SV"]).SENTINEL_SV,
+                headers=session.get_auth_navigate_headers(referer="https://auth.openai.com/log-in", target_origin="https://sentinel.openai.com"),
+                allow_redirects=True,
+            )),
+        ])
+    elif mode not in {"minimal", "single", "light", "true", "1"}:
+        logger.warning("[预检] 未知 PROTOCOL_PREFLIGHT_MODE=%s，按 minimal 执行", mode)
     for label, fn in checks:
         last_exc = None
         for attempt in range(1, _FOLLOW_AUTH_MAX_ATTEMPTS + 1):

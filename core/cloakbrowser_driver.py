@@ -692,6 +692,15 @@ def build_cloak_driver(
     # 避免 Cloak 注册流程里出现 `[Roxy注册]`。
     driver._registration_log_prefix = "[Cloak注册]"
     driver.set_page_load_timeout(int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90))
+    try:
+        from core.traffic_optimizer import install_playwright_network_optimization
+        optimization_handle = install_playwright_network_optimization(context, page, label="Cloak")
+        # 注册层通过 Selenium 适配器读取流量快照；同步保存同一 handle，
+        # 让 Cloak 与 Roxy/Browser Use 的诊断字段保持一致。
+        driver._registration_traffic_optimization = optimization_handle
+    except Exception as exc:
+        # 流量优化是 best-effort；CDP 不可用时不改变 Cloak 注册流程。
+        logger.debug("[Cloak] 注册流量优化未安装：%s: %s", type(exc).__name__, str(exc)[:180])
     return driver, CloakOpenResult(proxy_url=proxy_url, raw={
         "driver": "cloakbrowser",
         "proxy": masked_proxy_url(proxy_url),

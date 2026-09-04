@@ -46,10 +46,16 @@ AB_SDK_VERSION = "3.32.4"
 SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE = False
 
 # 是否补齐 HAR 中 ChatGPT Web 首屏 bootstrap 预热链路。
-CHATGPT_ANON_BOOTSTRAP_ENABLED = True
-CHATGPT_AUTH_BOOTSTRAP_ENABLED = True
+# 注册核心链路不依赖这些登录后首页请求；默认关闭可明显减少每个账号的
+# /backend-anon 与 /backend-api 额外响应，遇到需要完整 Web 上下文的出口时再开启。
+CHATGPT_ANON_BOOTSTRAP_ENABLED = False
+CHATGPT_AUTH_BOOTSTRAP_ENABLED = False
 # True 时预热失败会中断主流程；默认 False，仅记录日志并继续。
 CHATGPT_BOOTSTRAP_STRICT = False
+
+# 注册前网络预检：full=ChatGPT/Auth/Sentinel 三段，minimal=只检查 ChatGPT 登录页，
+# off=跳过预检（真正的 providers/CSRF/authorize 请求仍会做完整错误处理）。
+PROTOCOL_PREFLIGHT_MODE = "minimal"
 
 # 纯协议注册是否补齐真实 ChatGPT 登录页、CES/Statsig 前端上下文，并使用
 # login_or_signup 入口。默认关闭，保持原有协议流程和请求量不变。
@@ -61,5 +67,6 @@ apply_env_overrides(globals(), {
     "CHATGPT_ANON_BOOTSTRAP_ENABLED": "bool",
     "CHATGPT_AUTH_BOOTSTRAP_ENABLED": "bool",
     "CHATGPT_BOOTSTRAP_STRICT": "bool",
+    "PROTOCOL_PREFLIGHT_MODE": "str",
     "PROTOCOL_BROWSER_LIKE_FLOW": "bool",
 })

@@ -91,7 +91,18 @@ from config.openai_protocol import (
     CHATGPT_ANON_BOOTSTRAP_ENABLED,
     CHATGPT_AUTH_BOOTSTRAP_ENABLED,
     CHATGPT_BOOTSTRAP_STRICT,
+    PROTOCOL_PREFLIGHT_MODE,
     PROTOCOL_BROWSER_LIKE_FLOW,
+)
+
+# ---------- 注册流量优化 ----------
+from config.traffic import (
+    REGISTRATION_TRAFFIC_OPTIMIZATION,
+    REGISTRATION_BLOCK_ANALYTICS,
+    REGISTRATION_BLOCK_MEDIA,
+    REGISTRATION_ANALYTICS_HOSTS,
+    REGISTRATION_MEDIA_HOSTS,
+    REGISTRATION_MEDIA_EXTENSIONS,
 )
 
 # ---------- 代理池 ----------
@@ -211,6 +222,7 @@ import importlib as _importlib
 _RELOADABLE_SUBMODULES = (
     "config.browser",
     "config.openai_protocol",
+    "config.traffic",
     "config.proxy",
     "config.register",
     "config.email",
@@ -256,9 +268,9 @@ def reload_all() -> list[str]:
 def _refresh_top_level_constants() -> None:
     """把刚 reload 的子模块的常量重新拷一份到 config 包顶层。"""
     import config as _self
-    from config import browser, openai_protocol, proxy as _proxy, register, email, twofa, webui, live_check, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger
+    from config import browser, openai_protocol, traffic, proxy as _proxy, register, email, twofa, webui, live_check, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger
     # 简单粗暴：枚举一遍重要常量，覆盖到 _self
-    for src in (browser, openai_protocol, _proxy, register, email, twofa, webui, live_check, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger):
+    for src in (browser, openai_protocol, traffic, _proxy, register, email, twofa, webui, live_check, roxybrowser, cloakbrowser, page_agent, browser_use, skyvern, codex, extract_link, sub2api, humanize, flow_trigger):
         for k in dir(src):
             if k.isupper() or k in ("pick_proxy", "pick_browser_profile", "build_browser_environment", "validate_browser_profile"):
                 setattr(_self, k, getattr(src, k))
@@ -285,7 +297,10 @@ __all__ = [
     "OPENAI_CLIENT_ID", "OPENAI_SCOPE", "OPENAI_AUDIENCE", "OPENAI_REDIRECT_URI",
     "SENTINEL_SV", "OPENAI_BUILD_ID", "OAI_CLIENT_BUILD_NUMBER", "OAI_CLIENT_VERSION",
     "STATSIG_CLIENT_KEY", "STATSIG_SDK_VERSION", "STATSIG_SDK_TYPE", "AB_CLIENT_KEY", "AB_SDK_VERSION",
-    "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE", "CHATGPT_ANON_BOOTSTRAP_ENABLED", "CHATGPT_AUTH_BOOTSTRAP_ENABLED", "CHATGPT_BOOTSTRAP_STRICT", "PROTOCOL_BROWSER_LIKE_FLOW",
+    "SEND_SENTINEL_ON_EMAIL_OTP_VALIDATE", "CHATGPT_ANON_BOOTSTRAP_ENABLED", "CHATGPT_AUTH_BOOTSTRAP_ENABLED", "CHATGPT_BOOTSTRAP_STRICT", "PROTOCOL_PREFLIGHT_MODE", "PROTOCOL_BROWSER_LIKE_FLOW",
+    # registration traffic
+    "REGISTRATION_TRAFFIC_OPTIMIZATION", "REGISTRATION_BLOCK_ANALYTICS", "REGISTRATION_BLOCK_MEDIA",
+    "REGISTRATION_ANALYTICS_HOSTS", "REGISTRATION_MEDIA_HOSTS", "REGISTRATION_MEDIA_EXTENSIONS",
     # proxy
     "PROXY_POOL", "PROXY_CHECK_BEFORE_REGISTRATION", "PROXY_WARMUP_TARGET_CLEAN_IPS",
     "PROXY_WARMUP_HEALTH_URL", "PROXY_WARMUP_REPUTATION_URL", "PROXY_WARMUP_ANONYMITY_URL",

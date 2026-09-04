@@ -62,6 +62,7 @@ def _build_driver(opened: RoxyOpenResult):
         else:
             driver = webdriver.Chrome(options=options)
         _apply_browser_automation_mask(driver)
+        _install_registration_traffic_optimization(driver)
         return driver
 
     if opened.webdriver_url:
@@ -70,9 +71,19 @@ def _build_driver(opened: RoxyOpenResult):
         options.page_load_strategy = "eager"
         driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
         _apply_browser_automation_mask(driver)
+        _install_registration_traffic_optimization(driver)
         return driver
 
     raise RuntimeError("Roxy 未返回可连接的 Selenium 地址")
+
+
+def _install_registration_traffic_optimization(driver) -> None:
+    """安装 Roxy 注册阶段的 CDP URL 阻断；失败时保持原始请求。"""
+    try:
+        from core.traffic_optimizer import install_selenium_network_optimization
+        install_selenium_network_optimization(driver, label="Roxy")
+    except Exception as exc:
+        logger.debug("[Roxy] 注册流量优化未安装：%s: %s", type(exc).__name__, str(exc)[:180])
 
 
 def _center_browser_window(driver) -> None:
@@ -2929,8 +2940,8 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         logger.info("[Roxy注册] 已拿到 accessToken：%s", email)
         # 后置 2FA/Codex 可能复用并清理当前窗口，先保存注册成功瞬间的完整登录态。
         saved_session = build_saved_session(session_info, capture_browser_cookies(driver))
-        from core.traffic import browser_performance_snapshot
-        registration_traffic = browser_performance_snapshot(driver)
+        from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+        registration_traffic = attach_optimization_snapshot(browser_performance_snapshot(driver), driver)
         _check_manual_stop()
 
         totp_secret = None

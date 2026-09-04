@@ -108,6 +108,14 @@ ENABLE_2FA=False
 AUTO_BROWSER_LOCALE_FROM_IP=True
 # 仅 protocol 纯协议驱动：开启后增加登录页/前端上下文预热，关闭保持原流程
 PROTOCOL_BROWSER_LIKE_FLOW=False
+# 轻量协议预检；关闭首屏与登录态数据预热
+PROTOCOL_PREFLIGHT_MODE=minimal
+CHATGPT_ANON_BOOTSTRAP_ENABLED=False
+CHATGPT_AUTH_BOOTSTRAP_ENABLED=False
+# Roxy/Cloak/Browser Use/Skyvern 共用：保留认证和挑战资源，削减分析与媒体流量
+REGISTRATION_TRAFFIC_OPTIMIZATION=True
+REGISTRATION_BLOCK_ANALYTICS=True
+REGISTRATION_BLOCK_MEDIA=True
 ```
 
 代理池建议在 WebUI「配置 → 代理」中填写，每行一个代理地址。也可以在 `.env` 使用带换行转义的值：
@@ -213,3 +221,14 @@ python -m pip install -r requirements.txt
 该开关只影响 `REGISTRATION_DRIVER=protocol`，RoxyBrowser、CloakBrowser、Browser Use
 和 Skyvern 驱动不受影响。前端预热默认是 best-effort，失败会记录日志并继续主注册；如需把
 预热错误作为硬失败，可同时设置 `CHATGPT_BOOTSTRAP_STRICT=True`。
+
+### 注册流量优化
+
+WebUI「配置 → 功能开关」中的「注册流量优化」同时覆盖 Roxy、Cloak、Browser Use
+和 Skyvern，无头与可见窗口使用相同规则。优化层通过 Chromium CDP 阻断 Datadog、
+Statsig/A-B 等分析请求，以及登录表单不需要的图片、字体和音视频；认证 document、
+script、XHR/fetch、WebSocket 及 Cloudflare/Turnstile 挑战资源保持原样。CDP 不支持时
+会自动继续原始请求流程。
+
+`protocol` 驱动建议使用 `PROTOCOL_PREFLIGHT_MODE=minimal`，并关闭匿名态和登录态
+bootstrap。需要完整诊断链路时可把预检设为 `full` 或重新打开两个 bootstrap 开关。

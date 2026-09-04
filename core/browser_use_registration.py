@@ -1737,6 +1737,12 @@ def run_browser_use_registration(
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(_timeout_ms())
             page.set_default_navigation_timeout(_timeout_ms(getattr(_cfg, "BROWSER_USE_NAVIGATION_TIMEOUT", 90)))
+            try:
+                from core.traffic_optimizer import install_playwright_network_optimization
+                install_playwright_network_optimization(context, page, label=cloud_label)
+            except Exception as exc:
+                # 远端 CDP 版本不支持 Network.setBlockedURLs 时继续使用原始流程。
+                logger.debug("[%s] 注册流量优化未安装：%s: %s", cloud_label, type(exc).__name__, str(exc)[:180])
 
             if provider_prefix == "skyvern":
                 try:
@@ -1906,8 +1912,8 @@ def run_browser_use_registration(
             logger.info("[BrowserUse] 已拿到 accessToken：%s", email)
             # 在后置 Codex/2FA 可能关闭或清理远端浏览器前，冻结本次注册的完整登录态。
             saved_session = build_saved_session(session_info, capture_browser_cookies(page))
-            from core.traffic import browser_performance_snapshot
-            registration_traffic = browser_performance_snapshot(page)
+            from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+            registration_traffic = attach_optimization_snapshot(browser_performance_snapshot(page), page)
 
             if _twofa_cfg.ENABLE_2FA:
                 logger.warning("[BrowserUse] 当前路径暂不自动设置 2FA，已跳过")

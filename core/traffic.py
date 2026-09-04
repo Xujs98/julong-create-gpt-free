@@ -121,7 +121,37 @@ def normalize_snapshot(value: Any) -> dict[str, Any]:
     measurement = str(value.get("measurement") or "").strip()
     if measurement:
         out["measurement"] = measurement[:80]
+    optimization = value.get("optimization")
+    if isinstance(optimization, dict):
+        # 只保留优化层的低敏诊断字段，不把 URL 规则或运行时对象写入账号。
+        safe_optimization = {}
+        for key in ("enabled", "method", "label", "blocked_pattern_count", "error"):
+            item = optimization.get(key)
+            if key == "enabled":
+                safe_optimization[key] = bool(item)
+            elif key == "blocked_pattern_count":
+                try:
+                    safe_optimization[key] = max(0, int(item or 0))
+                except (TypeError, ValueError):
+                    safe_optimization[key] = 0
+            elif item is not None and str(item).strip():
+                safe_optimization[key] = str(item).strip()[:240]
+        if safe_optimization:
+            out["optimization"] = safe_optimization
     return out if total > 0 or out.get("request_count", 0) or out.get("response_count", 0) else {}
+
+
+def attach_optimization_snapshot(snapshot: dict[str, Any], target: Any) -> dict[str, Any]:
+    """把 driver/page 的优化安装状态附加到流量快照。"""
+    out = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
+    try:
+        from core.traffic_optimizer import optimization_snapshot
+        details = optimization_snapshot(target)
+    except Exception:
+        details = {}
+    if details:
+        out["optimization"] = details
+    return out
 
 
 def browser_performance_snapshot(target: Any) -> dict[str, Any]:

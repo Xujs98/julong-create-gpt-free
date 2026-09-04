@@ -98,6 +98,8 @@ class CloakLaunchOptionsTests(unittest.TestCase):
             context_kwargs["extra_http_headers"],
             {"Accept-Language": "ja-JP,ja;q=0.9"},
         )
+        self.assertTrue(hasattr(driver, "_registration_traffic_optimization"))
+        self.assertEqual(driver._registration_traffic_optimization.method, "cdp")
         driver.quit()
 
     def test_region_switch_off_uses_custom_profile_without_cloak_geoip(self):
