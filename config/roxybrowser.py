@@ -22,6 +22,19 @@ REGISTRATION_DRIVER: str = "roxy"
 ROXY_API_BASE: str = "http://127.0.0.1:50100"
 ROXY_API_TOKEN: str = env_str("ROXY_API_TOKEN", "")
 
+# Docker/远程调用 Roxy 时，/browser/open 返回的 debuggerAddress 往往是
+# Roxy 主机的 127.0.0.1:<port>。填写可从运行端访问的主机名/IP；Docker
+# Compose 默认会使用 host.docker.internal，并在客户端解析为网关 IP，
+# 避免 Roxy 对非 IP Host 头返回 500。
+ROXY_DEBUGGER_HOST: str = env_str("ROXY_DEBUGGER_HOST", "")
+ROXY_DEBUGGER_RESOLVE_HOST: bool = True
+
+# Roxy 返回的 driver 路径属于 Roxy 所在主机。Docker 中不能执行 macOS/
+# Windows 路径，客户端会按远端 Chrome 主版本自动下载 Linux driver 到
+# 此缓存目录；本机存在且版本匹配的 Roxy driver 仍优先复用。
+ROXY_CHROMEDRIVER_PATH: str = env_str("ROXY_CHROMEDRIVER_PATH", "")
+ROXY_DRIVER_CACHE_DIR: str = env_str("ROXY_DRIVER_CACHE_DIR", "")
+
 # Roxy 环境/Profile ID；留空时使用 ROXY_PROFILE_CREATE_* 先创建临时环境（如果接口支持）
 ROXY_PROFILE_ID: str = ""
 
@@ -118,4 +131,4 @@ ROXY_PROFILE_CREATE_PAYLOAD: dict = {
 ROXY_CODEX_CALLBACK_TIMEOUT: int = 180
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_SELENIUM_TIMEOUT': 'int', 'ROXY_API_TIMEOUT': 'int', 'ROXY_OPEN_TIMEOUT': 'int', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})
+apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_DEBUGGER_HOST': 'str', 'ROXY_DEBUGGER_RESOLVE_HOST': 'bool', 'ROXY_CHROMEDRIVER_PATH': 'str', 'ROXY_DRIVER_CACHE_DIR': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_SELENIUM_TIMEOUT': 'int', 'ROXY_API_TIMEOUT': 'int', 'ROXY_OPEN_TIMEOUT': 'int', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})

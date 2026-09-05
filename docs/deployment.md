@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | macOS 本机 | 推荐使用 RoxyBrowser、需要可见浏览器窗口 | 支持 |
 | 本地 Python | 已准备好 Python 环境，直接运行 WebUI | 支持 |
-| Docker Compose | 服务化运行、隔离依赖、远程/云端浏览器 | 不支持直接连接宿主机 Roxy |
+| Docker Compose | 服务化运行、隔离依赖，也可通过网关连接宿主机 Roxy | 需要宿主机调试端口可达 |
 
 > 所有代码和镜像都以 `codex/long-term-platform-foundation` 分支为准。
 
@@ -137,6 +137,35 @@ APP_PORT=8000 docker compose up -d --build
 
 Compose 会把项目根目录 `.env` 挂载到容器 `/app/.env`，运行数据挂载到 `docker-data/`。配置保存功能已兼容 `.env` 文件绑定挂载。
 
+### Docker 调用宿主机 RoxyBrowser
+
+可以通过内网 API 地址访问宿主机 Roxy，例如：
+
+```dotenv
+REGISTRATION_DRIVER=roxy
+ROXY_API_BASE=http://192.168.31.123:50000
+ROXY_API_TOKEN=你的Roxy密钥
+ROXY_DEBUGGER_HOST=host.docker.internal
+```
+
+`ROXY_API_BASE` 只解决容器访问 Roxy API；`/browser/open` 返回的
+`127.0.0.1:<端口>` 还必须改写为 Docker Desktop 的宿主机网关。
+当前代码会自动完成这一步，并把 `host.docker.internal` 解析成网关 IP，
+避免 Roxy 对非 IP `Host` 头返回 HTTP 500。容器内会读取远端 Chrome 主版本，
+自动缓存匹配的 Linux Chromedriver 到 `/app/runtime/roxy-drivers`，无需挂载 macOS
+或 Windows 的 Chromedriver 路径。
+
+启动 RoxyBrowser 后重建应用：
+
+```bash
+docker compose up -d --build --force-recreate
+docker compose logs -f app
+```
+
+如果 Docker 运行在 Linux 而不是 Docker Desktop，`host.docker.internal` 可能没有自动解析，
+请把 `ROXY_DEBUGGER_HOST` 改成宿主机可达且 Roxy 调试端口允许访问的 IP；API 地址仍使用
+宿主机内网 IP。Roxy 调试端口必须能从容器网络访问。
+
 ### 使用 Docker Hub 镜像
 
 登录 Docker Hub 后拉取并启动：
@@ -177,11 +206,12 @@ docker compose up -d --no-build
 
 ## 5. Docker 与 RoxyBrowser 的边界
 
-标准 Docker Compose 容器内的 `127.0.0.1` 指向容器自身，不是 macOS 宿主机。Roxy 还会返回宿主机的调试地址和 Chromedriver 路径，容器无法直接使用这些宿主机 GUI/驱动资源。因此：
+标准 Docker Compose 容器内的 `127.0.0.1` 指向容器自身，不是 macOS 宿主机。Roxy 还会返回宿主机的调试地址和 Chromedriver 路径。当前版本会通过 `ROXY_DEBUGGER_HOST` 重写调试地址，并自动准备容器内的 Linux Chromedriver，因此 Docker 可以调用宿主机 Roxy，但仍有以下边界：
 
-- 使用 Roxy 注册时，运行 `./macos-deploy.sh` 或 `./webui.sh`，不要把注册驱动放在容器里。
-- Docker 部署建议选择 `browser_use`、`skyvern` 或 `protocol` 驱动。
-- 如果只想让容器访问宿主机 HTTP 服务，可尝试 `ROXY_API_BASE=http://host.docker.internal:50100`，但这不能解决宿主机 Chromedriver/调试地址不可见的问题。
+- Docker Desktop：设置 `ROXY_DEBUGGER_HOST=host.docker.internal`，程序会解析成网关 IP。
+- Linux Docker：设置宿主机可达的 `ROXY_DEBUGGER_HOST`，并确认 Roxy 的调试端口允许容器访问。
+- Roxy API 可使用宿主机内网地址（例如 `http://192.168.31.123:50000`）；这只负责 API，不等于调试端口已经可达。
+- 如不希望开放宿主机 Roxy 调试端口，仍可使用 `browser_use`、`skyvern` 或 `protocol` 驱动。
 
 ## 6. 配置、授权码和数据
 

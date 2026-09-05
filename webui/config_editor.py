@@ -455,6 +455,21 @@ EDITABLE_FIELDS = [
         "storage": "env", "secret": True,
     },
     {
+        "key": "ROXY_DEBUGGER_HOST", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "跨容器调试主机", "help": "Docker 连接宿主机 Roxy 时把 127.0.0.1 调试地址改写为此主机；Docker Desktop 推荐 host.docker.internal，留空时容器自动使用它",
+        "storage": "env",
+    },
+    {
+        "key": "ROXY_CHROMEDRIVER_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "Chromedriver 路径", "help": "可选；本机填写与 Roxy Chrome 主版本匹配的 driver。Docker 留空，按远端 Chrome 主版本自动下载 Linux driver",
+        "storage": "env",
+    },
+    {
+        "key": "ROXY_DRIVER_CACHE_DIR", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "Chromedriver 缓存目录", "help": "可选；Docker 默认保存到 /app/runtime/roxy-drivers，本机默认保存到 ~/.cache/turb-gpt-free-register/roxy-drivers",
+        "storage": "env",
+    },
+    {
         "key": "ROXY_PROFILE_ID", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
         "label": "Roxy 环境ID", "help": "指定要打开的 Roxy 浏览器环境/Profile ID；留空则尝试创建临时环境",
     },

@@ -187,7 +187,7 @@ make docker-up
 
 `make docker-up` 会把项目根目录的 `.env` 挂载到容器。若绕过 Compose 直接使用 `docker run`，必须显式添加 `--env-file .env`；否则容器读不到 `WEBUI_AUTH_CODE`，会生成临时授权码。
 
-> RoxyBrowser 依赖宿主机 GUI、API 和 Chromedriver，推荐使用 macOS 本机部署；标准 Docker 容器不能直接驱动宿主机 Roxy。Docker 部署请选择 `browser_use`、`skyvern` 或 `protocol`，详见[完整部署指南](docs/deployment.md)。
+> Docker 现在支持通过 `host.docker.internal` 调用宿主机 Roxy：`ROXY_API_BASE` 指向 Roxy API，程序会自动重写 `/browser/open` 返回的调试地址，并在容器内缓存匹配版本的 Linux Chromedriver。Roxy 本机部署仍优先使用 macOS 一键脚本；Docker 详细配置见[完整部署指南](docs/deployment.md)。
 
 已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `codex/long-term-platform-foundation`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
 
@@ -354,6 +354,18 @@ ROXY_ONE_PROFILE_PER_ACCOUNT = True
 ROXY_DELETE_PROFILE_AFTER_RUN = True
 ROXY_CREATE_USE_PROXY_POOL = True
 ```
+
+Docker 调用宿主机 Roxy 时，把 `ROXY_API_BASE` 换成宿主机内网 API 地址（例如
+`http://192.168.31.123:50000`），并在 `.env` 设置：
+
+```dotenv
+REGISTRATION_DRIVER=roxy
+ROXY_API_BASE=http://192.168.31.123:50000
+ROXY_DEBUGGER_HOST=host.docker.internal
+```
+
+程序会把 Roxy 返回的 `127.0.0.1:<调试端口>` 重写为 Docker Desktop 宿主机网关，
+并在容器的 `docker-data/roxy-drivers/` 中缓存匹配版本的 Linux Chromedriver。
 
 如要无头：
 

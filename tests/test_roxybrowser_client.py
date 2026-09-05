@@ -120,6 +120,20 @@ def test_open_profile_cleans_created_profile_when_debugger_address_missing():
     assert cleanup.call_args.kwargs == {"force": True}
 
 
+def test_open_profile_rewrites_loopback_debugger_for_container(monkeypatch):
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.create_profile = Mock(return_value="PROFILE")
+    client.request = Mock(return_value={
+        "code": 0,
+        "data": {"http": "127.0.0.1:9222", "driver": "/host/chromedriver"},
+    })
+    monkeypatch.setattr("core.roxybrowser_client.normalize_debugger_address", lambda value: "192.168.65.254:9222")
+    with patch.object(client, "cleanup_profile"):
+        opened = client.open_profile()
+
+    assert opened.debugger_address == "192.168.65.254:9222"
+
+
 def test_failed_cleanup_ignores_keep_open_and_deletes_created_profile():
     client = RoxyBrowserClient(api_base="http://roxy.test", token="")
     opened = RoxyOpenResult("PROFILE", {}, created_by_run=True)

@@ -42,6 +42,7 @@ def _build_driver(opened: RoxyOpenResult):
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver
+    from core.roxy_selenium import resolve_chromedriver
 
     if opened.debugger_address:
         logger.info("[Roxy] Selenium 连接 debuggerAddress=%s", opened.debugger_address)
@@ -49,18 +50,9 @@ def _build_driver(opened: RoxyOpenResult):
         # 页面里长轮询/风控脚本偶尔会让 driver.get 等到超时；eager 只等 DOMContentLoaded。
         options.page_load_strategy = "eager"
         options.add_experimental_option("debuggerAddress", opened.debugger_address)
-        driver_path = ""
-        try:
-            raw_data = opened.raw.get("data") if isinstance(opened.raw, dict) else {}
-            if isinstance(raw_data, dict):
-                driver_path = str(raw_data.get("driver") or raw_data.get("driverPath") or raw_data.get("driver_path") or "").strip()
-        except Exception:
-            driver_path = ""
-        if driver_path:
-            logger.info("[Roxy] 使用 Roxy chromedriver=%s", driver_path)
-            driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
-        else:
-            driver = webdriver.Chrome(options=options)
+        driver_path = resolve_chromedriver(opened.raw, opened.debugger_address)
+        logger.info("[Roxy] 使用 Chromedriver=%s", driver_path)
+        driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
         _apply_browser_automation_mask(driver)
         _install_registration_traffic_optimization(driver)
         return driver

@@ -15,6 +15,7 @@ import requests
 
 from config import roxybrowser as _cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
+from core.roxy_selenium import normalize_debugger_address, normalize_webdriver_url
 
 logger = logging.getLogger(__name__)
 
@@ -557,7 +558,14 @@ class RoxyBrowserClient:
                 params=params if _cfg.ROXY_OPEN_METHOD.upper() == "GET" else None,
                 json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
             )
-            debugger_address = self._extract_debugger_address(result)
+            raw_debugger_address = self._extract_debugger_address(result)
+            debugger_address = normalize_debugger_address(raw_debugger_address)
+            if raw_debugger_address and debugger_address != raw_debugger_address:
+                logger.info(
+                    "[Roxy] 已重写跨容器调试地址：%s -> %s",
+                    raw_debugger_address,
+                    debugger_address,
+                )
             logger.info("[Roxy] open 返回摘要: debugger=%s raw=%s", debugger_address, json.dumps(result, ensure_ascii=False)[:800])
             webdriver_url = _first(result, [
                 ("webdriver",), ("webDriver",), ("webdriver_url",), ("webdriverUrl",),
@@ -565,6 +573,7 @@ class RoxyBrowserClient:
                 ("data", "webdriver"), ("data", "webDriver"), ("data", "webdriver_url"), ("data", "webdriverUrl"),
                 ("data", "selenium"), ("data", "selenium_url"), ("data", "seleniumUrl"),
             ]) or None
+            webdriver_url = normalize_webdriver_url(webdriver_url)
             ws_endpoint = _first(result, [
                 ("ws",), ("wsEndpoint",), ("ws_endpoint",), ("debuggerWsUrl",),
                 ("data", "ws"), ("data", "wsEndpoint"), ("data", "ws_endpoint"), ("data", "debuggerWsUrl"),
