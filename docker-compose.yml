@@ -1,0 +1,30 @@
+name: turb-gpt-free-register
+
+services:
+  app:
+    image: ${DOCKER_IMAGE:-qq1371446705/turb-gpt-free-register}:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    shm_size: "2gb"
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./docker-data
+        target: /app/runtime
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -131,6 +131,30 @@ PLAN_CHECK_PROXY_MODE=auto
 
 ## 6. 启动 WebUI
 
+### Docker 方式
+
+已安装 Docker 时，可在项目根目录直接执行：
+
+```bash
+cp .env.example .env  # 已有 .env 时跳过
+make docker-up
+```
+
+启动后访问 `http://127.0.0.1:5000`。持久化数据位于 `docker-data/`，查看日志可执行 `make docker-logs`。
+
+请优先使用 `make docker-up`，它会挂载当前 `.env`。直接使用 `docker run` 时需要显式传入 `--env-file .env`，否则 `WEBUI_AUTH_CODE` 不会进入容器。
+
+构建并推送到预设 Docker Hub 仓库（命令会校验当前为 `codex/long-term-platform-foundation` 分支）：
+
+```bash
+docker login
+make docker-push
+```
+
+指定标签时使用 `make docker-push TAG=v1.0.0`。
+
+### 本机 Python 方式
+
 首次启动前赋予脚本执行权限：
 
 ```bash

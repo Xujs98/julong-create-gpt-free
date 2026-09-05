@@ -164,6 +164,33 @@ WebUI 配置页保存这些字段时会写入 `.env`（不是 config 源码）�
 
 **[docs/quickstart.md：快速启动与使用教程](docs/quickstart.md)**
 
+### Docker 部署
+
+首次使用先准备配置文件：
+
+```bash
+cp .env.example .env
+```
+
+本地构建并后台启动：
+
+```bash
+make docker-up
+```
+
+默认访问 `http://127.0.0.1:5000`，运行数据保存在 `docker-data/`。可用 `APP_PORT=8000 make docker-up` 修改宿主机端口。
+
+`make docker-up` 会把项目根目录的 `.env` 挂载到容器。若绕过 Compose 直接使用 `docker run`，必须显式添加 `--env-file .env`；否则容器读不到 `WEBUI_AUTH_CODE`，会生成临时授权码。
+
+已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `codex/long-term-platform-foundation`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
+
+```bash
+docker login
+make docker-push
+```
+
+推送指定版本号：`make docker-push TAG=v1.0.0`。其他机器可执行 `docker compose pull && docker compose up -d` 拉取并启动。
+
 ### WebUI 授权码
 
 WebUI 启动后，除 `/login` 外所有页面和 `/api/*` 接口都会校验授权码。推荐在 `.env` 中配置：
