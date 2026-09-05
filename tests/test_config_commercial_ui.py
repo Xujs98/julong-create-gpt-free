@@ -24,7 +24,9 @@ def test_config_overview_cards_are_real_runtime_metrics() -> None:
     assert "function renderConfigOverviewCardsV2()" in html
     assert "当前注册策略" in html
     assert "自动化能力" in html
-    assert "配置完整度" in html
+    assert "运行环境" in html
+    assert "APP_VERSION" in html
+    assert "CONFIG.filter(f => (f.group || '其他') !== '系统信息')" in html
     assert "变更状态" in html
     assert "占位卡片" not in html
 
