@@ -1235,6 +1235,34 @@ def get_config() -> list[dict]:
             "group": "页面 Agent", "label": "Agent 配置状态", "help": "读取 Agent 配置失败",
             "readonly": True, "value": f"读取失败：{type(exc).__name__}", "status_ok": False,
         })
+    # Keep runtime metadata read-only so operators can distinguish a native
+    # process from Docker and confirm which build is serving the page.
+    try:
+        from config.build_info import APP_VERSION
+        environment = "Docker 环境" if (
+            Path("/.dockerenv").exists()
+            or str(os.getenv("CONTAINER") or "").strip().lower() == "docker"
+        ) else "本地环境"
+        out.extend([
+            {
+                "key": "RUNTIME_ENVIRONMENT", "file": "build_info.py", "type": "status",
+                "group": "系统信息", "label": "运行环境",
+                "help": "自动识别当前 WebUI 进程运行在本机还是 Docker 容器",
+                "readonly": True, "status_ok": True, "value": environment,
+            },
+            {
+                "key": "APP_VERSION", "file": "build_info.py", "type": "status",
+                "group": "系统信息", "label": "版本号",
+                "help": "格式：YYYY.MM.DD.版本；每次更新代码或镜像后同步更新",
+                "readonly": True, "status_ok": True, "value": str(APP_VERSION),
+            },
+        ])
+    except Exception as exc:
+        out.append({
+            "key": "RUNTIME_ENVIRONMENT", "file": "build_info.py", "type": "status",
+            "group": "系统信息", "label": "运行环境", "help": "运行环境信息读取失败",
+            "readonly": True, "status_ok": False, "value": f"读取失败：{type(exc).__name__}",
+        })
     return out
 
 

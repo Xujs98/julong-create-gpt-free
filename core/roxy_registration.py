@@ -72,6 +72,10 @@ def _build_driver(opened: RoxyOpenResult):
 def _install_registration_traffic_optimization(driver) -> None:
     """安装 Roxy 注册阶段的 CDP URL 阻断；失败时保持原始请求。"""
     try:
+        from core.roxy_selenium import _running_in_container
+        if _running_in_container():
+            logger.info("[Roxy] Docker 环境跳过注册流量拦截，保留 Cloudflare 挑战资源")
+            return
         from core.traffic_optimizer import install_selenium_network_optimization
         install_selenium_network_optimization(driver, label="Roxy")
     except Exception as exc:
@@ -219,6 +223,10 @@ def _apply_browser_automation_mask(driver) -> None:
         }
         """
         if hasattr(driver, "execute_cdp_cmd"):
+            try:
+                driver.execute_cdp_cmd("Emulation.setAutomationOverride", {"enabled": False})
+            except Exception:
+                pass
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
         try:
             driver.execute_script(script)
@@ -2781,6 +2789,18 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
     task_succeeded = False
     try:
         opened = client.open_profile(proxy=proxy)
+        try:
+            from core.roxy_selenium import _running_in_container
+            logger.info(
+                "[Roxy注册] 运行环境=%s profile=%s one_profile=%s random_os=%s proxy=%s",
+                "Docker" if _running_in_container() else "本机",
+                opened.profile_id,
+                bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True)),
+                bool(getattr(_cfg, "ROXY_RANDOM_OS_ON_CREATE", True)),
+                "已配置" if proxy else "未配置",
+            )
+        except Exception:
+            pass
         driver = _build_driver(opened)
         _center_browser_window(driver)
         driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
