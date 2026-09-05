@@ -15,7 +15,7 @@ import requests
 
 from config import roxybrowser as _cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
-from core.roxy_selenium import normalize_debugger_address, normalize_webdriver_url
+from core.roxy_selenium import normalize_api_base, normalize_debugger_address, normalize_webdriver_url
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,11 @@ def _random_roxy_profile_name() -> str:
 
 class RoxyBrowserClient:
     def __init__(self, api_base: str | None = None, token: str | None = None):
-        self.api_base = (api_base or _cfg.ROXY_API_BASE).strip()
+        configured_api_base = (api_base or _cfg.ROXY_API_BASE).strip()
+        # A shared .env often contains the native default 127.0.0.1.  When the
+        # app runs in Docker, point that loopback API at the host gateway too;
+        # native runs keep the original URL unchanged.
+        self.api_base = normalize_api_base(configured_api_base) or configured_api_base
         self.token = (token if token is not None else _cfg.ROXY_API_TOKEN).strip()
         # 记录本次创建环境实际写入的代理，供注册完成后的账号 GeoIP 落库使用。
         self.last_proxy_url: str | None = None

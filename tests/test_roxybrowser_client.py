@@ -94,6 +94,36 @@ def test_request_uses_longer_timeout_for_browser_open():
     assert [item["timeout"] for item in calls] == [180, 12]
 
 
+def test_create_profile_applies_workspace_fingerprint_and_task_proxy_config():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.request = Mock(return_value={"code": 0, "data": {"id": "PROFILE"}})
+    with patch("core.roxybrowser_client._cfg.ROXY_WORKSPACE_ID", "WORKSPACE"), patch(
+        "core.roxybrowser_client._cfg.ROXY_PROJECT_ID", "PROJECT"
+    ), patch("core.roxybrowser_client._cfg.ROXY_RANDOM_OS_ON_CREATE", True), patch(
+        "core.roxybrowser_client._cfg.ROXY_RANDOM_OS_CHOICES", "Windows"
+    ), patch("core.roxybrowser_client._cfg.ROXY_RANDOM_PROFILE_NAME_ON_CREATE", True), patch(
+        "core.roxybrowser_client._cfg.ROXY_PROXY_CHECK_CHANNEL", ""
+    ):
+        assert client.create_profile(proxy="socks5h://user:pass@proxy.test:3010") == "PROFILE"
+
+    body = client.request.call_args.kwargs["json_body"]
+    assert body["workspaceId"] == "WORKSPACE"
+    assert body["projectId"] == "PROJECT"
+    assert body["os"] == "Windows"
+    assert body["name"].startswith("rb-")
+    assert body["proxyInfo"] == {
+        "moduleId": 0,
+        "proxyMethod": "custom",
+        "proxyCategory": "SOCKS5",
+        "ipType": "IPV4",
+        "protocol": "SOCKS5",
+        "host": "proxy.test",
+        "port": "3010",
+        "proxyUserName": "user",
+        "proxyPassword": "pass",
+    }
+
+
 def test_open_profile_cleans_created_profile_when_open_fails():
     client = RoxyBrowserClient(api_base="http://roxy.test", token="")
     client.create_profile = Mock(return_value="PROFILE")

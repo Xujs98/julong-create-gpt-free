@@ -21,8 +21,33 @@ def test_normalize_debugger_address_uses_resolved_container_gateway(monkeypatch)
 def test_normalize_debugger_address_keeps_local_host(monkeypatch):
     monkeypatch.setattr(roxy_selenium, "_running_in_container", lambda: False)
     monkeypatch.setattr(roxy_selenium._cfg, "ROXY_DEBUGGER_HOST", "")
+    monkeypatch.setattr(roxy_selenium._cfg, "ROXY_API_BASE", "http://127.0.0.1:50100")
 
     assert roxy_selenium.normalize_debugger_address("127.0.0.1:9222") == "127.0.0.1:9222"
+
+
+def test_native_local_api_ignores_stale_container_debugger_host(monkeypatch):
+    monkeypatch.setattr(roxy_selenium, "_running_in_container", lambda: False)
+    monkeypatch.setattr(roxy_selenium._cfg, "ROXY_API_BASE", "http://127.0.0.1:50100")
+    monkeypatch.setattr(roxy_selenium._cfg, "ROXY_DEBUGGER_HOST", "198.18.0.39")
+
+    assert roxy_selenium.normalize_debugger_address("127.0.0.1:64670") == "127.0.0.1:64670"
+
+
+def test_native_remote_api_still_keeps_loopback_debugger(monkeypatch):
+    monkeypatch.setattr(roxy_selenium, "_running_in_container", lambda: False)
+    monkeypatch.setattr(roxy_selenium._cfg, "ROXY_API_BASE", "http://192.0.2.10:50100")
+    monkeypatch.setattr(roxy_selenium._cfg, "ROXY_DEBUGGER_HOST", "192.0.2.10")
+
+    assert roxy_selenium.normalize_debugger_address("127.0.0.1:64670") == "127.0.0.1:64670"
+
+
+def test_container_rewrites_loopback_api_base_to_host_gateway(monkeypatch):
+    monkeypatch.setattr(roxy_selenium, "_running_in_container", lambda: True)
+    monkeypatch.setattr(roxy_selenium._cfg, "ROXY_DEBUGGER_HOST", "host.docker.internal")
+    monkeypatch.setattr(roxy_selenium, "_resolve_host", lambda host: "192.168.65.254")
+
+    assert roxy_selenium.normalize_api_base("http://127.0.0.1:50100") == "http://192.168.65.254:50100"
 
 
 def test_resolve_chromedriver_reuses_matching_returned_driver(tmp_path, monkeypatch):

@@ -51,10 +51,25 @@ def _format_host(host: str) -> str:
 
 
 def _effective_debugger_host() -> str:
+    """Return the host used to reach Roxy's debugger from this runtime.
+
+    A Docker-specific ``ROXY_DEBUGGER_HOST`` is commonly kept in the shared
+    ``.env`` file.  Reusing that value in a native macOS process rewrites
+    Roxy's loopback debugger to an unreachable container gateway (the failure
+    seen as ``cannot connect to chrome at 198.18.x.x``). Native runs always
+    keep loopback addresses; only a container applies the gateway override.
+    """
     configured = str(getattr(_cfg, "ROXY_DEBUGGER_HOST", "") or "").strip()
+    in_container = _running_in_container()
+    if not in_container:
+        # Native Roxy + native Selenium share the same loopback namespace. A
+        # LAN API address does not change that: the debugger address is still
+        # relative to the native Roxy process, so never apply Docker gateway
+        # rewriting to a native run.
+        return ""
     if configured:
         return configured
-    if _running_in_container():
+    if in_container:
         # Docker Desktop exposes the host through this gateway. The hostname is
         # resolved to an IP below because Roxy rejects a non-IP Host header.
         return "host.docker.internal"
@@ -120,6 +135,29 @@ def normalize_webdriver_url(url: str | None) -> str | None:
     if port:
         netloc = f"{netloc}:{port}"
     return urlunparse((parsed.scheme or "http", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+
+def normalize_api_base(base: str | None) -> str | None:
+    """Make a loopback Roxy API URL reachable from Docker when needed."""
+    if not base:
+        return None
+    text = str(base).strip()
+    parsed = urlparse(text if "://" in text else f"http://{text}")
+    host = parsed.hostname or ""
+    if not _running_in_container() or host.lower() not in _LOOPBACK_HOSTS:
+        return text
+    override = _effective_debugger_host()
+    override_host, override_port = _parse_host_port(override)
+    if not override_host:
+        return text
+    port = parsed.port or override_port
+    netloc = _format_host(_resolve_host(override_host))
+    if port:
+        netloc = f"{netloc}:{port}"
+    normalized = urlunparse((parsed.scheme or "http", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    if normalized != text:
+        logger.info("[Roxy] 已按运行环境重写 API 地址：%s -> %s", text, normalized)
+    return normalized
 
 
 def _version_major(version: str | None) -> str:
