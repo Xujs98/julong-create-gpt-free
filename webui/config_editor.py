@@ -1253,7 +1253,7 @@ def get_config() -> list[dict]:
             {
                 "key": "APP_VERSION", "file": "build_info.py", "type": "status",
                 "group": "系统信息", "label": "版本号",
-                "help": "格式：YYYY.MM.DD.版本；每次更新代码或镜像后同步更新",
+                "help": "格式：YYYY.MM.DD.N（例如 2026.09.06.1）；每次更新代码或镜像后递增末尾编号",
                 "readonly": True, "status_ok": True, "value": str(APP_VERSION),
             },
         ])
