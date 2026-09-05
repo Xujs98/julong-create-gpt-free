@@ -2,7 +2,7 @@ DOCKER_IMAGE ?= qq1371446705/turb-gpt-free-register
 TAG ?= latest
 EXPECTED_GIT_BRANCH ?= codex/long-term-platform-foundation
 
-.PHONY: check-docker-branch docker-build docker-push docker-up docker-down docker-logs
+.PHONY: check-docker-branch docker-build docker-push docker-up docker-down docker-logs macos-up macos-update
 
 check-docker-branch:
 	@test "$$(git branch --show-current)" = "$(EXPECTED_GIT_BRANCH)" || \
@@ -23,3 +23,9 @@ docker-down:
 
 docker-logs:
 	docker compose logs -f app
+
+macos-up:
+	./macos-deploy.sh
+
+macos-update:
+	./macos-deploy.sh update

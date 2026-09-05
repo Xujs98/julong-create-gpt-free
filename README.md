@@ -160,15 +160,20 @@ WebUI 配置页保存这些字段时会写入 `.env`（不是 config 源码）�
 
 ### 0. 直接启动
 
-完整的 Git 拉取、Python/Node 环境、全部依赖、浏览器工具、`.env` 配置和启动步骤，请查看：
+完整的 Git 拉取、Python/Node 环境、全部依赖、浏览器工具、`.env` 配置、本地启动、Docker 和 macOS 一键部署步骤，请查看：
+
+**[docs/deployment.md：完整部署指南](docs/deployment.md)**
 
 **[docs/quickstart.md：快速启动与使用教程](docs/quickstart.md)**
 
 ### Docker 部署
 
-首次使用先准备配置文件：
+首次使用先准备配置文件（源码部署必须使用指定分支）：
 
 ```bash
+git clone --branch codex/long-term-platform-foundation \
+  https://github.com/Xujs98/julong-create-gpt-free.git
+cd julong-create-gpt-free
 cp .env.example .env
 ```
 
@@ -182,6 +187,8 @@ make docker-up
 
 `make docker-up` 会把项目根目录的 `.env` 挂载到容器。若绕过 Compose 直接使用 `docker run`，必须显式添加 `--env-file .env`；否则容器读不到 `WEBUI_AUTH_CODE`，会生成临时授权码。
 
+> RoxyBrowser 依赖宿主机 GUI、API 和 Chromedriver，推荐使用 macOS 本机部署；标准 Docker 容器不能直接驱动宿主机 Roxy。Docker 部署请选择 `browser_use`、`skyvern` 或 `protocol`，详见[完整部署指南](docs/deployment.md)。
+
 已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `codex/long-term-platform-foundation`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
 
 ```bash
@@ -189,7 +196,18 @@ docker login
 make docker-push
 ```
 
-推送指定版本号：`make docker-push TAG=v1.0.0`。其他机器可执行 `docker compose pull && docker compose up -d` 拉取并启动。
+推送指定版本号：`make docker-push TAG=v1.0.0`。其他机器可执行 `docker compose pull && docker compose up -d --no-build` 拉取并启动镜像。
+
+### macOS 一键本地部署
+
+在 `codex/long-term-platform-foundation` 分支的项目根目录执行：
+
+```bash
+chmod +x macos-deploy.sh
+./macos-deploy.sh
+```
+
+脚本会准备 Homebrew 工具链、Python 虚拟环境、项目依赖、Playwright Chromium、`.env` 和前端资源，然后启动 `http://127.0.0.1:5000`。RoxyBrowser 场景优先使用此方式。
 
 ### WebUI 授权码
 

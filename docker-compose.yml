@@ -13,6 +13,9 @@ services:
       - "${APP_PORT:-5000}:5000"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      # RoxyBrowser requires host GUI/Chromedriver and is not the Docker default.
+      # Override with REGISTRATION_DRIVER=browser_use/skyvern/cloak as needed.
+      REGISTRATION_DRIVER: ${REGISTRATION_DRIVER:-protocol}
     volumes:
       - type: bind
         source: ./.env

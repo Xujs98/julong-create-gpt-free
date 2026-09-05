@@ -93,3 +93,6 @@ docker-data/
 # 本地审计、截图、补丁与验证快照
 artifacts/
 run/
+
+# Generated frontend build output
+webui/static/react/

@@ -1,6 +1,6 @@
 # julong-create-gpt-free 快速启动与使用教程
 
-本教程从拉取项目开始，依次完成系统工具、Python/Node 环境、项目依赖、浏览器工具、配置和 WebUI 启动。
+本教程从拉取项目开始，依次完成系统工具、Python/Node 环境、项目依赖、浏览器工具、配置和 WebUI 启动。完整的本地、Docker、Roxy 边界和 macOS 一键部署说明见[部署指南](deployment.md)。
 
 [返回项目首页](../README.md)
 
@@ -37,7 +37,8 @@ sudo apt install -y git python3 python3-venv python3-pip nodejs npm
 ## 2. 拉取项目
 
 ```bash
-git clone https://github.com/Xujs98/julong-create-gpt-free.git
+git clone --branch codex/long-term-platform-foundation \
+  https://github.com/Xujs98/julong-create-gpt-free.git
 cd julong-create-gpt-free
 ```
 
@@ -144,6 +145,8 @@ make docker-up
 
 请优先使用 `make docker-up`，它会挂载当前 `.env`。直接使用 `docker run` 时需要显式传入 `--env-file .env`，否则 `WEBUI_AUTH_CODE` 不会进入容器。
 
+Docker 容器内的 `127.0.0.1` 不指向宿主机，且 Roxy 返回的 GUI/Chromedriver 地址无法在容器内使用。需要 RoxyBrowser 时请改用 macOS 本机方式；Docker 请使用 `browser_use`、`skyvern` 或 `protocol` 驱动。
+
 构建并推送到预设 Docker Hub 仓库（命令会校验当前为 `codex/long-term-platform-foundation` 分支）：
 
 ```bash
@@ -152,6 +155,14 @@ make docker-push
 ```
 
 指定标签时使用 `make docker-push TAG=v1.0.0`。
+
+其他电脑使用已推送镜像时，在项目目录执行：
+
+```bash
+docker login
+docker compose pull
+docker compose up -d --no-build
+```
 
 ### 本机 Python 方式
 
@@ -172,6 +183,21 @@ chmod +x webui.sh
 <http://127.0.0.1:5000>
 
 使用 `.env` 中的 `WEBUI_AUTH_CODE` 登录。
+
+### macOS 一键方式
+
+在项目根目录执行以下命令即可完成依赖准备、`.env` 初始化、前端构建和 WebUI 启动：
+
+```bash
+chmod +x macos-deploy.sh
+./macos-deploy.sh
+```
+
+脚本默认检查当前分支为 `codex/long-term-platform-foundation`。后续更新可执行：
+
+```bash
+./macos-deploy.sh update
+```
 
 常用管理命令：
 
