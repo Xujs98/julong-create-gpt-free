@@ -3048,15 +3048,44 @@
     .proxy-api-link-v2 button.primary { border-color: #4f6bff; background: #4f6bff; color: #fff; }
     .proxy-api-link-v2 button:hover { filter: brightness(.98); transform: translateY(-1px); }
     .proxy-api-hint-v2 { color: #7d8799; font-size: 11px; line-height: 1.5; }
-    .proxy-pool-panel-v2 { margin-top: 16px; }
-    .proxy-pool-panel-v2.is-disabled { opacity: .68; }
-    .proxy-pool-panel-v2.is-disabled textarea { color: #9aa4b7; background: #f5f7fb; cursor: not-allowed; }
+    .proxy-pool-panel-v2 {
+      margin: 16px 24px 0; padding: 18px;
+      border: 1px solid #e4e9f3; border-radius: 14px; background: #fbfcff;
+      box-sizing: border-box;
+    }
+    .proxy-pool-editor-v2 { min-width: 0; }
+    .proxy-pool-editor-v2 .fld {
+      display: block; margin: 0; padding: 0;
+      border: 0; border-radius: 0; background: transparent;
+    }
+    .proxy-pool-editor-v2 .config-field-v2-label { font-size: 14px; }
+    .proxy-pool-editor-v2 .config-field-v2-copy .hint { max-width: 760px; }
+    .proxy-pool-editor-v2 .config-field-v2-control { margin-top: 12px; }
+    .proxy-pool-editor-v2 textarea {
+      display: block; width: 100%; min-height: 184px; max-height: 420px;
+      padding: 13px 14px; resize: vertical; box-sizing: border-box;
+      border: 1px solid #d7deeb; border-radius: 10px; background: #fff;
+      color: #263146; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px; line-height: 1.65; tab-size: 2;
+      box-shadow: inset 0 1px 2px rgba(30, 45, 80, .04);
+    }
+    .proxy-pool-editor-v2 textarea:focus { border-color: #8798ff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); outline: none; }
+    .proxy-pool-editor-v2 .config-field-stat {
+      display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+      margin-top: 9px; color: #7d8799; font-size: 11px;
+    }
+    .proxy-pool-editor-v2 .config-field-stat b { color: #4f6bff; font-size: 12px; }
+    .proxy-pool-editor-v2::after {
+      content: '支持 http://、https://、socks5:// 等代理地址，每行一个';
+      display: block; margin-top: 10px; color: #9aa4b7; font-size: 11px; line-height: 1.5;
+    }
     @media (max-width: 880px) {
       .proxy-api-grid-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .proxy-api-grid-v2 .proxy-api-field-v2:first-child { grid-column: 1 / -1; }
     }
     @media (max-width: 620px) {
       .proxy-api-panel-v2 { margin-left: 17px; margin-right: 17px; }
+      .proxy-pool-panel-v2 { margin-left: 17px; margin-right: 17px; padding: 15px; }
       .proxy-api-grid-v2 { grid-template-columns: 1fr; }
       .proxy-api-grid-v2 .proxy-api-field-v2:first-child { grid-column: auto; }
       .proxy-api-link-v2 { grid-template-columns: 1fr; }
@@ -10180,11 +10209,7 @@ function syncProxyModeV2() {
   const apiPanel = section.querySelector('[data-proxy-api-panel]');
   const poolPanel = section.querySelector('[data-proxy-pool-panel]');
   if (apiPanel) apiPanel.hidden = mode !== 'api';
-  if (poolPanel) {
-    poolPanel.classList.toggle('is-disabled', mode === 'api');
-    const textarea = poolPanel.querySelector('textarea[data-key="PROXY_POOL"]');
-    if (textarea) { textarea.disabled = mode === 'api'; textarea.setAttribute('aria-disabled', String(mode === 'api')); }
-  }
+  if (poolPanel) poolPanel.hidden = mode === 'api';
   const link = section.querySelector('[data-proxy-api-link]');
   const hidden = section.querySelector('input[data-key="PROXY_API_URL"]');
   const value = proxyApiLinkV2();
@@ -10206,12 +10231,13 @@ function renderProxyPoolSectionV2(fields) {
   const timeField = proxyApiFieldV2(fields, 'PROXY_API_TIME');
   const typeField = proxyApiFieldV2(fields, 'PROXY_API_TYPE');
   const numField = proxyApiFieldV2(fields, 'PROXY_API_NUM');
+  const timeoutField = proxyApiFieldV2(fields, 'PROXY_API_TIMEOUT');
   const mode = String(proxyApiValueV2('PROXY_MODE', modeField.value || 'pool') || 'pool').toLowerCase() === 'api' ? 'api' : 'pool';
   const regionOptions = regionField.choices || ['Rand'];
   const regionLabels = regionField.choice_labels || {};
   const poolField = fields.find(field => field.key === 'PROXY_POOL');
-  const poolHtml = poolField ? renderConfigPlainFieldV2(poolField) : '';
-  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_URL'].includes(field.key));
+  const poolHtml = poolField ? `<div class="proxy-pool-editor-v2">${renderConfigPlainFieldV2(poolField)}</div>` : '';
+  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_URL'].includes(field.key));
   const apiUrl = proxyApiLinkV2();
   return `<section class="config-section-v2" id="${esc(configGroupSlug('代理池'))}" data-config-section="代理池">
     ${renderConfigSectionHead('代理池', '代理池与 API 代理二选一；查活 API 配置独立于这里，不会被覆盖。')}
@@ -10228,6 +10254,7 @@ function renderProxyPoolSectionV2(fields) {
         ${renderProxyApiFieldV2(timeField, '时长', proxyApiSelectV2(timeField, proxyApiTimeChoicesV2(), timeField.choice_labels || {}))}
         ${renderProxyApiFieldV2(typeField, '数据格式', proxyApiSelectV2(typeField, typeField.choices || ['json', 'txt'], typeField.choice_labels || {}))}
         ${renderProxyApiFieldV2(numField, '数量', `<input type="number" min="1" max="20" step="1" data-key="${attrEsc(numField.key)}" value="${attrEsc(proxyApiValueV2(numField.key, numField.value || 1))}">`)}
+        ${renderProxyApiFieldV2(timeoutField, '请求超时(秒)', `<input type="number" min="0.5" max="60" step="0.5" data-key="${attrEsc(timeoutField.key)}" value="${attrEsc(proxyApiValueV2(timeoutField.key, timeoutField.value || 10))}">`)}
       </div>
       <div class="proxy-api-link-v2">
         <label><span>API链接</span><input type="text" readonly data-proxy-api-link value="${attrEsc(apiUrl)}"><input type="hidden" data-key="PROXY_API_URL" value="${attrEsc(apiUrl)}"></label>
@@ -10236,7 +10263,7 @@ function renderProxyPoolSectionV2(fields) {
       </div>
       <div class="proxy-api-hint-v2">Sticky IP 会在时长内保持出口；Rotating IP 在每个注册任务重新请求。保存后注册任务按当前 API 参数获取代理。</div>
     </div>
-    <div class="proxy-pool-panel-v2${mode === 'api' ? ' is-disabled' : ''}" data-proxy-pool-panel>${poolHtml}</div>
+    <div class="proxy-pool-panel-v2" data-proxy-pool-panel${mode === 'api' ? ' hidden' : ''}>${poolHtml}</div>
     ${otherFields.length ? `<div class="config-section-v2-body">${otherFields.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
     ${renderProxyTestToolsV2()}
     ${renderConfigSectionActionsV2()}
