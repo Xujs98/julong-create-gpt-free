@@ -365,13 +365,20 @@ def build_proxy_api_request_url() -> str:
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
         if key.lower() not in {"region", "num", "time", "format", "type"}
     ]
-    query[:0] = [
+    generated = [
         ("region", region),
         ("num", str(max(1, int(PROXY_API_NUM or 1)))),
-        ("time", str(max(1, int(PROXY_API_TIME or 10)))),
+    ]
+    # Rotating IP does not reserve a sticky session, so the provider's
+    # duration parameter must be omitted. Sticky IP keeps the configured
+    # lease duration in the request.
+    if str(PROXY_API_SESSION_TYPE or "sticky").strip().lower() != "rotating":
+        generated.append(("time", str(max(1, int(PROXY_API_TIME or 10)))))
+    generated.extend([
         ("format", str(PROXY_API_FORMAT or "n")),
         ("type", str(PROXY_API_TYPE or "json")),
-    ]
+    ])
+    query[:0] = generated
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 

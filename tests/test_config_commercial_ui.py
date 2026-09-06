@@ -49,9 +49,19 @@ def test_proxy_mode_panels_are_mutually_exclusive_and_pool_editor_is_stable() ->
     # rather than leaving a disabled, drifting control visible below the active one.
     assert "if (apiPanel) apiPanel.hidden = mode !== 'api';" in html
     assert "if (poolPanel) poolPanel.hidden = mode === 'api';" in html
+    assert ".proxy-api-panel-v2[hidden]" in html
     assert 'class="proxy-pool-editor-v2"' in html
     assert 'PROXY_API_TIMEOUT' in html
     assert ".proxy-pool-panel-v2.is-disabled" not in html
+
+
+def test_proxy_switches_and_rotating_duration_have_native_controls() -> None:
+    html = source()
+
+    assert "otherSwitches.map(field => renderFeatureSwitchField" in html
+    assert 'data-proxy-api-field="${attrEsc(field.key)}"' in html
+    assert "apiTimeField.hidden = sessionType === 'rotating';" in html
+    assert "if (sessionType !== 'rotating') params.set('time', String(duration));" in html
 
 
 def test_config_unsaved_changes_can_be_tracked_and_discarded() -> None:

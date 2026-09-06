@@ -18,6 +18,16 @@ def test_proxy_api_request_url_uses_configured_parameters(monkeypatch):
     assert url == "https://api.example/white/api?region=JP&num=2&time=30&format=rn&type=json&token=x"
 
 
+def test_rotating_proxy_api_request_omits_duration(monkeypatch):
+    monkeypatch.setattr(proxy_config, "PROXY_API_URL", "https://api.example/white/api?region=Rand&num=1&time=10&format=n&type=json")
+    monkeypatch.setattr(proxy_config, "PROXY_API_SESSION_TYPE", "rotating")
+
+    url = proxy_config.build_proxy_api_request_url()
+
+    assert "time=" not in url
+    assert "region=Rand" in url
+
+
 def test_api_mode_fetches_a_new_proxy_and_does_not_read_pool(monkeypatch):
     monkeypatch.setattr(proxy_config, "PROXY_MODE", "api")
     monkeypatch.setattr(proxy_config, "PROXY_API_REGION", "US")
