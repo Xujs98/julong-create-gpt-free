@@ -5,7 +5,7 @@ image="${DOCKER_IMAGE:-qq1371446705/turb-gpt-free-register}"
 tag="${1:-${DOCKER_TAG:-latest}}"
 platform="${DOCKER_PLATFORM:-}"
 full_image="${image}:${tag}"
-expected_branch="${EXPECTED_GIT_BRANCH:-codex/long-term-platform-foundation}"
+expected_branch="${EXPECTED_GIT_BRANCH:-main}"
 
 current_branch="$(git branch --show-current 2>/dev/null || true)"
 if [[ "$current_branch" != "$expected_branch" ]]; then

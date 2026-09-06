@@ -73,6 +73,7 @@ class CodexSmsProviderTests(unittest.TestCase):
         http = _Http([_Resp({"sessionId": "sess-2", "phone": "+15550001111", "type": "bindable"})])
         with patch.object(codex_config, "SMS_PROVIDER", "codex"), \
                 patch.object(codex_config, "CODEX_SMS_CDKS", ["LONG-1", "LONG-2"]), \
+                patch.object(codex_config, "CODEX_SMS_NUMBER_TYPE", "auto"), \
                 patch.object(codex_config, "CODEX_SMS_DELETE_USED_CDK", True), \
                 patch("core.sms_provider._remove_codex_cdk") as remove:
             session, _ = sms_provider.acquire_number(http=http)

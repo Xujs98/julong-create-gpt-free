@@ -15,7 +15,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-EXPECTED_BRANCH="${EXPECTED_GIT_BRANCH:-codex/long-term-platform-foundation}"
+EXPECTED_BRANCH="${EXPECTED_GIT_BRANCH:-main}"
 VENV_DIR="${VENV_DIR:-$ROOT_DIR/.venv}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
 PORT="${PORT:-5000}"

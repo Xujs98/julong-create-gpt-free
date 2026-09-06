@@ -168,10 +168,10 @@ WebUI 配置页保存这些字段时会写入 `.env`（不是 config 源码）�
 
 ### Docker 部署
 
-首次使用先准备配置文件（源码部署必须使用指定分支）：
+首次使用先准备配置文件：
 
 ```bash
-git clone --branch codex/long-term-platform-foundation \
+git clone --branch main \
   https://github.com/Xujs98/julong-create-gpt-free.git
 cd julong-create-gpt-free
 cp .env.example .env
@@ -187,9 +187,18 @@ make docker-up
 
 `make docker-up` 会把项目根目录的 `.env` 挂载到容器。若绕过 Compose 直接使用 `docker run`，必须显式添加 `--env-file .env`；否则容器读不到 `WEBUI_AUTH_CODE`，会生成临时授权码。
 
+检查容器是否健康、查看日志和停止服务：
+
+```bash
+docker compose ps
+curl -fsS http://127.0.0.1:5000/login >/dev/null && echo 'WebUI OK'
+docker compose logs -f app
+docker compose down
+```
+
 > Docker 现在支持通过 `host.docker.internal` 调用宿主机 Roxy：`ROXY_API_BASE` 指向 Roxy API，程序会自动重写 `/browser/open` 返回的调试地址，并在容器内缓存匹配版本的 Linux Chromedriver。Roxy 本机部署仍优先使用 macOS 一键脚本；Docker 详细配置见[完整部署指南](docs/deployment.md)。
 
-已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `codex/long-term-platform-foundation`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
+已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `main`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
 
 ```bash
 docker login
@@ -200,7 +209,7 @@ make docker-push
 
 ### macOS 一键本地部署
 
-在 `codex/long-term-platform-foundation` 分支的项目根目录执行：
+已克隆项目时，在 `main` 分支的项目根目录执行：
 
 ```bash
 chmod +x macos-deploy.sh
@@ -208,6 +217,18 @@ chmod +x macos-deploy.sh
 ```
 
 脚本会准备 Homebrew 工具链、Python 虚拟环境、项目依赖、Playwright Chromium、`.env` 和前端资源，然后启动 `http://127.0.0.1:5000`。RoxyBrowser 场景优先使用此方式。
+
+没有克隆项目时，在 macOS 终端直接执行下面一条命令。它会克隆 `main`、安装 Homebrew 工具链和全部依赖、初始化 `.env`、构建前端并启动 WebUI：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xujs98/julong-create-gpt-free/main/install-macos.sh | bash
+```
+
+默认安装目录为 `~/turb-gpt-free-register`；可用 `INSTALL_DIR=/自定义路径` 覆盖。安装完成后访问 `http://127.0.0.1:5000`，授权码可用下面命令查看：
+
+```bash
+grep -E '^(WEBUI_AUTH_CODE|AUTH_CODE|WEB_AUTH_CODE)=' ~/turb-gpt-free-register/.env
+```
 
 ### WebUI 授权码
 

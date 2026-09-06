@@ -37,7 +37,7 @@ sudo apt install -y git python3 python3-venv python3-pip nodejs npm
 ## 2. 拉取项目
 
 ```bash
-git clone --branch codex/long-term-platform-foundation \
+git clone --branch main \
   https://github.com/Xujs98/julong-create-gpt-free.git
 cd julong-create-gpt-free
 ```
@@ -147,7 +147,7 @@ make docker-up
 
 Docker 容器内的 `127.0.0.1` 不指向宿主机。当前版本支持通过 `ROXY_DEBUGGER_HOST=host.docker.internal` 重写 Roxy 返回的调试地址，并自动下载匹配远端 Chrome 主版本的 Linux Chromedriver；Roxy 本机 GUI/API 仍需运行在宿主机。
 
-构建并推送到预设 Docker Hub 仓库（命令会校验当前为 `codex/long-term-platform-foundation` 分支）：
+构建并推送到预设 Docker Hub 仓库（命令会校验当前为 `main` 分支）：
 
 ```bash
 docker login
@@ -186,14 +186,20 @@ chmod +x webui.sh
 
 ### macOS 一键方式
 
-在项目根目录执行以下命令即可完成依赖准备、`.env` 初始化、前端构建和 WebUI 启动：
+没有克隆项目时，在 macOS 终端执行下面一条命令即可完成克隆、依赖准备、`.env` 初始化、前端构建和 WebUI 启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xujs98/julong-create-gpt-free/main/install-macos.sh | bash
+```
+
+已经在项目根目录时，执行：
 
 ```bash
 chmod +x macos-deploy.sh
 ./macos-deploy.sh
 ```
 
-脚本默认检查当前分支为 `codex/long-term-platform-foundation`。后续更新可执行：
+脚本默认检查当前分支为 `main`。后续更新可执行：
 
 ```bash
 ./macos-deploy.sh update

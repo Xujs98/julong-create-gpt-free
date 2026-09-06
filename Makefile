@@ -1,6 +1,6 @@
 DOCKER_IMAGE ?= qq1371446705/turb-gpt-free-register
 TAG ?= latest
-EXPECTED_GIT_BRANCH ?= codex/long-term-platform-foundation
+EXPECTED_GIT_BRANCH ?= main
 
 .PHONY: check-docker-branch docker-build docker-push docker-up docker-down docker-logs macos-up macos-update
 

@@ -8,12 +8,12 @@
 | 本地 Python | 已准备好 Python 环境，直接运行 WebUI | 支持 |
 | Docker Compose | 服务化运行、隔离依赖，也可通过网关连接宿主机 Roxy | 需要宿主机调试端口可达 |
 
-> 所有代码和镜像都以 `codex/long-term-platform-foundation` 分支为准。
+> 所有代码和镜像都以 `main` 分支为准。
 
 ## 1. 获取指定分支
 
 ```bash
-git clone --branch codex/long-term-platform-foundation \
+git clone --branch main \
   https://github.com/Xujs98/julong-create-gpt-free.git
 cd julong-create-gpt-free
 ```
@@ -22,13 +22,26 @@ cd julong-create-gpt-free
 
 ```bash
 git fetch origin
-git switch codex/long-term-platform-foundation
-git pull --ff-only origin codex/long-term-platform-foundation
+git switch main
+git pull --ff-only origin main
 ```
 
 ## 2. macOS 一键本地部署（推荐 Roxy）
 
-要求 macOS、网络可用。脚本会检查/安装 Homebrew、Git、Python、Node，创建 `.venv`，安装 Python 依赖和 Playwright Chromium，生成 `.env` 登录码，构建前端并启动 WebUI：
+要求 macOS、网络可用。无需预先克隆项目时，直接执行下面一条命令。脚本会克隆 `main`、检查/安装 Homebrew、Git、Python、Node，创建 `.venv`，安装 Python 依赖和 Playwright Chromium，生成 `.env` 登录码，构建前端并启动 WebUI：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xujs98/julong-create-gpt-free/main/install-macos.sh | bash
+```
+
+默认项目目录为 `~/turb-gpt-free-register`。自定义目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xujs98/julong-create-gpt-free/main/install-macos.sh \
+  | INSTALL_DIR="$HOME/Apps/turb-gpt-free-register" bash
+```
+
+已经位于项目目录时，也可以直接运行仓库内脚本：
 
 ```bash
 chmod +x macos-deploy.sh
@@ -110,6 +123,24 @@ RoxyBrowser 应先在本机启动并开启 API。注册驱动选择 `roxy`，并
 
 ## 4. Docker Compose 部署
 
+Docker Desktop 启动后，在项目根目录执行以下完整流程：
+
+```bash
+cp .env.example .env
+# 编辑 .env，至少填写 WEBUI_AUTH_CODE
+mkdir -p docker-data
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1:5000/login >/dev/null && echo 'WebUI OK'
+```
+
+访问 `http://127.0.0.1:5000`。如果健康检查未通过，先查看：
+
+```bash
+docker compose logs --tail=200 app
+docker compose ps
+```
+
 ### 从源码构建并启动
 
 ```bash
@@ -136,6 +167,22 @@ APP_PORT=8000 docker compose up -d --build
 ```
 
 Compose 会把项目根目录 `.env` 挂载到容器 `/app/.env`，运行数据挂载到 `docker-data/`。配置保存功能已兼容 `.env` 文件绑定挂载。
+
+更新到 GitHub `main` 的最新代码并重建：
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+docker compose up -d --build --force-recreate
+```
+
+备份本地运行数据前先停服务：
+
+```bash
+docker compose down
+tar -czf "docker-data-$(date +%Y%m%d-%H%M%S).tar.gz" docker-data .env
+```
 
 ### Docker 调用宿主机 RoxyBrowser
 
@@ -172,7 +219,7 @@ docker compose logs -f app
 
 ```bash
 docker login
-git clone --branch codex/long-term-platform-foundation \
+git clone --branch main \
   https://github.com/Xujs98/julong-create-gpt-free.git
 cd julong-create-gpt-free
 cp .env.example .env
@@ -184,8 +231,8 @@ docker compose up -d --no-build
 发布电脑从指定分支构建并推送：
 
 ```bash
-git switch codex/long-term-platform-foundation
-git pull --ff-only origin codex/long-term-platform-foundation
+git switch main
+git pull --ff-only origin main
 docker login
 make docker-push
 ```
@@ -199,7 +246,7 @@ make docker-push TAG=v1.0.0
 其他电脑更新镜像：
 
 ```bash
-git pull --ff-only origin codex/long-term-platform-foundation
+git pull --ff-only origin main
 docker compose pull
 docker compose up -d --no-build
 ```
@@ -246,6 +293,6 @@ lsof -i :5000
 如果保存配置报 `Device or resource busy`，请确认使用的是当前分支最新代码，并重建容器：
 
 ```bash
-git pull --ff-only origin codex/long-term-platform-foundation
+git pull --ff-only origin main
 docker compose up -d --build --force-recreate
 ```
