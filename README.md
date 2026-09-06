@@ -507,7 +507,9 @@ pip install playwright
 
 ### 3. 配置代理
 
-编辑 `config/proxy.py`：
+在 WebUI「配置 → 代理池」选择代理来源。`代理池` 与 `API代理` 相互独立，切换不会清空另一种配置。
+
+固定代理池模式：
 
 ```python
 PROXY_POOL = [
@@ -516,6 +518,22 @@ PROXY_POOL = [
 ```
 
 Roxy 一号一环境开启 `ROXY_CREATE_USE_PROXY_POOL=True` 时，会从这里随机取代理写入 Roxy Profile。
+
+API 代理模式可使用 CliProxy 白名单接口。每个注册任务都会按当前参数请求新的代理，开启「注册任务检查健康IP」后仍会对 API 返回的代理执行健康检查，失败会重新取下一个出口：
+
+```dotenv
+PROXY_MODE=api
+PROXY_API_URL=https://api.cliproxy.io/white/api?region=Rand&num=1&time=10&format=n&type=json
+PROXY_API_REGION=JP
+PROXY_API_FORMAT=n
+PROXY_API_SESSION_TYPE=sticky
+PROXY_API_TIME=10
+PROXY_API_TYPE=json
+PROXY_API_NUM=1
+PROXY_API_TIMEOUT=8
+```
+
+WebUI 会提供完整 ISO 国家/地区列表，可按代码或中文名称搜索（例如 `JP 日本`），并实时生成 API 链接。API 模式下「代理池(每行一个)」自动禁用；查活 API 配置仍位于「配置 → 账号查活」，与注册代理配置分开。
 
 ---
 

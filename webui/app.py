@@ -3291,7 +3291,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         # 保留一个可用代理才继续创建批次、领取邮箱并提交线程池。
         proxy_check = None
         from config import proxy as _proxy_cfg
-        if bool(getattr(_proxy_cfg, "PROXY_CHECK_BEFORE_REGISTRATION", False)):
+        proxy_mode = str(getattr(_proxy_cfg, "PROXY_MODE", "pool") or "pool").strip().lower()
+        if bool(getattr(_proxy_cfg, "PROXY_CHECK_BEFORE_REGISTRATION", False)) and proxy_mode != "api":
             from core.proxy_test import ProxyTestError, test_proxy_pool
 
             try:
@@ -3334,6 +3335,15 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "task_ended": True,
                     "jobs_created": 0,
                 }), 400
+
+        elif bool(getattr(_proxy_cfg, "PROXY_CHECK_BEFORE_REGISTRATION", False)) and proxy_mode == "api":
+            # API 代理没有固定列表可预检；每个注册任务会在执行时独立请求动态出口。
+            proxy_check = {
+                "enabled": True,
+                "mode": "api",
+                "skipped": True,
+                "message": "API代理按注册任务实时获取，跳过固定代理池预检",
+            }
 
         # 提交前先确认池里有足够可用邮箱，给前端一个温和提示（不阻断）
         from config import email as _email_cfg
@@ -3769,6 +3779,22 @@ def create_app(auth_code: str | None = None) -> Flask:
             logger.warning("代理测试失败: %s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    @app.get("/api/proxy/api-preview")
+    def api_proxy_api_preview():
+        """按已保存的 API 代理配置获取一个临时出口供 WebUI 测试。"""
+        try:
+            from config import proxy as _proxy_cfg
+
+            if str(getattr(_proxy_cfg, "PROXY_MODE", "pool") or "pool").strip().lower() != "api":
+                return jsonify({"ok": False, "error": "当前代理来源不是 API 代理"}), 400
+            proxy = str(_proxy_cfg.pick_proxy() or "").strip()
+            if not proxy:
+                return jsonify({"ok": False, "error": "代理 API 未返回可用代理"}), 502
+            return jsonify({"ok": True, "proxy": proxy})
+        except Exception as exc:
+            logger.warning("获取 API 代理预览失败: %s: %s", type(exc).__name__, exc)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
     @app.post("/api/proxy/warmup")
     def api_proxy_warmup():
         """启动后台预热任务；每个代理完成后可通过状态接口读取实时结果。"""
@@ -3777,6 +3803,12 @@ def create_app(auth_code: str | None = None) -> Flask:
             from core.proxy_test import ProxyTestError, persist_proxy_pool, warmup_proxy_pool
 
             data = request.get_json(silent=True) or {}
+            if str(getattr(_proxy_cfg, "PROXY_MODE", "pool") or "pool").strip().lower() == "api":
+                return jsonify({
+                    "ok": False,
+                    "code": "proxy_api_mode_no_warmup",
+                    "error": "当前为 API 代理模式，没有固定代理池可预热；每个注册任务会实时获取代理",
+                }), 400
             pool = list(getattr(_proxy_cfg, "PROXY_POOL", []) or [])
             target = data.get("target_clean", getattr(_proxy_cfg, "PROXY_WARMUP_TARGET_CLEAN_IPS", 3))
             timeout = data.get("timeout", getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0))

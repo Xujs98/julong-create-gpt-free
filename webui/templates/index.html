@@ -3035,6 +3035,33 @@
     .config-mode-v2 .config-ep-select-item.is-active { border-color: #bdc7ff; background: #eef1ff; }
     .config-inline-action-v2 { margin: 12px 24px 0; }
     .config-field-stat { margin-top: 7px; color: #7d8799; font-size: 11px; }
+    .proxy-api-panel-v2 { display: grid; gap: 14px; margin: 16px 24px 0; }
+    .proxy-api-grid-v2 { display: grid; grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(120px, 1fr)); gap: 12px; }
+    .proxy-api-field-v2 { display: grid; gap: 7px; min-width: 0; color: #4a5870; font-size: 12px; font-weight: 650; }
+    .proxy-api-field-v2 > span { color: #2b3548; font-size: 13px; font-weight: 720; }
+    .proxy-api-field-v2 select, .proxy-api-field-v2 input { width: 100%; min-height: 42px; box-sizing: border-box; border: 1px solid #dfe4ec; border-radius: 9px; background: #fff; color: #263146; font: inherit; font-size: 13px; padding: 0 11px; }
+    .proxy-api-field-v2 select:focus, .proxy-api-field-v2 input:focus { border-color: #8798ff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); outline: none; }
+    .proxy-api-link-v2 { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: end; }
+    .proxy-api-link-v2 > label { display: grid; gap: 7px; min-width: 0; color: #4a5870; font-size: 12px; font-weight: 650; }
+    .proxy-api-link-v2 input { width: 100%; min-height: 42px; box-sizing: border-box; border: 1px solid #dfe4ec; border-radius: 9px; background: #f8f9fc; color: #4b5870; font: inherit; font-size: 12px; padding: 0 11px; }
+    .proxy-api-link-v2 button { min-height: 42px; padding: 0 15px; border: 1px solid #d8def0; border-radius: 9px; background: #fff; color: #4f6bff; font: inherit; font-weight: 700; cursor: pointer; }
+    .proxy-api-link-v2 button.primary { border-color: #4f6bff; background: #4f6bff; color: #fff; }
+    .proxy-api-link-v2 button:hover { filter: brightness(.98); transform: translateY(-1px); }
+    .proxy-api-hint-v2 { color: #7d8799; font-size: 11px; line-height: 1.5; }
+    .proxy-pool-panel-v2 { margin-top: 16px; }
+    .proxy-pool-panel-v2.is-disabled { opacity: .68; }
+    .proxy-pool-panel-v2.is-disabled textarea { color: #9aa4b7; background: #f5f7fb; cursor: not-allowed; }
+    @media (max-width: 880px) {
+      .proxy-api-grid-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .proxy-api-grid-v2 .proxy-api-field-v2:first-child { grid-column: 1 / -1; }
+    }
+    @media (max-width: 620px) {
+      .proxy-api-panel-v2 { margin-left: 17px; margin-right: 17px; }
+      .proxy-api-grid-v2 { grid-template-columns: 1fr; }
+      .proxy-api-grid-v2 .proxy-api-field-v2:first-child { grid-column: auto; }
+      .proxy-api-link-v2 { grid-template-columns: 1fr; }
+      .proxy-api-link-v2 button { width: 100%; }
+    }
     @media (max-width: 1250px) {
       .config-cards-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .config-switches-v2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -10108,7 +10135,116 @@ function bindAccountLogManagementToolsV2() {
   loadAccountLogManagementStatusV2();
 }
 
+function proxyApiFieldV2(fields, key) {
+  return fields.find(field => field.key === key) || CONFIG.find(field => field.key === key) || {key, value: ''};
+}
+function proxyApiValueV2(key, fallback = '') {
+  const value = _extractConfigValue(key, fallback);
+  return value == null ? fallback : value;
+}
+function proxyApiSelectV2(field, options, labels = {}, searchable = false) {
+  const current = String(proxyApiValueV2(field.key, field.value || options[0] || '') || '');
+  const rendered = options.map(value => `<option value="${attrEsc(value)}"${String(value) === current ? ' selected' : ''}>${esc(labels[value] || value)}</option>`).join('');
+  return `<select data-key="${attrEsc(field.key)}"${searchable ? ' data-searchable="true"' : ''}>${rendered}</select>`;
+}
+function proxyApiLinkV2() {
+  const raw = String(proxyApiValueV2('PROXY_API_URL', '') || '').trim() || 'https://api.cliproxy.io/white/api?region=Rand&num=1&time=10&format=n&type=json';
+  const region = String(proxyApiValueV2('PROXY_API_REGION', 'Rand') || 'Rand').trim() || 'Rand';
+  const count = Math.max(1, Math.min(20, Number(proxyApiValueV2('PROXY_API_NUM', 1)) || 1));
+  const duration = Math.max(1, Math.min(360, Number(proxyApiValueV2('PROXY_API_TIME', 10)) || 10));
+  const delimiter = String(proxyApiValueV2('PROXY_API_FORMAT', 'n') || 'n');
+  const dataType = String(proxyApiValueV2('PROXY_API_TYPE', 'json') || 'json');
+  try {
+    const url = new URL(raw.replace(/\{(?:region|country|country_code)\}/gi, encodeURIComponent(region)), window.location.href);
+    const params = url.searchParams;
+    ['region', 'num', 'time', 'format', 'type'].forEach(key => params.delete(key));
+    params.set('region', region); params.set('num', String(count)); params.set('time', String(duration));
+    params.set('format', delimiter); params.set('type', dataType);
+    return url.toString();
+  } catch (_) {
+    return raw;
+  }
+}
+function proxyApiTimeChoicesV2() {
+  return ['1', '3', '5', '10', '15', '30', '60', '120', '360'];
+}
+function syncProxyModeV2() {
+  const mode = String(proxyApiValueV2('PROXY_MODE', 'pool') || 'pool').toLowerCase() === 'api' ? 'api' : 'pool';
+  const section = document.querySelector('#configSectionsV2 [data-config-section="代理池"]');
+  if (!section) return;
+  section.querySelectorAll('[data-proxy-mode]').forEach(button => {
+    const active = button.dataset.proxyMode === mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  const apiPanel = section.querySelector('[data-proxy-api-panel]');
+  const poolPanel = section.querySelector('[data-proxy-pool-panel]');
+  if (apiPanel) apiPanel.hidden = mode !== 'api';
+  if (poolPanel) {
+    poolPanel.classList.toggle('is-disabled', mode === 'api');
+    const textarea = poolPanel.querySelector('textarea[data-key="PROXY_POOL"]');
+    if (textarea) { textarea.disabled = mode === 'api'; textarea.setAttribute('aria-disabled', String(mode === 'api')); }
+  }
+  const link = section.querySelector('[data-proxy-api-link]');
+  const hidden = section.querySelector('input[data-key="PROXY_API_URL"]');
+  const value = proxyApiLinkV2();
+  if (link) link.value = value;
+  if (hidden) hidden.value = value;
+  const warmup = document.getElementById('btnWarmupProxyV2');
+  if (warmup) warmup.disabled = mode === 'api';
+  const warmupHint = document.getElementById('proxyWarmupStatusV2');
+  if (warmupHint && mode === 'api' && !activeProxyWarmupTask) warmupHint.textContent = 'API代理模式无需预热固定代理池';
+}
+function renderProxyApiFieldV2(field, label, control) {
+  return `<label class="proxy-api-field-v2"><span>${esc(label)}</span>${control}</label>`;
+}
+function renderProxyPoolSectionV2(fields) {
+  const modeField = proxyApiFieldV2(fields, 'PROXY_MODE');
+  const regionField = proxyApiFieldV2(fields, 'PROXY_API_REGION');
+  const formatField = proxyApiFieldV2(fields, 'PROXY_API_FORMAT');
+  const sessionField = proxyApiFieldV2(fields, 'PROXY_API_SESSION_TYPE');
+  const timeField = proxyApiFieldV2(fields, 'PROXY_API_TIME');
+  const typeField = proxyApiFieldV2(fields, 'PROXY_API_TYPE');
+  const numField = proxyApiFieldV2(fields, 'PROXY_API_NUM');
+  const mode = String(proxyApiValueV2('PROXY_MODE', modeField.value || 'pool') || 'pool').toLowerCase() === 'api' ? 'api' : 'pool';
+  const regionOptions = regionField.choices || ['Rand'];
+  const regionLabels = regionField.choice_labels || {};
+  const poolField = fields.find(field => field.key === 'PROXY_POOL');
+  const poolHtml = poolField ? renderConfigPlainFieldV2(poolField) : '';
+  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_URL'].includes(field.key));
+  const apiUrl = proxyApiLinkV2();
+  return `<section class="config-section-v2" id="${esc(configGroupSlug('代理池'))}" data-config-section="代理池">
+    ${renderConfigSectionHead('代理池', '代理池与 API 代理二选一；查活 API 配置独立于这里，不会被覆盖。')}
+    <div class="config-mode-v2" role="group" aria-label="代理来源">
+      <button type="button" class="config-ep-select-item${mode === 'pool' ? ' is-active' : ''}" data-proxy-mode="pool" aria-pressed="${mode === 'pool'}">代理池</button>
+      <button type="button" class="config-ep-select-item${mode === 'api' ? ' is-active' : ''}" data-proxy-mode="api" aria-pressed="${mode === 'api'}">API代理</button>
+      <input type="hidden" data-key="PROXY_MODE" value="${attrEsc(mode)}">
+    </div>
+    <div class="proxy-api-panel-v2" data-proxy-api-panel${mode === 'api' ? '' : ' hidden'}>
+      <div class="proxy-api-grid-v2">
+        ${renderProxyApiFieldV2(regionField, '国家/地区', proxyApiSelectV2(regionField, regionOptions, regionLabels, true))}
+        ${renderProxyApiFieldV2(formatField, '分隔符', proxyApiSelectV2(formatField, formatField.choices || ['n', 'rn'], formatField.choice_labels || {}))}
+        ${renderProxyApiFieldV2(sessionField, '会话类型', proxyApiSelectV2(sessionField, sessionField.choices || ['sticky', 'rotating'], sessionField.choice_labels || {}))}
+        ${renderProxyApiFieldV2(timeField, '时长', proxyApiSelectV2(timeField, proxyApiTimeChoicesV2(), timeField.choice_labels || {}))}
+        ${renderProxyApiFieldV2(typeField, '数据格式', proxyApiSelectV2(typeField, typeField.choices || ['json', 'txt'], typeField.choice_labels || {}))}
+        ${renderProxyApiFieldV2(numField, '数量', `<input type="number" min="1" max="20" step="1" data-key="${attrEsc(numField.key)}" value="${attrEsc(proxyApiValueV2(numField.key, numField.value || 1))}">`)}
+      </div>
+      <div class="proxy-api-link-v2">
+        <label><span>API链接</span><input type="text" readonly data-proxy-api-link value="${attrEsc(apiUrl)}"><input type="hidden" data-key="PROXY_API_URL" value="${attrEsc(apiUrl)}"></label>
+        <button type="button" data-proxy-api-copy title="复制 API 链接">复制链接</button>
+        <button type="button" class="primary" data-proxy-api-open title="打开 API 链接">打开链接</button>
+      </div>
+      <div class="proxy-api-hint-v2">Sticky IP 会在时长内保持出口；Rotating IP 在每个注册任务重新请求。保存后注册任务按当前 API 参数获取代理。</div>
+    </div>
+    <div class="proxy-pool-panel-v2${mode === 'api' ? ' is-disabled' : ''}" data-proxy-pool-panel>${poolHtml}</div>
+    ${otherFields.length ? `<div class="config-section-v2-body">${otherFields.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
+    ${renderProxyTestToolsV2()}
+    ${renderConfigSectionActionsV2()}
+  </section>`;
+}
+
 function renderMixedConfigSectionV2(name, fields, intro) {
+  if (name === '代理池') return renderProxyPoolSectionV2(fields);
   const slug = configGroupSlug(name);
   const switches = fields.filter(f => f.type === 'bool');
   const inputs = fields.filter(f => f.type !== 'bool');
@@ -10355,16 +10491,21 @@ async function testCurrentProxyV2() {
   const btn = $('#btnTestProxyV2');
   const status = $('#proxyTestStatusV2');
   if (!btn || !status) return;
-  const dedicated = String(_configValueV2('PLAN_CHECK_PROXY') || '').trim();
-  const pool = String(_configValueV2('PROXY_POOL') || '');
-  const proxy = dedicated || pool.split(/\r?\n/).map(x => x.trim()).find(Boolean) || '';
-  if (!proxy) {
-    status.innerHTML = '<span style="color:var(--red);">当前表单中没有代理</span>';
-    return;
-  }
   btn.disabled = true;
-  status.textContent = '正在测试代理出口...';
+  let proxy = '';
   try {
+    const mode = String(_configValueV2('PROXY_MODE') || 'pool').toLowerCase();
+    if (mode === 'api') {
+      status.textContent = '正在从 API 获取临时代理出口...';
+      const preview = await api('/api/proxy/api-preview');
+      proxy = String(preview.proxy || '').trim();
+    } else {
+      const dedicated = String(_configValueV2('PLAN_CHECK_PROXY') || '').trim();
+      const pool = String(_configValueV2('PROXY_POOL') || '');
+      proxy = dedicated || pool.split(/\r?\n/).map(x => x.trim()).find(Boolean) || '';
+    }
+    if (!proxy) throw new Error('当前配置没有可测试的代理');
+    status.textContent = '正在测试代理出口...';
     const r = await api('/api/proxy/test', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -10720,6 +10861,7 @@ function renderConfigLayoutV2() {
   bindCodexSmsToolsV2();
   bindAccountLogManagementToolsV2();
   syncRegionProfileControlV2();
+  syncProxyModeV2();
   syncConfigDirtyIndicatorsV2();
 }
 function scrollToConfigSection(slug) {
@@ -10774,6 +10916,30 @@ function bindConfigLayoutV2() {
         e.preventDefault();
         CONFIG_SMS_ACTIVE_SECTION_V2 = smsTab.dataset.smsSectionV2;
         renderConfigLayoutV2();
+        return;
+      }
+      const proxyMode = e.target.closest('[data-proxy-mode]');
+      if (proxyMode) {
+        e.preventDefault();
+        const value = proxyMode.dataset.proxyMode === 'api' ? 'api' : 'pool';
+        const hidden = document.querySelector('#configSectionsV2 input[data-key="PROXY_MODE"]');
+        if (hidden) hidden.value = value;
+        setConfigPendingValueV2('PROXY_MODE', value);
+        syncProxyModeV2();
+        syncConfigDirtyIndicatorsV2();
+        return;
+      }
+      const proxyCopy = e.target.closest('[data-proxy-api-copy]');
+      if (proxyCopy) {
+        e.preventDefault();
+        copyText(document.querySelector('[data-proxy-api-link]')?.value || '');
+        return;
+      }
+      const proxyOpen = e.target.closest('[data-proxy-api-open]');
+      if (proxyOpen) {
+        e.preventDefault();
+        const value = document.querySelector('[data-proxy-api-link]')?.value || '';
+        if (value) window.open(value, '_blank', 'noopener,noreferrer');
         return;
       }
     });
@@ -10885,6 +11051,7 @@ function trackConfigFieldChange(e) {
   if (!f) return;
   setConfigPendingValueV2(f.key, readConfigElementValue(el, f));
   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
+  if (['PROXY_MODE', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_URL'].includes(f.key)) syncProxyModeV2();
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
   if (f.key === 'ACCOUNT_LOG_AUTO_CLEANUP') syncAccountLogManagementControlsV2();
   if (f.key === 'REGISTRATION_TRAFFIC_MODE') syncRegistrationModeCardV2();

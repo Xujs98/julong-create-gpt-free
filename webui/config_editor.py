@@ -14,9 +14,13 @@ import os
 import re
 from pathlib import Path
 
+from config.proxy import PROXY_API_REGION_OPTIONS, PROXY_API_REGION_LABELS
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
 EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL"}
+
+PROXY_API_REGION_CHOICES = [code for code, _ in PROXY_API_REGION_OPTIONS]
 
 # GrizzlySMS country IDs.  Keep the provider's numeric IDs as the stored values
 # while exposing localized names in the WebUI; the searchable select also
@@ -769,8 +773,54 @@ EDITABLE_FIELDS = [
 
     # ---- 代理池 ----
     {
+        "key": "PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "代理来源", "help": "代理池=使用下方固定列表；API代理=每个注册任务实时从 API 获取代理 IP",
+        "choices": ["pool", "api"], "choice_labels": {"pool": "代理池", "api": "API代理"},
+    },
+    {
         "key": "PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
         "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
+    },
+    {
+        "key": "PROXY_API_REGION", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "API国家/地区", "help": "支持搜索国家代码或中文名称，例如 JP 日本；Rand 表示随机地区",
+        "choices": PROXY_API_REGION_CHOICES, "choice_labels": PROXY_API_REGION_LABELS, "searchable": True,
+    },
+    {
+        "key": "PROXY_API_FORMAT", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "API分隔符", "help": "返回多条代理时的分隔符；n=换行，rn=回车换行",
+        "choices": ["n", "rn"], "choice_labels": {"n": "\\n", "rn": "\\r\\n"},
+    },
+    {
+        "key": "PROXY_API_SESSION_TYPE", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "API会话类型", "help": "Sticky IP 在时长内保持出口；Rotating IP 每次注册任务重新获取出口",
+        "choices": ["sticky", "rotating"], "choice_labels": {"sticky": "Sticky IP", "rotating": "Rotating IP"},
+    },
+    {
+        "key": "PROXY_API_TIME", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "API时长(分钟)", "help": "代理轮转/粘性会话在线时长，CliProxy 默认 10 分钟；范围 1-360",
+        "choices": [1, 3, 5, 10, 15, 30, 60, 120, 360],
+        "min": 1, "max": 360,
+    },
+    {
+        "key": "PROXY_API_TYPE", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "API数据格式", "help": "代理 API 返回格式；json 返回对象数组，txt 返回文本行",
+        "choices": ["json", "txt"], "choice_labels": {"json": "json", "txt": "txt"},
+    },
+    {
+        "key": "PROXY_API_NUM", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "API数量", "help": "每次请求提取的代理数量；注册任务每次使用其中一个，范围 1-20",
+        "min": 1, "max": 20,
+    },
+    {
+        "key": "PROXY_API_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
+        "label": "API请求超时(秒)", "help": "获取 API 代理的最大等待时间，建议 3-15 秒",
+        "min": 0.5, "max": 60,
+    },
+    {
+        "key": "PROXY_API_URL", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "API链接", "help": "根据上方参数生成；也可保留自定义 API 的域名和路径，query 参数会自动同步",
+        "readonly": True,
     },
     {
         "key": "PROXY_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
