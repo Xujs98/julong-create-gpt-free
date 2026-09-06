@@ -22,6 +22,11 @@ from urllib.parse import quote, unquote, urlparse, urlunparse
 
 import requests
 
+try:
+    from bs4 import BeautifulSoup
+except ImportError:  # pragma: no cover - the stdlib parser remains a fallback
+    BeautifulSoup = None
+
 from config import email as _email_cfg
 from core.otp_utils import extract_otp
 
@@ -249,6 +254,27 @@ def _extract_html_selector_values(text: str, selectors=None) -> list[str]:
     selector_list = _normalise_html_otp_selectors(selectors)
     if not body or not selector_list or "<" not in body:
         return []
+    # Use SoupSieve through BeautifulSoup when available so selectors copied
+    # from browser DevTools work as-is: descendant/child combinators,
+    # multiple classes, and pseudo-classes such as :nth-of-type().
+    if BeautifulSoup is not None:
+        try:
+            soup = BeautifulSoup(body, "html.parser")
+            values: list[str] = []
+            for selector in selector_list:
+                try:
+                    nodes = soup.select(selector)
+                except Exception as exc:
+                    logger.debug("[HTML OTP] CSS 选择器无效: %s: %s", selector, exc)
+                    continue
+                for node in nodes:
+                    value = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+                    if value and value not in values:
+                        values.append(value)
+            if values:
+                return values
+        except Exception as exc:
+            logger.debug("[HTML OTP] BeautifulSoup 解析失败，回退 stdlib: %s: %s", exc)
     parser = _HtmlOtpSelectorParser(selector_list)
     try:
         parser.feed(body)

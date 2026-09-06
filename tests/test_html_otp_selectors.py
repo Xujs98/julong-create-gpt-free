@@ -39,6 +39,17 @@ class HtmlOtpSelectorTests(unittest.TestCase):
             "482931",
         )
 
+    def test_selector_supports_devtools_descendant_chain(self):
+        html = (
+            '<div class="semi-typography-ellipsis-overflow-ellipsis '
+            'semi-typography-ellipsis-overflow-ellipsis-text"><span>739204</span></div>'
+        )
+        selector = ".semi-typography-ellipsis-overflow-ellipsis.semi-typography-ellipsis-overflow-ellipsis-text span"
+        self.assertEqual(
+            generic_api_mail_client._extract_html_selector_code(html, [selector]),
+            "739204",
+        )
+
     def test_selector_accepts_html_inspector_tag_notation(self):
         html = "<section class='otp'><code>936885</code></section>"
         self.assertEqual(
