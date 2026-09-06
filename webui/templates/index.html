@@ -3044,7 +3044,7 @@
     .icloud-adapter-status-v2::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
     .icloud-adapter-status-v2.is-ready { background: #eaf8f1; color: #16876a; }
     .icloud-adapter-status-v2.is-pending { background: #fff6e6; color: #b7791f; }
-    .icloud-adapter-actions-v2 { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; }
+    .icloud-adapter-actions-v2 { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
     .icloud-adapter-action-v2 { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 31px; padding: 0 10px; border: 1px solid #dce2ef; border-radius: 7px; background: #fff; color: #53617a; font: inherit; font-size: 11px; font-weight: 700; text-decoration: none; cursor: pointer; transition: .16s ease; white-space: nowrap; }
     .icloud-adapter-action-v2 svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .icloud-adapter-action-v2:hover { border-color: #bfc9e8; background: #f7f8ff; color: #4056c6; }
@@ -3052,6 +3052,24 @@
     .icloud-adapter-action-v2.is-primary:hover { border-color: #485bc9; background: #485bc9; color: #fff; }
     .icloud-adapter-action-v2.is-danger { width: 31px; padding: 0; border-color: #f0d8da; color: #c75b65; }
     .icloud-adapter-action-v2.is-danger:hover { border-color: #e8aeb3; background: #fff5f5; color: #b93846; }
+    .icloud-manual-adapter-v2[hidden] { display: none; }
+    .icloud-manual-adapter-v2 { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(15, 23, 42, .42); }
+    .icloud-manual-adapter-panel-v2 { width: min(560px, 100%); padding: 20px; border: 1px solid #e0e5f0; border-radius: 13px; background: #fff; box-shadow: 0 22px 60px rgba(15, 23, 42, .22); }
+    .icloud-manual-adapter-head-v2 { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .icloud-manual-adapter-title-v2 { color: #2b3548; font-size: 15px; font-weight: 760; }
+    .icloud-manual-adapter-subtitle-v2 { margin-top: 4px; color: #8994a6; font-size: 11px; line-height: 1.5; }
+    .icloud-manual-adapter-close-v2 { width: 30px; height: 30px; padding: 0; border: 1px solid #e0e5ef; border-radius: 7px; background: #fff; color: #7d8799; font-size: 18px; line-height: 1; cursor: pointer; }
+    .icloud-manual-adapter-close-v2:hover { background: #f7f8ff; color: #4056c6; }
+    .icloud-manual-adapter-field-v2 { display: grid; gap: 7px; margin-top: 18px; color: #4a5870; font-size: 12px; font-weight: 700; }
+    .icloud-manual-adapter-field-v2 textarea { width: 100%; min-height: 92px; margin: 0; padding: 11px 12px; border: 1px solid #dce2ef; border-radius: 8px; color: #263146; font: 12px ui-monospace,SFMono-Regular,Menlo,monospace; resize: vertical; }
+    .icloud-manual-adapter-field-v2 textarea:focus { border-color: #8798ff; box-shadow: 0 0 0 3px rgba(79,107,255,.10); outline: none; }
+    .icloud-manual-adapter-examples-v2 { margin-top: 7px; color: #98a2b3; font-size: 10px; font-weight: 400; line-height: 1.5; }
+    .icloud-manual-adapter-actions-v2 { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .icloud-manual-adapter-status-v2 { flex: 1; color: #b7791f; font-size: 11px; }
+    .icloud-manual-adapter-action-v2 { min-height: 34px; padding: 0 13px; border: 1px solid #dce2ef; border-radius: 8px; background: #fff; color: #53617a; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .icloud-manual-adapter-action-v2.is-primary { border-color: #5b6ee1; background: #5b6ee1; color: #fff; }
+    .icloud-manual-adapter-action-v2:hover { border-color: #bfc9e8; background: #f7f8ff; color: #4056c6; }
+    .icloud-manual-adapter-action-v2.is-primary:hover { border-color: #485bc9; background: #485bc9; color: #fff; }
     @media (max-width: 720px) {
       .icloud-adapter-row-v2 { grid-template-columns: minmax(0, 1fr) auto; gap: 9px 12px; }
       .icloud-adapter-status-v2 { grid-column: 2; grid-row: 1; }
@@ -10688,6 +10706,13 @@ function renderICloudAdapterToolsV2() {
       </div>
       <div id="icloudAdapterStatusV2" class="muted" style="font-size:12px;margin-top:8px;"></div>
       <div id="icloudAdapterListV2" class="icloud-adapter-list-v2"></div>
+      <div id="icloudManualAdapterV2" class="icloud-manual-adapter-v2" hidden>
+        <div class="icloud-manual-adapter-panel-v2" role="dialog" aria-modal="true" aria-labelledby="icloudManualAdapterTitleV2">
+          <div class="icloud-manual-adapter-head-v2"><div><div id="icloudManualAdapterTitleV2" class="icloud-manual-adapter-title-v2">手动适配选择器</div><div id="icloudManualAdapterSubtitleV2" class="icloud-manual-adapter-subtitle-v2">将该商家的验证码 CSS Selector 粘贴到下面。</div></div><button class="icloud-manual-adapter-close-v2" type="button" data-close-icloud-manual-adapter aria-label="关闭">×</button></div>
+          <label class="icloud-manual-adapter-field-v2">CSS Selector<textarea id="icloudManualSelectorV2" placeholder="#otp 或 .verification-code 或 div.code:nth-of-type(1)" spellcheck="false"></textarea><span class="icloud-manual-adapter-examples-v2">支持 #id、.class、标签层级和 :nth-of-type()，保存后同域名接码地址自动复用。</span></label>
+          <div class="icloud-manual-adapter-actions-v2"><span id="icloudManualAdapterStatusV2" class="icloud-manual-adapter-status-v2"></span><button class="icloud-manual-adapter-action-v2" type="button" data-close-icloud-manual-adapter>取消</button><button class="icloud-manual-adapter-action-v2 is-primary" type="button" id="btnSaveICloudManualAdapterV2">保存选择器</button></div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -10710,6 +10735,7 @@ async function loadICloudAdaptersV2() {
         <span class="icloud-adapter-status-v2 ${item.adapted ? 'is-ready' : 'is-pending'}">${item.adapted ? '已适配' : '待适配'}</span>
         <div class="icloud-adapter-actions-v2">
           <a class="icloud-adapter-action-v2" target="_blank" rel="noopener" href="${attrEsc(item.url || '')}" title="打开公网接码地址"><svg viewBox="0 0 24 24"><path d="M14 3h7v7M21 3l-9 9"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg><span>公网</span></a>
+          <button class="icloud-adapter-action-v2" type="button" data-manual-icloud-adapter="${attrEsc(item.id)}" data-manual-icloud-domain="${attrEsc(icloudAdapterDomainV2(item.url))}" title="手动粘贴 CSS Selector"><svg viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"></path></svg><span>手动适配</span></button>
           <button class="icloud-adapter-action-v2 is-primary" type="button" data-adapt-icloud-adapter="${attrEsc(item.id)}"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg><span>${item.adapted ? '重新适配' : '开始适配'}</span></button>
           <button class="icloud-adapter-action-v2 is-danger" type="button" data-delete-icloud-adapter="${attrEsc(item.id)}" title="删除适配规则" aria-label="删除 ${attrEsc(icloudAdapterDomainV2(item.url))}"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button>
         </div>
@@ -10727,6 +10753,42 @@ async function openICloudAdapterV2(id) {
     if (status) status.textContent = `启动公网适配浏览器失败：${error.message}`;
     await appAlert(`启动公网适配浏览器失败：${error.message}\n\n请确认当前运行环境已安装 Playwright Chromium。`, { title: '公网适配启动失败' });
   }
+}
+let activeICloudManualAdapterV2 = '';
+function openICloudManualAdapterV2(id, domain) {
+  activeICloudManualAdapterV2 = String(id || '');
+  const modal = document.getElementById('icloudManualAdapterV2');
+  const title = document.getElementById('icloudManualAdapterTitleV2');
+  const input = document.getElementById('icloudManualSelectorV2');
+  const status = document.getElementById('icloudManualAdapterStatusV2');
+  if (!modal || !input) return;
+  if (title) title.textContent = `手动适配选择器 · ${domain || '接码域名'}`;
+  input.value = '';
+  if (status) status.textContent = '';
+  modal.hidden = false;
+  setTimeout(() => input.focus(), 0);
+}
+function closeICloudManualAdapterV2() {
+  const modal = document.getElementById('icloudManualAdapterV2');
+  if (modal) modal.hidden = true;
+  activeICloudManualAdapterV2 = '';
+}
+async function saveICloudManualAdapterV2() {
+  const input = document.getElementById('icloudManualSelectorV2');
+  const status = document.getElementById('icloudManualAdapterStatusV2');
+  const button = document.getElementById('btnSaveICloudManualAdapterV2');
+  const selector = String(input?.value || '').trim();
+  if (!selector) { if (status) status.textContent = '请粘贴 CSS Selector'; return; }
+  if (!activeICloudManualAdapterV2) return;
+  if (button) button.disabled = true;
+  if (status) status.textContent = '正在保存…';
+  try {
+    await api(`/api/icloud/adapters/${encodeURIComponent(activeICloudManualAdapterV2)}/selector`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({selector})});
+    if (status) status.textContent = '已保存，后续同域名地址会自动复用';
+    await loadICloudAdaptersV2();
+    setTimeout(closeICloudManualAdapterV2, 450);
+  } catch (error) { if (status) status.textContent = `保存失败：${error.message}`; }
+  finally { if (button) button.disabled = false; }
 }
 async function addICloudAdapterV2() {
   const input = document.getElementById('icloudAdapterUrlV2');
@@ -10752,12 +10814,22 @@ function bindICloudAdapterToolsV2() {
   if (list && !list.dataset.bound) {
     list.dataset.bound = '1';
     list.addEventListener('click', event => {
+      const manual = event.target.closest('[data-manual-icloud-adapter]');
+      if (manual) { openICloudManualAdapterV2(manual.dataset.manualIcloudAdapter, manual.dataset.manualIcloudDomain); return; }
       const btn = event.target.closest('[data-delete-icloud-adapter]');
       if (btn) deleteICloudAdapterV2(btn.dataset.deleteIcloudAdapter);
       const adapt = event.target.closest('[data-adapt-icloud-adapter]');
       if (adapt) openICloudAdapterV2(adapt.dataset.adaptIcloudAdapter);
     });
   }
+  document.querySelectorAll('[data-close-icloud-manual-adapter]').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1'; btn.addEventListener('click', closeICloudManualAdapterV2);
+  });
+  const saveManual = document.getElementById('btnSaveICloudManualAdapterV2');
+  if (saveManual && !saveManual.dataset.bound) { saveManual.dataset.bound = '1'; saveManual.addEventListener('click', saveICloudManualAdapterV2); }
+  const modal = document.getElementById('icloudManualAdapterV2');
+  if (modal && !modal.dataset.bound) { modal.dataset.bound = '1'; modal.addEventListener('click', event => { if (event.target === modal) closeICloudManualAdapterV2(); }); }
   loadICloudAdaptersV2();
 }
 function renderCloudMailTokenToolsV2() {

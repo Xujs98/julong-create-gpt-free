@@ -39,6 +39,8 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertIn("icloud-adapter-domain-v2", html)
         self.assertIn("icloudAdapterDomainV2", html)
         self.assertIn("域名级选择器规则", html)
+        self.assertIn("手动适配", html)
+        self.assertIn("icloudManualSelectorV2", html)
         self.assertIn("openICloudAdapterV2", html)
         self.assertIn("/browser", html)
         self.assertIn("选择验证码元素", html)
