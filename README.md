@@ -196,7 +196,7 @@ docker compose logs -f app
 docker compose down
 ```
 
-> Docker 现在支持通过 `host.docker.internal` 调用宿主机 Roxy：`ROXY_API_BASE` 指向 Roxy API，程序会自动重写 `/browser/open` 返回的调试地址，并在容器内缓存匹配版本的 Linux Chromedriver。Roxy 本机部署仍优先使用 macOS 一键脚本；Docker 详细配置见[完整部署指南](docs/deployment.md)。
+> Docker 调用宿主机 Roxy 时，推荐先运行 `./tools/roxy-chromedriver-bridge.sh`，再设置 `ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`。容器会把 Roxy 的原始调试地址交给宿主机 macOS Chromedriver，避免跨系统自动化链路触发 Auth/挑战差异；本机部署仍保持原有 Selenium 路径。Docker 详细配置见[完整部署指南](docs/deployment.md)。
 
 已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `main`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
 

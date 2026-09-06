@@ -145,7 +145,11 @@ make docker-up
 
 请优先使用 `make docker-up`，它会挂载当前 `.env`。直接使用 `docker run` 时需要显式传入 `--env-file .env`，否则 `WEBUI_AUTH_CODE` 不会进入容器。
 
-Docker 容器内的 `127.0.0.1` 不指向宿主机。当前版本支持通过 `ROXY_DEBUGGER_HOST=host.docker.internal` 重写 Roxy 返回的调试地址，并自动下载匹配远端 Chrome 主版本的 Linux Chromedriver；Roxy 本机 GUI/API 仍需运行在宿主机。
+Docker 容器内的 `127.0.0.1` 不指向宿主机。使用 Roxy 时，先在 macOS 宿主机运行
+`./tools/roxy-chromedriver-bridge.sh`，并设置
+`ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`。Docker 随后通过宿主机
+macOS Chromedriver 附着 Roxy，避免 Linux Chromedriver 与 macOS Roxy 的跨系统差异；
+本机部署会忽略该 Docker 专用变量。
 
 构建并推送到预设 Docker Hub 仓库（命令会校验当前为 `main` 分支）：
 

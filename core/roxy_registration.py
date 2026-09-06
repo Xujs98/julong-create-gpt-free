@@ -45,6 +45,22 @@ def _build_driver(opened: RoxyOpenResult):
     from selenium.webdriver.remote.webdriver import WebDriver as RemoteWebDriver
     from core.roxy_selenium import resolve_chromedriver
 
+    if opened.webdriver_url and (
+        getattr(opened, "docker_bridge", False) or not opened.debugger_address
+    ):
+        logger.info("[Roxy] Selenium 连接 webdriver_url=%s", opened.webdriver_url)
+        options = Options()
+        options.page_load_strategy = "eager"
+        # The Docker bridge runs on the Roxy host. Passing the unmodified
+        # 127.0.0.1 debugger address makes that host-side driver attach to the
+        # already-open profile; the native path remains unchanged.
+        if opened.debugger_address:
+            options.add_experimental_option("debuggerAddress", opened.debugger_address)
+        driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
+        _apply_browser_automation_mask(driver)
+        _install_registration_traffic_optimization(driver)
+        return driver
+
     if opened.debugger_address:
         logger.info("[Roxy] Selenium 连接 debuggerAddress=%s", opened.debugger_address)
         options = Options()
@@ -54,15 +70,6 @@ def _build_driver(opened: RoxyOpenResult):
         driver_path = resolve_chromedriver(opened.raw, opened.debugger_address)
         logger.info("[Roxy] 使用 Chromedriver=%s", driver_path)
         driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
-        _apply_browser_automation_mask(driver)
-        _install_registration_traffic_optimization(driver)
-        return driver
-
-    if opened.webdriver_url:
-        logger.info("[Roxy] Selenium 连接 webdriver_url=%s", opened.webdriver_url)
-        options = Options()
-        options.page_load_strategy = "eager"
-        driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
         _apply_browser_automation_mask(driver)
         _install_registration_traffic_optimization(driver)
         return driver

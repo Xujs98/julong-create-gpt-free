@@ -193,20 +193,33 @@ REGISTRATION_DRIVER=roxy
 ROXY_API_BASE=http://192.168.31.123:50000
 ROXY_API_TOKEN=你的Roxy密钥
 ROXY_DEBUGGER_HOST=host.docker.internal
+ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515
 ```
 
 `ROXY_API_BASE` 只解决容器访问 Roxy API；`/browser/open` 返回的
-`127.0.0.1:<端口>` 还必须改写为 Docker Desktop 的宿主机网关。
-当前代码会自动完成这一步，并把 `host.docker.internal` 解析成网关 IP，
-避免 Roxy 对非 IP `Host` 头返回 HTTP 500。容器内会读取远端 Chrome 主版本，
-自动缓存匹配的 Linux Chromedriver 到 `/app/runtime/roxy-drivers`，无需挂载 macOS
-或 Windows 的 Chromedriver 路径。
+`127.0.0.1:<端口>` 还必须由宿主机 Chromedriver 处理。先在 macOS 宿主机启动桥接：
+
+```bash
+./tools/roxy-chromedriver-bridge.sh
+```
+
+桥接使用 Roxy 自带的 macOS Chromedriver，并监听 `9515`；Docker 通过
+`host.docker.internal` 访问它。这样 Roxy、Chrome 和 Chromedriver 始终处于同一
+macOS 命名空间，注册页面的指纹和本机部署一致。桥接未配置时，程序仍可回退到
+容器内匹配版本的 Linux Chromedriver，但跨系统附着会保留额外的 Auth/挑战风险。
 
 启动 RoxyBrowser 后重建应用：
 
 ```bash
 docker compose up -d --build --force-recreate
 docker compose logs -f app
+```
+
+确认桥接和容器都可达：
+
+```bash
+curl http://127.0.0.1:9515/status
+docker compose exec app python -c "import requests; print(requests.get('http://host.docker.internal:9515/status', timeout=3).json())"
 ```
 
 如果 Docker 运行在 Linux 而不是 Docker Desktop，`host.docker.internal` 可能没有自动解析，
@@ -253,7 +266,7 @@ docker compose up -d --no-build
 
 ## 5. Docker 与 RoxyBrowser 的边界
 
-标准 Docker Compose 容器内的 `127.0.0.1` 指向容器自身，不是 macOS 宿主机。Roxy 还会返回宿主机的调试地址和 Chromedriver 路径。当前版本会通过 `ROXY_DEBUGGER_HOST` 重写调试地址，并自动准备容器内的 Linux Chromedriver，因此 Docker 可以调用宿主机 Roxy，但仍有以下边界：
+标准 Docker Compose 容器内的 `127.0.0.1` 指向容器自身，不是 macOS 宿主机。Roxy 返回的调试地址属于宿主机命名空间。推荐使用 `ROXY_DOCKER_WEBDRIVER_URL` 把原始调试地址交给宿主机 Chromedriver；桥接不可达时才回退到容器内 Linux Chromedriver。
 
 - Docker Desktop：设置 `ROXY_DEBUGGER_HOST=host.docker.internal`，程序会解析成网关 IP。
 - Linux Docker：设置宿主机可达的 `ROXY_DEBUGGER_HOST`，并确认 Roxy 的调试端口允许容器访问。
@@ -263,7 +276,8 @@ docker compose up -d --no-build
 ### 本机与 Docker 的注册行为边界
 
 - 本机 Roxy：Selenium 和 Roxy 位于同一宿主机命名空间，保留 `127.0.0.1:<debug-port>`，继续使用原有 Cloudflare 等待逻辑。
-- Docker Roxy：API 从容器访问宿主机，调试地址重写到 `host.docker.internal` 网关，并使用容器内匹配版本的 Linux Chromedriver。
+- Docker Roxy：API 从容器访问宿主机；配置桥接时，容器把原始 `127.0.0.1:<调试端口>` 交给宿主机 macOS Chromedriver。未配置桥接才使用容器内匹配版本的 Linux Chromedriver。
+- 本机部署会忽略 `ROXY_DOCKER_WEBDRIVER_URL`，仍按原有本机 Selenium 路径运行。
 - 两种模式都会读取项目 `.env`；Docker 不会把 Roxy 指纹搬进容器，实际浏览器和 Profile 仍由宿主机 Roxy 创建。
 - Docker 新 Profile/新代理触发的挑战会标记为 `BrowserProxyChallenge`，任务服务隔离当前出口并重建 Profile；本机不会使用这个标记或这套代理隔离分支。
 - Auth 返回 `Route Error` 时，Docker 会标记为 `DockerRoxyRouteError` 并换出口；本机保留原有 `AuthRouteError` 错误路径，避免改变本机任务的重试策略。

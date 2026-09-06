@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from core import roxy_registration
+from core.roxybrowser_client import RoxyBrowserClient
 
 
 def test_docker_roxy_keeps_cloudflare_resources_unblocked():
@@ -46,3 +47,39 @@ def test_docker_roxy_authorize_fallback_uses_retryable_remote_navigation():
         attempts=2,
         accept_hosts=("auth.openai.com", "chatgpt.com"),
     )
+
+
+def test_docker_roxy_bridge_keeps_host_loopback_debugger(monkeypatch):
+    client = RoxyBrowserClient()
+    monkeypatch.setattr(client, "request", lambda *args, **kwargs: {
+        "code": 0,
+        "data": {"dirId": "profile", "http": "127.0.0.1:61234", "coreVersion": "152"},
+    })
+    monkeypatch.setattr("core.roxybrowser_client._running_in_container", lambda: True)
+    monkeypatch.setattr("core.roxybrowser_client.normalize_debugger_address", lambda value: "192.168.65.254:61234")
+    monkeypatch.setattr(client, "_docker_webdriver_available", lambda _url: True)
+    monkeypatch.setattr("core.roxybrowser_client._cfg.ROXY_DOCKER_WEBDRIVER_URL", "http://host.docker.internal:9515")
+    monkeypatch.setattr("core.roxybrowser_client._cfg.ROXY_ONE_PROFILE_PER_ACCOUNT", False)
+    opened = client.open_profile(profile_id="profile", headless=True)
+
+    assert opened.docker_bridge is True
+    assert opened.debugger_address == "127.0.0.1:61234"
+    assert opened.webdriver_url == "http://host.docker.internal:9515"
+
+
+def test_native_roxy_ignores_docker_bridge_configuration(monkeypatch):
+    client = RoxyBrowserClient()
+    monkeypatch.setattr(client, "request", lambda *args, **kwargs: {
+        "code": 0,
+        "data": {"dirId": "profile", "http": "127.0.0.1:61234", "coreVersion": "152"},
+    })
+    monkeypatch.setattr("core.roxybrowser_client._running_in_container", lambda: False)
+    monkeypatch.setattr("core.roxybrowser_client.normalize_debugger_address", lambda value: value)
+    monkeypatch.setattr(client, "_docker_webdriver_available", lambda _url: True)
+    monkeypatch.setattr("core.roxybrowser_client._cfg.ROXY_DOCKER_WEBDRIVER_URL", "http://host.docker.internal:9515")
+    monkeypatch.setattr("core.roxybrowser_client._cfg.ROXY_ONE_PROFILE_PER_ACCOUNT", False)
+    opened = client.open_profile(profile_id="profile", headless=True)
+
+    assert opened.docker_bridge is False
+    assert opened.debugger_address == "127.0.0.1:61234"
+    assert opened.webdriver_url is None

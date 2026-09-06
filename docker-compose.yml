@@ -25,6 +25,9 @@ services:
       ROXY_API_BASE: ${ROXY_API_BASE:-http://host.docker.internal:50000}
       ROXY_DEBUGGER_HOST: ${ROXY_DEBUGGER_HOST:-host.docker.internal}
       ROXY_DEBUGGER_RESOLVE_HOST: ${ROXY_DEBUGGER_RESOLVE_HOST:-true}
+      # Host-side bridge keeps Roxy, Chrome and Chromedriver in one macOS
+      # namespace. Start tools/roxy-chromedriver-bridge.sh on the host first.
+      ROXY_DOCKER_WEBDRIVER_URL: ${ROXY_DOCKER_WEBDRIVER_URL:-http://host.docker.internal:9515}
       ROXY_DRIVER_CACHE_DIR: ${ROXY_DRIVER_CACHE_DIR:-/app/runtime/roxy-drivers}
     volumes:
       - type: bind

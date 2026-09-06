@@ -15,7 +15,7 @@ import requests
 
 from config import roxybrowser as _cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
-from core.roxy_selenium import normalize_api_base, normalize_debugger_address, normalize_webdriver_url
+from core.roxy_selenium import _running_in_container, normalize_api_base, normalize_debugger_address, normalize_webdriver_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ class RoxyOpenResult:
     webdriver_url: str | None = None
     ws_endpoint: str | None = None
     created_by_run: bool = False
+    docker_bridge: bool = False
 
 
 def _strip_slashes(value: str) -> str:
@@ -211,6 +212,19 @@ class RoxyBrowserClient:
         except (TypeError, ValueError):
             value = int(fallback)
         return max(5, value)
+
+    @staticmethod
+    def _docker_webdriver_available(url: str) -> bool:
+        """Probe the host-side bridge before switching Docker to remote mode."""
+        endpoint = str(url or "").rstrip("/") + "/status"
+        try:
+            response = requests.get(endpoint, timeout=2)
+            if not response.ok:
+                return False
+            payload = response.json()
+            return bool(payload.get("value", {}).get("ready", payload.get("ready", False)))
+        except Exception:
+            return False
 
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
         url = _join_url(self.api_base, path)
@@ -563,7 +577,26 @@ class RoxyBrowserClient:
                 json_body=params if _cfg.ROXY_OPEN_METHOD.upper() != "GET" else None,
             )
             raw_debugger_address = self._extract_debugger_address(result)
-            debugger_address = normalize_debugger_address(raw_debugger_address)
+            # A host-side Chromedriver bridge must receive the original
+            # loopback debugger address: its process shares the host namespace
+            # with Roxy. The normal Docker path still rewrites loopback to the
+            # Docker Desktop gateway for a container-local driver.
+            docker_webdriver = str(getattr(_cfg, "ROXY_DOCKER_WEBDRIVER_URL", "") or "").strip()
+            use_docker_bridge = bool(
+                _running_in_container()
+                and docker_webdriver
+                and self._docker_webdriver_available(docker_webdriver)
+            )
+            if docker_webdriver and _running_in_container() and not use_docker_bridge:
+                logger.warning(
+                    "[Roxy] Docker 宿主机 Chromedriver 桥接不可达：%s；回退容器内 Linux Chromedriver",
+                    docker_webdriver,
+                )
+            debugger_address = (
+                str(raw_debugger_address).strip()
+                if use_docker_bridge
+                else normalize_debugger_address(raw_debugger_address)
+            )
             if raw_debugger_address and debugger_address != raw_debugger_address:
                 logger.info(
                     "[Roxy] 已重写跨容器调试地址：%s -> %s",
@@ -577,6 +610,13 @@ class RoxyBrowserClient:
                 ("data", "webdriver"), ("data", "webDriver"), ("data", "webdriver_url"), ("data", "webdriverUrl"),
                 ("data", "selenium"), ("data", "selenium_url"), ("data", "seleniumUrl"),
             ]) or None
+            if use_docker_bridge:
+                webdriver_url = docker_webdriver
+                logger.info(
+                    "[Roxy] Docker 使用宿主机 Chromedriver 桥接：webdriver=%s debugger=%s",
+                    webdriver_url,
+                    debugger_address,
+                )
             webdriver_url = normalize_webdriver_url(webdriver_url)
             ws_endpoint = _first(result, [
                 ("ws",), ("wsEndpoint",), ("ws_endpoint",), ("debuggerWsUrl",),
@@ -591,6 +631,7 @@ class RoxyBrowserClient:
                 webdriver_url=webdriver_url,
                 ws_endpoint=ws_endpoint,
                 created_by_run=created_by_run,
+                docker_bridge=use_docker_bridge,
             )
         except Exception:
             # 创建成功但启动、响应解析或调试地址校验失败时立即强制回收临时环境，

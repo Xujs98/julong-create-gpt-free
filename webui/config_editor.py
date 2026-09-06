@@ -460,6 +460,11 @@ EDITABLE_FIELDS = [
         "storage": "env",
     },
     {
+        "key": "ROXY_DOCKER_WEBDRIVER_URL", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "Docker 宿主机 Chromedriver", "help": "Docker 专用；填写 host.docker.internal:9515 桥接地址后，容器使用宿主机 macOS Chromedriver，避免 Linux/CDP 跨系统链路差异；本机运行会忽略此项",
+        "storage": "env",
+    },
+    {
         "key": "ROXY_CHROMEDRIVER_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
         "label": "Chromedriver 路径", "help": "可选；本机填写与 Roxy Chrome 主版本匹配的 driver。Docker 留空，按远端 Chrome 主版本自动下载 Linux driver",
         "storage": "env",
