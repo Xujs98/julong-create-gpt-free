@@ -205,6 +205,17 @@ def _browser_actions_enabled() -> bool:
         return True
 
 
+def _is_docker_roxy_session(driver) -> bool:
+    """仅识别 Docker 中的 Roxy 注册会话，不影响本机/Cloak 流程。"""
+    if _log_prefix(driver) != "[Roxy注册]":
+        return False
+    try:
+        from core.roxy_selenium import _running_in_container
+        return bool(_running_in_container())
+    except Exception:
+        return False
+
+
 def _apply_browser_automation_mask(driver) -> None:
     """连接 Selenium 后尽量降低明显自动化特征；失败不影响主流程。"""
     if not _browser_actions_enabled():
@@ -370,12 +381,18 @@ def _page_warmup(driver, *, reason: str = "") -> None:
 
 
 def _cloudflare_challenge_state(driver) -> dict:
-    """使用稳定 DOM 标记识别 Cloudflare 交互式验证页。"""
+    """识别 Cloudflare 验证页，并把 Auth HTML 错误页单独分类。"""
     try:
         state = driver.execute_script(r"""
         const title = String(document.title || '');
         const url = String(location.href || '');
         const visibleText = String(document.body?.innerText || '').slice(0, 12000);
+        const authRouteError = /route error|invalid content type|text\/html;\s*charset=utf-8|unknown error|something went wrong|不明なエラー|エラーが発生|未知错误|发生错误/i.test(
+          `${title} ${visibleText}`
+        ) && /auth\.openai\.com|\/create-account\/|\/email-verification|\/log-in\/password/i.test(url);
+        const routeErrorMessage = authRouteError
+          ? `${title} ${visibleText}`.replace(/\s+/g, ' ').trim().slice(0, 600)
+          : '';
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
           && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
         // 认证流程页面本身可能带有 sitekey/iframe 资源；先识别真实的
@@ -431,6 +448,8 @@ def _cloudflare_challenge_state(driver) -> dict:
         const challenge = normalWorkflowPage ? false : strongChallenge;
         return {
           challenge,
+          authRouteError,
+          routeErrorMessage,
           title,
           url,
           markers,
@@ -469,6 +488,23 @@ def _cloudflare_challenge_state(driver) -> dict:
         )
         state["normalAuthPage"] = normal_auth_page
         state["normalWorkflowPage"] = normal_workflow_page
+        if not state.get("authRouteError"):
+            state["authRouteError"] = bool(
+                re.search(
+                    r"route error|invalid content type|text/html;\s*charset=utf-8|unknown error|something went wrong|不明なエラー|エラーが発生|未知错误|发生错误",
+                    marker_text,
+                    re.I,
+                )
+                and re.search(
+                    r"auth\.openai\.com|/create-account/|/email-verification|/log-in/password",
+                    state_url,
+                    re.I,
+                )
+            )
+        if state.get("authRouteError") and not state.get("routeErrorMessage"):
+            state["routeErrorMessage"] = re.sub(
+                r"\s+", " ", marker_text
+            ).strip()[:600]
         if normal_workflow_page:
             state["challenge"] = False
         return state
@@ -483,6 +519,15 @@ def _cloudflare_challenge_state(driver) -> dict:
 def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool = False, agent=None) -> bool:
     """检测验证盾；完全接管时立即调用 Agent 处理，超时值只作为最终上限。"""
     state = _cloudflare_challenge_state(driver)
+    if state.get("authRouteError"):
+        detail = str(
+            state.get("routeErrorMessage")
+            or state.get("visibleText")
+            or state.get("title")
+            or "Auth 页面错误"
+        )
+        marker = "DockerRoxyRouteError" if _is_docker_roxy_session(driver) else "AuthRouteError"
+        raise RuntimeError(f"{marker}: {detail[:600]}")
     if not state.get("challenge"):
         if state.get("normalWorkflowPage"):
             # 认证与资料填写都属于真实注册阶段，立即退出验证等待循环。
@@ -492,7 +537,10 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
             )
         return False
     if headless:
-        raise RuntimeError("检测到 Cloudflare 人机验证；请关闭 Cloak无头 后重试，并在打开的浏览器中完成验证")
+        message = "检测到 Cloudflare 人机验证；请关闭 Cloak无头 后重试，并在打开的浏览器中完成验证"
+        if _is_docker_roxy_session(driver):
+            message = f"BrowserProxyChallenge: {message}"
+        raise RuntimeError(message)
 
     wait_seconds = max(30, int(timeout or 300))
     logger.warning(
@@ -541,6 +589,15 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
                 )
                 next_agent_at = time.time() + 1.0
         state = _cloudflare_challenge_state(driver)
+        if state.get("authRouteError"):
+            detail = str(
+                state.get("routeErrorMessage")
+                or state.get("visibleText")
+                or state.get("title")
+                or "Auth 页面错误"
+            )
+            marker = "DockerRoxyRouteError" if _is_docker_roxy_session(driver) else "AuthRouteError"
+            raise RuntimeError(f"{marker}: {detail[:600]}")
         if not state.get("challenge"):
             logger.info("%s Cloudflare 人机验证已完成，继续注册", _log_prefix(driver))
             time.sleep(1.0)
@@ -555,7 +612,12 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
             )
             next_log_at = now + (3.0 if agent is not None else 10.0)
         time.sleep(0.5 if agent is not None else 1.0)
-    raise RuntimeError(f"等待 Cloudflare 人机验证超时（{wait_seconds}s）")
+    message = f"等待 Cloudflare 人机验证超时（{wait_seconds}s）"
+    # 只有 Docker + Roxy 需要把挑战交给任务服务隔离代理；本机流程保持
+    # 原有异常文本和处理方式，避免改变现有本机任务行为。
+    if _is_docker_roxy_session(driver):
+        message = f"BrowserProxyChallenge: {message}"
+    raise RuntimeError(message)
 
 
 def _find_any(driver, selectors: list[str], timeout: int | None = None):

@@ -260,6 +260,14 @@ docker compose up -d --no-build
 - Roxy API 可使用宿主机内网地址（例如 `http://192.168.31.123:50000`）；这只负责 API，不等于调试端口已经可达。
 - 如不希望开放宿主机 Roxy 调试端口，仍可使用 `browser_use`、`skyvern` 或 `protocol` 驱动。
 
+### 本机与 Docker 的注册行为边界
+
+- 本机 Roxy：Selenium 和 Roxy 位于同一宿主机命名空间，保留 `127.0.0.1:<debug-port>`，继续使用原有 Cloudflare 等待逻辑。
+- Docker Roxy：API 从容器访问宿主机，调试地址重写到 `host.docker.internal` 网关，并使用容器内匹配版本的 Linux Chromedriver。
+- 两种模式都会读取项目 `.env`；Docker 不会把 Roxy 指纹搬进容器，实际浏览器和 Profile 仍由宿主机 Roxy 创建。
+- Docker 新 Profile/新代理触发的挑战会标记为 `BrowserProxyChallenge`，任务服务隔离当前出口并重建 Profile；本机不会使用这个标记或这套代理隔离分支。
+- Auth 返回 `Route Error` 时，Docker 会标记为 `DockerRoxyRouteError` 并换出口；本机保留原有 `AuthRouteError` 错误路径，避免改变本机任务的重试策略。
+
 ## 6. 配置、授权码和数据
 
 `.env` 不在 Git 中同步。每台电脑都要单独创建并填写：

@@ -280,7 +280,31 @@ def _select_registration_proxy(
 
 
 def _is_browser_proxy_challenge(error: object) -> bool:
-    return "BrowserProxyChallenge" in str(error or "")
+    text = str(error or "").lower()
+    return "browserproxychallenge" in text
+
+
+def _is_auth_route_error(error: object) -> bool:
+    """识别 Docker + Roxy 密码提交后 Auth 返回 HTML 错误文档的情况。"""
+    text = str(error or "").lower()
+    return "dockerroxyrouteerror" in text
+
+
+def _exclude_route_error_proxy(
+    proxy: str | None,
+    excluded_proxies: set[str],
+    job_id: int,
+    log_logger: logging.Logger,
+) -> None:
+    """本任务内隔离触发 Auth Route Error 的出口，但不立即删除代理池素材。"""
+    value = str(proxy or "").strip()
+    if not value:
+        return
+    excluded_proxies.add(value)
+    log_logger.warning(
+        "[Job %s] Auth Route Error 发生在当前出口，已在本任务隔离并准备换用其它代理",
+        job_id,
+    )
 
 
 def _quarantine_browser_challenged_proxy(
@@ -353,6 +377,7 @@ def _is_transient_registration_failure(error: object) -> bool:
     if any(marker in text for marker in permanent):
         return False
     return any(marker in text for marker in (
+        "dockerroxyrouteerror",
         "cloudflare 人机验证",
         "targetclosederror",
         "target page, context or browser has been closed",
@@ -562,6 +587,10 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                         _quarantine_browser_challenged_proxy(
                             registration_proxy, excluded_proxies, job_id, log_logger
                         )
+                    elif _is_auth_route_error(transient_error):
+                        _exclude_route_error_proxy(
+                            registration_proxy, excluded_proxies, job_id, log_logger
+                        )
                     if registration_attempt >= retry_limit or not _is_transient_registration_failure(transient_error):
                         raise
                     log_logger.warning(
@@ -579,6 +608,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 error_text = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 if _is_browser_proxy_challenge(error_text):
                     _quarantine_browser_challenged_proxy(
+                        (result or {}).get("_failed_proxy_url") or registration_proxy,
+                        excluded_proxies,
+                        job_id,
+                        log_logger,
+                    )
+                elif _is_auth_route_error(error_text):
+                    _exclude_route_error_proxy(
                         (result or {}).get("_failed_proxy_url") or registration_proxy,
                         excluded_proxies,
                         job_id,

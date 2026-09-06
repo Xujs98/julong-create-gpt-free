@@ -7,11 +7,23 @@ from core import registration_service
 
 
 def test_transient_registration_failure_classification():
+    assert not registration_service._is_browser_proxy_challenge(
+        "RuntimeError: 等待 Cloudflare 人机验证超时（90s）"
+    )
+    assert registration_service._is_browser_proxy_challenge(
+        "RuntimeError: BrowserProxyChallenge: 等待 Cloudflare 人机验证超时（90s）"
+    )
     assert registration_service._is_transient_registration_failure(
         "TargetClosedError: target page, context or browser has been closed"
     )
     assert registration_service._is_transient_registration_failure(
         "TimeoutError: Page.goto: Timeout 90000ms exceeded"
+    )
+    assert registration_service._is_transient_registration_failure(
+        "RuntimeError: DockerRoxyRouteError: Route Error (400 Invalid content type: text/html; charset=UTF-8)"
+    )
+    assert not registration_service._is_transient_registration_failure(
+        "RuntimeError: AuthRouteError: Route Error (400 Invalid content type: text/html; charset=UTF-8)"
     )
     assert not registration_service._is_transient_registration_failure(
         "RuntimeError: 邮箱验证码连续错误/过期"

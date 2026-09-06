@@ -127,10 +127,37 @@ class CloudflareChallengeWaitTests(unittest.TestCase):
         assert state["challenge"] is False
         assert state["normalAuthPage"] is True
 
+    def test_auth_route_error_is_classified_before_cloudflare_wait(self):
+        """Auth 返回 HTML 错误页时不能进入 90 秒 Cloudflare 等待。"""
+        driver = Mock()
+        driver.execute_script.return_value = {
+            "challenge": True,
+            "title": "不明なエラーが発生しました - OpenAI",
+            "url": "https://auth.openai.com/create-account/password",
+            "visibleText": "Route Error (400 Invalid content type: text/html; charset=UTF-8)",
+            "markers": ["iframe[src*=challenges.cloudflare.com]"],
+            "textChallenge": False,
+            "authFlow": True,
+            "otpOrPasswordForm": False,
+        }
+        state = _cloudflare_challenge_state(driver)
+        assert state["authRouteError"] is True
+        with self.assertRaisesRegex(RuntimeError, "AuthRouteError.*Invalid content type"):
+            _wait_for_cloudflare_challenge(driver, timeout=30, headless=False)
+
     def test_headless_mode_fails_with_actionable_message(self):
         driver = Mock()
         driver.execute_script.return_value = {"challenge": True, "title": "Just a moment..."}
         with self.assertRaisesRegex(RuntimeError, "关闭 Cloak无头"):
+            _wait_for_cloudflare_challenge(driver, headless=True)
+
+    def test_docker_roxy_headless_challenge_has_proxy_marker(self):
+        driver = Mock()
+        driver._registration_log_prefix = "[Roxy注册]"
+        driver.execute_script.return_value = {"challenge": True, "title": "Just a moment..."}
+        with patch("core.roxy_selenium._running_in_container", return_value=True), self.assertRaisesRegex(
+            RuntimeError, "BrowserProxyChallenge.*关闭 Cloak无头"
+        ):
             _wait_for_cloudflare_challenge(driver, headless=True)
 
     @patch("core.roxy_registration.time.sleep")
