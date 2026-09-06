@@ -70,6 +70,26 @@ def test_fetch_proxy_html_injects_popup_selector_bridge(tmp_path, monkeypatch):
     assert "icloud-adapter-selector" in body
 
 
+def test_test_selector_fetches_page_without_saving(tmp_path, monkeypatch):
+    monkeypatch.setattr(icloud_adapter, "_ADAPTER_FILE", tmp_path / "adapters.json")
+    item = icloud_adapter.add_adapter("https://remail.example/pickup")
+    response = Mock(
+        status_code=200,
+        text='<div class="semi-typography-ellipsis-overflow-ellipsis semi-typography-ellipsis-overflow-ellipsis-text"><span>739204</span></div>',
+        headers={"Content-Type": "text/html"},
+    )
+    monkeypatch.setattr(icloud_adapter.requests, "get", lambda *args, **kwargs: response)
+
+    result = icloud_adapter.test_selector(
+        item["id"], ".semi-typography-ellipsis-overflow-ellipsis.semi-typography-ellipsis-overflow-ellipsis-text span"
+    )
+
+    assert result["matched"] is True
+    assert result["code"] == "739204"
+    assert result["values"] == ["739204"]
+    assert icloud_adapter.get_adapter(item["id"])["adapted"] is False
+
+
 def test_fetch_latest_otp_prefers_url_adapter_selector(monkeypatch):
     account = icloud_client.ICloudEmailAccount(
         email="sample@icloud.com", code_url="https://remail.example/pickup?token=one"

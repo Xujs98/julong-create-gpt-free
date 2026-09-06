@@ -41,6 +41,8 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertIn("域名级选择器规则", html)
         self.assertIn("手动适配", html)
         self.assertIn("icloudManualSelectorV2", html)
+        self.assertIn("测试选择器", html)
+        self.assertIn("/selector/test", html)
         self.assertIn("openICloudAdapterV2", html)
         self.assertIn("/browser", html)
         self.assertIn("选择验证码元素", html)
@@ -58,6 +60,17 @@ class ICloudWebUiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         launch.assert_called_once_with("adapter-1", get_adapter.return_value["url"])
+
+    @patch("core.icloud_adapter.test_selector", return_value={"ok": True, "matched": True, "values": ["739204"], "code": "739204"})
+    def test_selector_test_route_returns_match(self, test_selector):
+        response = self.client.post(
+            "/api/icloud/adapters/adapter-1/selector/test",
+            json={"selector": ".otp"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["matched"])
+        test_selector.assert_called_once_with("adapter-1", ".otp")
 
     def test_registration_driver_status_lists_all_five_modes(self):
         response = self.client.get("/api/registration-drivers/status")

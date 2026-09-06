@@ -19,6 +19,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
+import requests
 from flask import Flask, Response, jsonify, render_template, request
 
 from core import account_log_service, codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
@@ -3775,6 +3776,22 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not item:
             return jsonify({"ok": False, "error": "适配地址不存在"}), 404
         return jsonify({"ok": True, "item": item})
+
+    @app.post("/api/icloud/adapters/<adapter_id>/selector/test")
+    def api_icloud_adapter_selector_test(adapter_id: str):
+        from core.icloud_adapter import test_selector
+        data = request.get_json(silent=True) or {}
+        try:
+            return jsonify(test_selector(adapter_id, data.get("selector") or ""))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except LookupError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+        except requests.RequestException as exc:
+            return jsonify({"ok": False, "error": f"公网地址请求失败：{type(exc).__name__}: {exc}"}), 502
+        except Exception as exc:
+            logger.exception("测试 iCloud CSS 选择器失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 502
 
     # ----------------------------------------------------------
     # 配置读写

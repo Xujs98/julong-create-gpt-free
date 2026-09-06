@@ -127,6 +127,35 @@ def save_selector(adapter_id: str, selector: str) -> dict | None:
     return None
 
 
+def test_selector(adapter_id: str, selector: str) -> dict:
+    """Fetch one pickup page and test a CSS selector without persisting it."""
+    value = str(selector or "").strip()
+    if not value or len(value) > 500 or any(ch in value for ch in "\r\n"):
+        raise ValueError("CSS 选择器不能为空或过长")
+    row = get_adapter(adapter_id)
+    if not row:
+        raise LookupError("适配地址不存在")
+    response = requests.get(
+        row["url"],
+        timeout=20,
+        headers={"Accept": "text/html,application/xhtml+xml,text/plain,*/*", "User-Agent": "Mozilla/5.0"},
+    )
+    response.raise_for_status()
+    content_type = response.headers.get("Content-Type", "text/html")
+    if "html" not in content_type.lower() and "text" not in content_type.lower():
+        raise ValueError("接码地址没有返回 HTML/文本页面")
+    from core.generic_api_mail_client import _extract_html_selector_code, _extract_html_selector_values
+
+    values = _extract_html_selector_values(response.text or "", [value])
+    return {
+        "ok": True,
+        "matched": bool(values),
+        "values": values[:5],
+        "code": _extract_html_selector_code(response.text or "", [value]),
+        "status_code": response.status_code,
+    }
+
+
 def selectors_for_url(value: str) -> list[str]:
     try:
         key = url_key(value)

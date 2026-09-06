@@ -10710,7 +10710,7 @@ function renderICloudAdapterToolsV2() {
         <div class="icloud-manual-adapter-panel-v2" role="dialog" aria-modal="true" aria-labelledby="icloudManualAdapterTitleV2">
           <div class="icloud-manual-adapter-head-v2"><div><div id="icloudManualAdapterTitleV2" class="icloud-manual-adapter-title-v2">手动适配选择器</div><div id="icloudManualAdapterSubtitleV2" class="icloud-manual-adapter-subtitle-v2">将该商家的验证码 CSS Selector 粘贴到下面。</div></div><button class="icloud-manual-adapter-close-v2" type="button" data-close-icloud-manual-adapter aria-label="关闭">×</button></div>
           <label class="icloud-manual-adapter-field-v2">CSS Selector<textarea id="icloudManualSelectorV2" placeholder="#otp 或 .verification-code 或 div.code:nth-of-type(1)" spellcheck="false"></textarea><span class="icloud-manual-adapter-examples-v2">支持 #id、.class、标签层级和 :nth-of-type()，保存后同域名接码地址自动复用。</span></label>
-          <div class="icloud-manual-adapter-actions-v2"><span id="icloudManualAdapterStatusV2" class="icloud-manual-adapter-status-v2"></span><button class="icloud-manual-adapter-action-v2" type="button" data-close-icloud-manual-adapter>取消</button><button class="icloud-manual-adapter-action-v2 is-primary" type="button" id="btnSaveICloudManualAdapterV2">保存选择器</button></div>
+          <div class="icloud-manual-adapter-actions-v2"><span id="icloudManualAdapterStatusV2" class="icloud-manual-adapter-status-v2"></span><button class="icloud-manual-adapter-action-v2" type="button" data-close-icloud-manual-adapter>取消</button><button class="icloud-manual-adapter-action-v2" type="button" id="btnTestICloudManualAdapterV2">测试选择器</button><button class="icloud-manual-adapter-action-v2 is-primary" type="button" id="btnSaveICloudManualAdapterV2">保存选择器</button></div>
         </div>
       </div>
     </div>
@@ -10790,6 +10790,24 @@ async function saveICloudManualAdapterV2() {
   } catch (error) { if (status) status.textContent = `保存失败：${error.message}`; }
   finally { if (button) button.disabled = false; }
 }
+async function testICloudManualAdapterV2() {
+  const input = document.getElementById('icloudManualSelectorV2');
+  const status = document.getElementById('icloudManualAdapterStatusV2');
+  const button = document.getElementById('btnTestICloudManualAdapterV2');
+  const selector = String(input?.value || '').trim();
+  if (!selector) { if (status) status.textContent = '请先粘贴 CSS Selector'; return; }
+  if (!activeICloudManualAdapterV2) return;
+  if (button) button.disabled = true;
+  if (status) status.textContent = '正在请求公网页面测试…';
+  try {
+    const result = await api(`/api/icloud/adapters/${encodeURIComponent(activeICloudManualAdapterV2)}/selector/test`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({selector})});
+    if (result.matched) {
+      const sample = Array.isArray(result.values) && result.values.length ? `：${result.values.slice(0, 2).join(' / ')}` : '';
+      if (status) status.textContent = `测试命中 ${result.values?.length || 0} 个元素${sample}${result.code ? ` · 验证码 ${result.code}` : ''}`;
+    } else if (status) status.textContent = '测试完成，但当前页面未命中该选择器';
+  } catch (error) { if (status) status.textContent = `测试失败：${error.message}`; }
+  finally { if (button) button.disabled = false; }
+}
 async function addICloudAdapterV2() {
   const input = document.getElementById('icloudAdapterUrlV2');
   const status = document.getElementById('icloudAdapterStatusV2');
@@ -10828,6 +10846,8 @@ function bindICloudAdapterToolsV2() {
   });
   const saveManual = document.getElementById('btnSaveICloudManualAdapterV2');
   if (saveManual && !saveManual.dataset.bound) { saveManual.dataset.bound = '1'; saveManual.addEventListener('click', saveICloudManualAdapterV2); }
+  const testManual = document.getElementById('btnTestICloudManualAdapterV2');
+  if (testManual && !testManual.dataset.bound) { testManual.dataset.bound = '1'; testManual.addEventListener('click', testICloudManualAdapterV2); }
   const modal = document.getElementById('icloudManualAdapterV2');
   if (modal && !modal.dataset.bound) { modal.dataset.bound = '1'; modal.addEventListener('click', event => { if (event.target === modal) closeICloudManualAdapterV2(); }); }
   loadICloudAdaptersV2();
