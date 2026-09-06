@@ -12,6 +12,7 @@ Flask 本地控制台。
 """
 import logging
 import json
+import html
 import re
 import threading
 import time
@@ -3721,11 +3722,12 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not item:
             return "适配地址不存在", 404
         safe_id = str(item["id"])
+        safe_url = html.escape(str(item.get("url") or ""), quote=True)
         return Response(f"""<!doctype html><meta charset='utf-8'><title>iCloud HTML 适配</title>
-<style>body{{font:14px system-ui;margin:0;background:#f5f7fa;color:#17202a}}header{{padding:16px 22px;background:#fff;border-bottom:1px solid #dfe5ec}}main{{padding:18px}}iframe{{width:100%;height:calc(100vh - 150px);border:1px solid #cbd5e1;background:#fff}}button{{padding:8px 14px;margin-right:8px}}#selected{{font-family:monospace;color:#08785f}}</style>
-<header><b>iCloud HTML 接码适配</b><div>请在下方页面点击验证码所在元素，然后保存选择器。</div><div>当前选择器：<span id='selected'>尚未选择</span> <button id='save' disabled>保存适配</button> <button onclick='window.close()'>关闭</button></div></header>
+<style>body{{font:14px system-ui;margin:0;background:#f5f7fa;color:#17202a}}header{{padding:16px 22px;background:#fff;border-bottom:1px solid #dfe5ec}}main{{padding:18px}}iframe{{width:100%;height:calc(100vh - 210px);border:1px solid #cbd5e1;background:#fff}}button{{padding:8px 14px;margin:4px 8px 4px 0}}input{{padding:8px;min-width:320px}}#selected{{font-family:monospace;color:#08785f}}#status{{color:#b45309}}</style>
+<header><b>iCloud HTML 接码适配</b><div>优先在下方页面点击验证码元素，然后保存选择器。</div><div>如果页面空白或商家禁止代理显示，请点击 <a href='{safe_url}' target='_blank' rel='noopener'>打开公网地址</a>，再把验证码元素的 CSS 选择器填入下方。</div><div>当前选择器：<span id='selected'>尚未选择</span> <button id='save' disabled>保存适配</button> <button onclick='window.close()'>关闭</button></div><div><input id='manual' placeholder='例如 #otp、.verification-code、div.code span'><button id='saveManual'>保存手动选择器</button><span id='status'></span></div></header>
 <main><iframe src='/api/icloud/adapters/{safe_id}/proxy' title='接码页面'></iframe></main>
-<script>let current='';window.addEventListener('message',e=>{{if(!e.data||e.data.type!=='icloud-adapter-selector'||e.data.adapterId!=={json.dumps(safe_id)})return;current=e.data.selector||'';document.querySelector('#selected').textContent=current+(e.data.sample?' · '+e.data.sample:'');document.querySelector('#save').disabled=!current;}});document.querySelector('#save').onclick=async()=>{{const r=await fetch('/api/icloud/adapters/{safe_id}/selector',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{selector:current}})}});const d=await r.json();if(!r.ok){{alert(d.error||'保存失败');return}};alert('适配已保存');}};</script>""", mimetype="text/html")
+<script>let current='';const status=document.querySelector('#status');async function saveSelector(selector){{selector=String(selector||'').trim();if(!selector){{status.textContent='请先选择或填写 CSS 选择器';return}}const r=await fetch('/api/icloud/adapters/{safe_id}/selector',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{selector}})}});const d=await r.json();status.textContent=r.ok?'适配已保存':(d.error||'保存失败');}}window.addEventListener('message',e=>{{if(!e.data||e.data.type!=='icloud-adapter-selector'||e.data.adapterId!=={json.dumps(safe_id)})return;current=e.data.selector||'';document.querySelector('#selected').textContent=current+(e.data.sample?' · '+e.data.sample:'');document.querySelector('#save').disabled=!current;}});document.querySelector('#save').onclick=()=>saveSelector(current);document.querySelector('#saveManual').onclick=()=>saveSelector(document.querySelector('#manual').value);</script>""", mimetype="text/html")
 
     @app.get("/api/icloud/adapters/<adapter_id>/proxy")
     def api_icloud_adapter_proxy(adapter_id: str):

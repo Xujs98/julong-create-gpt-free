@@ -17,6 +17,32 @@ def test_adapter_normalizes_markdown_url_and_matches_query_variants(tmp_path, mo
     ) == ["#verification-code"]
 
 
+def test_adapter_reuses_selector_for_same_host_different_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(icloud_adapter, "_ADAPTER_FILE", tmp_path / "adapters.json")
+
+    item = icloud_adapter.add_adapter("https://remail.example/pickup/session-a")
+    icloud_adapter.save_selector(item["id"], ".otp-value")
+
+    assert icloud_adapter.selectors_for_url(
+        "https://remail.example/pickup/session-b?email=next%40icloud.com"
+    ) == [".otp-value"]
+
+
+def test_adapter_reads_legacy_records_without_host_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(icloud_adapter, "_ADAPTER_FILE", tmp_path / "adapters.json")
+    icloud_adapter._write([
+        {
+            "id": "legacy",
+            "url": "https://remail.example/pickup/session-a",
+            "url_key": "https://remail.example/pickup/session-a",
+            "selectors": ["#code"],
+            "adapted": True,
+        }
+    ])
+
+    assert icloud_adapter.selectors_for_url("https://remail.example/other") == ["#code"]
+
+
 def test_fetch_latest_otp_prefers_url_adapter_selector(monkeypatch):
     account = icloud_client.ICloudEmailAccount(
         email="sample@icloud.com", code_url="https://remail.example/pickup?token=one"

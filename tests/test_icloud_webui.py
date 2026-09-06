@@ -36,6 +36,9 @@ class ICloudWebUiTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn("icloudAdapterUrlV2", html)
         self.assertIn("开始适配", html)
+        self.assertIn("icloud-adapter-domain-v2", html)
+        self.assertIn("icloudAdapterDomainV2", html)
+        self.assertIn("域名级选择器规则", html)
         self.assertIn("/api/icloud/adapters", html)
 
     def test_registration_driver_status_lists_all_five_modes(self):

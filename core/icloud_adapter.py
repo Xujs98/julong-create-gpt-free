@@ -56,6 +56,11 @@ def url_key(value: str) -> str:
     return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path or '/'}"
 
 
+def host_key(value: str) -> str:
+    parsed = urlsplit(normalize_url(value))
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
 def list_adapters() -> list[dict]:
     with _LOCK:
         return [dict(row) for row in reversed(_read())]
@@ -79,6 +84,7 @@ def add_adapter(value: str) -> dict:
             "id": uuid.uuid4().hex,
             "url": url,
             "url_key": key,
+            "host_key": host_key(url),
             "selectors": [],
             "adapted": False,
             "created_at": _now(),
@@ -119,13 +125,32 @@ def save_selector(adapter_id: str, selector: str) -> dict | None:
 def selectors_for_url(value: str) -> list[str]:
     try:
         key = url_key(value)
+        host = host_key(value)
     except ValueError:
         return []
     with _LOCK:
-        for row in reversed(_read()):
-            if row.get("url_key") == key and row.get("adapted"):
-                return [str(item) for item in row.get("selectors") or [] if str(item).strip()]
+        rows = list(reversed(_read()))
+        matches = [row for row in rows if row.get("adapted") and row.get("url_key") == key]
+        matches.extend(
+            row
+            for row in rows
+            if row.get("adapted")
+            and (row.get("host_key") or _legacy_host_key(row.get("url"))) == host
+            and row not in matches
+        )
+        for row in matches:
+            selectors = [str(item) for item in row.get("selectors") or [] if str(item).strip()]
+            if selectors:
+                return selectors
     return []
+
+
+def _legacy_host_key(value: str | None) -> str:
+    """Return a host key for adapter records written before host_key existed."""
+    try:
+        return host_key(str(value or ""))
+    except ValueError:
+        return ""
 
 
 def fetch_proxy_html(adapter_id: str) -> tuple[str, str]:
