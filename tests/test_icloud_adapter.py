@@ -52,7 +52,8 @@ def test_fetch_proxy_html_injects_popup_selector_bridge(tmp_path, monkeypatch):
     response = Mock(
         status_code=200,
         text=(
-            '<html><head><meta http-equiv="Content-Security-Policy" content="frame-ancestors none"></head>'
+            '<html><head><script defer src="/app.js"></script>'
+            '<meta http-equiv="Content-Security-Policy" content="frame-ancestors none"></head>'
             '<body><span id="code">482931</span></body></html>'
         ),
         headers={"Content-Type": "text/html"},
@@ -63,6 +64,8 @@ def test_fetch_proxy_html_injects_popup_selector_bridge(tmp_path, monkeypatch):
 
     assert mimetype == "text/html; charset=utf-8"
     assert "Content-Security-Policy" not in body
+    assert "history.replaceState(null, '', \"/pickup\")" in body
+    assert body.index('<base href=') < body.index('<script defer src=')
     assert "window.parent !== window ? window.parent : window.opener" in body
     assert "icloud-adapter-selector" in body
 

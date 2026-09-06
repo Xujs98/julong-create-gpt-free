@@ -40,8 +40,22 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertIn("icloudAdapterDomainV2", html)
         self.assertIn("域名级选择器规则", html)
         self.assertIn("openICloudAdapterV2", html)
+        self.assertIn("/browser", html)
         self.assertIn("选择验证码元素", html)
         self.assertIn("/api/icloud/adapters", html)
+
+    @patch("core.icloud_adapter_browser.launch_public_adapter", return_value={"ok": True, "status": "starting"})
+    @patch("core.icloud_adapter.get_adapter")
+    def test_public_adapter_browser_uses_saved_url(self, get_adapter, launch):
+        get_adapter.return_value = {
+            "id": "adapter-1",
+            "url": "https://remail.example/pickup?email=a%40icloud.com&token=st_test",
+        }
+
+        response = self.client.post("/api/icloud/adapters/adapter-1/browser")
+
+        self.assertEqual(response.status_code, 200)
+        launch.assert_called_once_with("adapter-1", get_adapter.return_value["url"])
 
     def test_registration_driver_status_lists_all_five_modes(self):
         response = self.client.get("/api/registration-drivers/status")

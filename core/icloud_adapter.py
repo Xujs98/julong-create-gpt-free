@@ -176,7 +176,12 @@ def fetch_proxy_html(adapter_id: str) -> tuple[str, str]:
         body,
         flags=re.IGNORECASE,
     )
+    parsed_url = urlsplit(row["url"])
+    public_route = parsed_url.path or "/"
+    if parsed_url.query:
+        public_route += "?" + parsed_url.query
     base = f'<base href="{html.escape(row["url"], quote=True)}">'
+    route_script = f"<script>history.replaceState(null, '', {json.dumps(public_route)});</script>"
     script = f"""
 <script>
 (() => {{
@@ -203,10 +208,10 @@ def fetch_proxy_html(adapter_id: str) -> tuple[str, str]:
 }})();
 </script>
 """
-    if re.search(r"</head>", body, re.IGNORECASE):
-        body = re.sub(r"</head>", base + "</head>", body, count=1, flags=re.IGNORECASE)
+    if re.search(r"<head[^>]*>", body, re.IGNORECASE):
+        body = re.sub(r"(<head[^>]*>)", r"\1" + base + route_script, body, count=1, flags=re.IGNORECASE)
     else:
-        body = base + body
+        body = base + route_script + body
     if re.search(r"</body>", body, re.IGNORECASE):
         body = re.sub(r"</body>", script + "</body>", body, count=1, flags=re.IGNORECASE)
     else:

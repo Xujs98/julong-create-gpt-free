@@ -10717,11 +10717,16 @@ async function loadICloudAdaptersV2() {
     `).join('') : '<div class="muted">还没有保存接码地址。</div>';
   } catch (error) { list.innerHTML = `<div class="banner warn">加载适配地址失败：${esc(error.message)}</div>`; }
 }
-function openICloudAdapterV2(id) {
-  const url = `/api/icloud/adapters/${encodeURIComponent(id)}/adapt`;
-  const popup = window.open(url, `icloud-adapter-${String(id || '').replace(/[^a-z0-9_-]/gi, '')}`, 'width=1120,height=780,resizable=yes,scrollbars=yes');
-  if (!popup) appAlert('浏览器拦截了适配小窗，请允许本站弹窗后重试。', { title: '需要允许弹窗' });
-  else popup.focus();
+async function openICloudAdapterV2(id) {
+  const status = document.getElementById('icloudAdapterStatusV2');
+  if (status) status.textContent = '正在打开公网适配浏览器…';
+  try {
+    const result = await api(`/api/icloud/adapters/${encodeURIComponent(id)}/browser`, {method:'POST'});
+    if (status) status.textContent = result.already_open ? '公网适配浏览器已经打开' : '公网适配浏览器已启动，请直接点击页面中的验证码元素';
+  } catch (error) {
+    if (status) status.textContent = `启动公网适配浏览器失败：${error.message}`;
+    await appAlert(`启动公网适配浏览器失败：${error.message}\n\n请确认当前运行环境已安装 Playwright Chromium。`, { title: '公网适配启动失败' });
+  }
 }
 async function addICloudAdapterV2() {
   const input = document.getElementById('icloudAdapterUrlV2');

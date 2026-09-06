@@ -3735,7 +3735,22 @@ def create_app(auth_code: str | None = None) -> Flask:
 </style>
 <header><div class='title'><span class='title-dot'></span><span>选择验证码元素</span></div><div class='hint'>点击下方公网页面中的验证码文本或容器，系统会自动生成完整 CSS 选择器。</div><div class='source'>公网址：<a href='{safe_url}' target='_blank' rel='noopener'>{safe_url}</a></div><div class='toolbar'><span id='selected'>尚未选择</span><button class='primary' id='save' disabled>保存选择器</button><input id='manual' placeholder='手动输入 CSS 选择器（备用）'><button id='saveManual'>保存手动选择器</button><button class='danger' onclick='window.close()'>关闭</button><span id='status'></span></div></header>
 <main><iframe src='/api/icloud/adapters/{safe_id}/proxy' title='公网页面选择器'></iframe></main>
-<script>let current='';const status=document.querySelector('#status');if(window.opener){{try{{window.resizeTo(1120,780)}}catch(_){{}}}}async function saveSelector(selector){{selector=String(selector||'').trim();if(!selector){{status.textContent='请先点击验证码元素';return}}const r=await fetch('/api/icloud/adapters/{safe_id}/selector',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{selector}})}});const d=await r.json();status.textContent=r.ok?'已保存，后续同域名地址自动复用':(d.error||'保存失败');}}window.addEventListener('message',e=>{{if(!e.data||e.data.type!=='icloud-adapter-selector'||e.data.adapterId!=={json.dumps(safe_id)})return;current=e.data.selector||'';document.querySelector('#selected').textContent=current+(e.data.sample?' · '+e.data.sample:'');document.querySelector('#save').disabled=!current;status.textContent='已选中验证码元素';}});document.querySelector('#save').onclick=()=>saveSelector(current);document.querySelector('#saveManual').onclick=()=>saveSelector(document.querySelector('#manual').value);</script>""", mimetype="text/html")
+        <script>let current='';const status=document.querySelector('#status');if(window.opener){{try{{window.resizeTo(1120,780)}}catch(_){{}}}}async function saveSelector(selector){{selector=String(selector||'').trim();if(!selector){{status.textContent='请先点击验证码元素';return}}const r=await fetch('/api/icloud/adapters/{safe_id}/selector',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{selector}})}});const d=await r.json();status.textContent=r.ok?'已保存，后续同域名地址自动复用':(d.error||'保存失败');}}window.addEventListener('message',e=>{{if(!e.data||e.data.type!=='icloud-adapter-selector'||e.data.adapterId!=={json.dumps(safe_id)})return;current=e.data.selector||'';document.querySelector('#selected').textContent=current+(e.data.sample?' · '+e.data.sample:'');document.querySelector('#save').disabled=!current;status.textContent='已选中验证码元素';}});document.querySelector('#save').onclick=()=>saveSelector(current);document.querySelector('#saveManual').onclick=()=>saveSelector(document.querySelector('#manual').value);</script>""", mimetype="text/html")
+
+    @app.post("/api/icloud/adapters/<adapter_id>/browser")
+    def api_icloud_adapter_browser(adapter_id: str):
+        from core.icloud_adapter import get_adapter
+        from core.icloud_adapter_browser import launch_public_adapter
+
+        item = get_adapter(adapter_id)
+        if not item:
+            return jsonify({"ok": False, "error": "适配地址不存在"}), 404
+        try:
+            result = launch_public_adapter(str(item["id"]), str(item["url"]))
+            return jsonify(result)
+        except Exception as exc:
+            logger.exception("启动 iCloud 公网适配浏览器失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 503
 
     @app.get("/api/icloud/adapters/<adapter_id>/proxy")
     def api_icloud_adapter_proxy(adapter_id: str):
