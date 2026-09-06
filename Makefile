@@ -9,7 +9,7 @@ check-docker-branch:
 		(echo "Current branch must be $(EXPECTED_GIT_BRANCH)" >&2; exit 1)
 
 docker-build: check-docker-branch
-	docker build --pull -t $(DOCKER_IMAGE):$(TAG) .
+	docker build --pull $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),) -t $(DOCKER_IMAGE):$(TAG) .
 
 docker-push: check-docker-branch
 	DOCKER_IMAGE=$(DOCKER_IMAGE) EXPECTED_GIT_BRANCH=$(EXPECTED_GIT_BRANCH) ./docker-publish.sh $(TAG)

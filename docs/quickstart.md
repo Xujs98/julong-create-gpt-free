@@ -141,7 +141,7 @@ cp .env.example .env  # 已有 .env 时跳过
 make docker-up
 ```
 
-启动后访问 `http://127.0.0.1:5000`。持久化数据位于 `docker-data/`，查看日志可执行 `make docker-logs`。
+启动后访问 `http://127.0.0.1:5566`。持久化数据位于 `docker-data/`，查看日志可执行 `make docker-logs`。
 
 请优先使用 `make docker-up`，它会挂载当前 `.env`。直接使用 `docker run` 时需要显式传入 `--env-file .env`，否则 `WEBUI_AUTH_CODE` 不会进入容器。
 

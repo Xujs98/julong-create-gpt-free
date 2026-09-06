@@ -183,7 +183,7 @@ cp .env.example .env
 make docker-up
 ```
 
-默认访问 `http://127.0.0.1:5000`，运行数据保存在 `docker-data/`。可用 `APP_PORT=8000 make docker-up` 修改宿主机端口。
+默认访问 `http://127.0.0.1:5566`，运行数据保存在 `docker-data/`。可用 `APP_PORT=8000 make docker-up` 修改宿主机端口。
 
 `make docker-up` 会把项目根目录的 `.env` 挂载到容器。若绕过 Compose 直接使用 `docker run`，必须显式添加 `--env-file .env`；否则容器读不到 `WEBUI_AUTH_CODE`，会生成临时授权码。
 
@@ -191,12 +191,12 @@ make docker-up
 
 ```bash
 docker compose ps
-curl -fsS http://127.0.0.1:5000/login >/dev/null && echo 'WebUI OK'
+curl -fsS http://127.0.0.1:5566/login >/dev/null && echo 'WebUI OK'
 docker compose logs -f app
 docker compose down
 ```
 
-> Docker 调用宿主机 Roxy 时，推荐先运行 `./tools/roxy-chromedriver-bridge.sh`，再设置 `ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`。容器会把 Roxy 的原始调试地址交给宿主机 macOS Chromedriver，避免跨系统自动化链路触发 Auth/挑战差异；本机部署仍保持原有 Selenium 路径。Docker 详细配置见[完整部署指南](docs/deployment.md)。
+> Docker 调用宿主机 Roxy：先在 macOS 宿主机运行 `./tools/roxy-chromedriver-bridge.sh`，再在 `.env` 设置 `REGISTRATION_DRIVER=roxy`、`ROXY_API_BASE=http://host.docker.internal:50000`、`ROXY_DEBUGGER_HOST=host.docker.internal` 和 `ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`，最后执行 `docker compose up -d --build --force-recreate`。容器会把 Roxy 原始调试地址交给宿主机 Chromedriver；桥接不可用时按 Docker CPU 架构回退到 `linux64` 或 `linux-arm64` 驱动。本机部署仍保持原有 Selenium 路径。Docker 详细配置见[完整部署指南](docs/deployment.md)。
 
 已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `main`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
 
