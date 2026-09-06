@@ -216,6 +216,26 @@ def _is_docker_roxy_session(driver) -> bool:
         return False
 
 
+def _email_submit_recovery_delay(driver) -> float:
+    """Return the delay before the NextAuth fallback is allowed.
+
+    A Docker worker controls the host Roxy tab through a second CDP hop.  The
+    email form can therefore remain on ``/auth/login?email=...`` while the
+    browser is already completing its normal SPA navigation.  The native path
+    keeps its historical 2-second fallback; only Docker + Roxy gets a longer
+    observation window so the fallback does not create a second auth flow.
+    """
+    return 25.0 if _is_docker_roxy_session(driver) else 2.0
+
+
+def _email_submit_wait_timeout(driver, timeout: int) -> int:
+    """Give remote Docker CDP enough time to observe the natural navigation."""
+    requested = max(1, int(timeout or 1))
+    if _is_docker_roxy_session(driver):
+        return max(requested, 45)
+    return requested
+
+
 def _apply_browser_automation_mask(driver) -> None:
     """连接 Selenium 后尽量降低明显自动化特征；失败不影响主流程。"""
     if not _browser_actions_enabled():
@@ -1263,7 +1283,19 @@ def _recover_email_authorize_once(driver, email: str) -> dict:
             "%s UI 提交停滞，站内授权接口返回成功：stage=%s status=%s，执行一次授权跳转",
             _log_prefix(driver), summary["stage"], status or "-",
         )
-        driver.get(url)
+        if _is_docker_roxy_session(driver):
+            # The remote CDP hop can report a stale document while Roxy is
+            # still changing targets.  Use the existing navigation retry
+            # path for Docker, while keeping native behavior byte-for-byte.
+            _safe_get(
+                driver,
+                url,
+                timeout=45,
+                attempts=2,
+                accept_hosts=("auth.openai.com", "chatgpt.com"),
+            )
+        else:
+            driver.get(url)
         return summary
     logger.warning("%s UI 提交停滞，站内授权诊断=%s", _log_prefix(driver), summary)
     return summary
@@ -1302,7 +1334,9 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     这里对 email_cleared 做去抖：只记录并继续观察几秒；若期间进入
     password/otp/login_password/logged_in 则按真实状态返回，持续清空才让上层重试。
     """
-    end = time.time() + timeout
+    docker_roxy = _is_docker_roxy_session(driver)
+    recovery_delay = _email_submit_recovery_delay(driver)
+    end = time.time() + _email_submit_wait_timeout(driver, timeout)
     last = None
     cleared_seen_at: float | None = None
     cleared_last_log_at = 0.0
@@ -1354,14 +1388,19 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
                 if cleared_seen_at is None:
                     cleared_seen_at = now
                 # URL 已带 email 查询参数时更像是提交后的中间态，给它更长观察窗口。
-                debounce = 18.0 if ("/auth/login" in url and "email=" in url) else 5.0
+                if docker_roxy:
+                    # Keep the normal auth SPA navigation ahead of the
+                    # fallback.  This is intentionally Docker-only.
+                    debounce = 32.0
+                else:
+                    debounce = 18.0 if ("/auth/login" in url and "email=" in url) else 5.0
                 if now - cleared_last_log_at > 2.0:
                     logger.info(
                         "%s 邮箱提交后检测到输入框短暂清空，继续等待跳转：elapsed=%.1fs debounce=%.1fs url=%s",
                         _log_prefix(driver), now - cleared_seen_at, debounce, url[:180],
                     )
                     cleared_last_log_at = now
-                if not authorize_recover_done and "/auth/login" in url and "email=" in url and now - cleared_seen_at >= 2.0:
+                if not authorize_recover_done and "/auth/login" in url and "email=" in url and now - cleared_seen_at >= recovery_delay:
                     authorize_diagnostic = _recover_email_authorize_once(driver, email)
                     authorize_recover_done = True
                     if authorize_diagnostic.get("riskSignal"):
@@ -1370,7 +1409,7 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
                         # 授权接口成功后已执行一次明确跳转，不再重填或补交表单。
                         end = max(end, time.time() + timeout)
                         cleared_seen_at = None
-                        time.sleep(0.8)
+                        time.sleep(1.5 if docker_roxy else 0.8)
                         continue
                 if now - cleared_seen_at >= debounce:
                     return "email_stuck" if authorize_recover_done else "email_cleared"
