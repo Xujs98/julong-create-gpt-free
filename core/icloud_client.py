@@ -87,6 +87,59 @@ _MAILBOX_SHELL_MARKERS = (
 _SIX_DIGIT_RE = re.compile(r"\b(\d{6})\b")
 
 
+def _looks_like_spa_page(body: str) -> bool:
+    """Detect a JavaScript shell whose useful mailbox DOM is rendered later."""
+    text = str(body or "").lower()
+    return bool(
+        "<script" in text
+        and re.search(r"<(?:div|main|section)[^>]+id=[\"'](?:root|app|app-root|__next)[\"']", text)
+    )
+
+
+class _PlaywrightOtpReader:
+    """Headless browser fallback for SPA pickup pages without a JSON API."""
+
+    def __init__(self, url: str, timeout: int):
+        self.url = url
+        self.timeout = max(5, int(timeout or 20))
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._page = None
+
+    def _ensure_page(self):
+        if self._page is not None and not self._page.is_closed():
+            return self._page
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=True)
+        self._context = self._browser.new_context(
+            user_agent="Mozilla/5.0 (compatible; iCloudMail/1.0)"
+        )
+        self._page = self._context.new_page()
+        return self._page
+
+    def fetch(self) -> str:
+        page = self._ensure_page()
+        page.goto(self.url, wait_until="domcontentloaded", timeout=self.timeout * 1000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=min(8000, self.timeout * 1000))
+        except Exception:
+            pass
+        return page.content()
+
+    def close(self) -> None:
+        for resource in (self._context, self._browser, self._playwright):
+            if resource is None:
+                continue
+            try:
+                resource.close() if resource is not self._playwright else resource.stop()
+            except Exception:
+                pass
+        self._page = self._context = self._browser = self._playwright = None
+
+
 def _mailbox_data_url(code_url: str, page_body: str) -> str | None:
     """识别动态邮箱页面，并生成页面脚本实际请求的 /data 地址。"""
     body = str(page_body or "")
@@ -103,6 +156,22 @@ def _mailbox_data_url(code_url: str, page_body: str) -> str | None:
     return urlunsplit((parsed.scheme, parsed.netloc, f"{path}/data", "", ""))
 
 
+def _mailbox_api_url(code_url: str, page_body: str) -> str | None:
+    """识别 Remail 类 SPA 取件页对应的 JSON API 地址。"""
+    body = str(page_body or "")
+    try:
+        parsed = urlsplit(str(code_url or ""))
+    except Exception:
+        return None
+    path = (parsed.path or "").rstrip("/")
+    host = (parsed.hostname or "").lower()
+    if not path.startswith("/pickup"):
+        return None
+    if "remail" not in host and not re.search(r"<title[^>]*>\s*Remail\b|remail_console", body, re.IGNORECASE):
+        return None
+    return urlunsplit((parsed.scheme, parsed.netloc, f"/v1{path}", parsed.query, ""))
+
+
 def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
     """从动态邮箱页面的 JSON 数据中按时间倒序读取最新验证码。"""
     if not isinstance(payload, dict):
@@ -114,10 +183,13 @@ def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
     messages = payload.get("messages")
     if isinstance(messages, list):
         candidates.extend(item for item in messages if isinstance(item, dict))
+    items = payload.get("items")
+    if isinstance(items, list):
+        candidates.extend(item for item in items if isinstance(item, dict))
 
     def msg_ts(item: dict) -> float:
         return _parse_generic_api_ts(
-            item.get("received_at") or item.get("receivedAt") or item.get("time") or item.get("date")
+            item.get("received_at") or item.get("receivedAt") or item.get("received_at_ts") or item.get("time") or item.get("date")
         ) or 0.0
 
     candidates.sort(key=msg_ts, reverse=True)
@@ -125,12 +197,22 @@ def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
         timestamp = msg_ts(item)
         if after_ts and timestamp and timestamp + 2 < after_ts:
             continue
-        raw_code = item.get("code") or item.get("otp") or item.get("verification_code")
+        raw_code = (
+            item.get("code")
+            or item.get("otp")
+            or item.get("verification_code")
+            or item.get("verificationCode")
+        )
         code = _SIX_DIGIT_RE.search(str(raw_code or ""))
         if code:
             return code.group(1)
 
-        html_body = str(item.get("html_body") or item.get("htmlBody") or "")
+        html_body = str(
+            item.get("html_body")
+            or item.get("htmlBody")
+            or item.get("bodyPreview")
+            or ""
+        )
         body = str(item.get("body") or item.get("text") or "")
         code_value = (
             _extract_html_selector_code(html_body)
@@ -174,6 +256,8 @@ def fetch_latest_otp(
     settle_until: float | None = None
     last_excluded_logged: str | None = None
     last_error = ""
+    rendered_reader: _PlaywrightOtpReader | None = None
+    rendered_unavailable = False
     logger.info("[iCloud] 开始轮询 HTML 取码地址: %s", email)
 
     while time.time() < deadline:
@@ -188,10 +272,12 @@ def fetch_latest_otp(
                 adapter_selectors = selectors_for_url(account.code_url)
                 code = _extract_html_selector_code(body, adapter_selectors or None)
                 data_url = _mailbox_data_url(account.code_url, body)
-                if not code and data_url:
+                api_url = _mailbox_api_url(account.code_url, body)
+                json_url = data_url or api_url
+                if not code and json_url:
                     try:
                         data_response = requests.get(
-                            data_url,
+                            json_url,
                             headers={**headers, "Accept": "application/json,text/plain,*/*"},
                             timeout=timeout,
                             verify=verify,
@@ -203,16 +289,35 @@ def fetch_latest_otp(
                                 payload = json.loads(data_response.text or "{}")
                             code = _mailbox_payload_code(payload, after_ts=after_ts)
                             if code:
-                                logger.info("[iCloud] 动态邮箱 /data 提取到验证码=%s", code)
+                                source_name = "/data" if data_url else "/v1/pickup"
+                                logger.info("[iCloud] 动态邮箱 %s 提取到验证码=%s", source_name, code)
                         else:
                             last_error = f"动态邮箱数据 HTTP {data_response.status_code}"
                     except requests.RequestException as exc:
                         last_error = f"动态邮箱数据请求失败: {type(exc).__name__}: {exc}"
                     except (TypeError, ValueError, json.JSONDecodeError) as exc:
                         last_error = f"动态邮箱数据解析失败: {type(exc).__name__}: {exc}"
-                if not code and not data_url:
-                    # 静态 HTML 邮件继续使用带 OpenAI 语义的抽取器，再回退整页识别。
-                    code = _extract_yangyang_openai_code("", body) or _extract_code(body)
+                if not code and not json_url:
+                    # 对没有公开 JSON 接口的 SPA，使用 Playwright 在后端渲染后读取真实 DOM。
+                    if _looks_like_spa_page(body) and not rendered_unavailable:
+                        try:
+                            if rendered_reader is None:
+                                rendered_reader = _PlaywrightOtpReader(account.code_url, timeout)
+                            rendered_body = rendered_reader.fetch()
+                            code = _extract_html_selector_code(rendered_body, adapter_selectors or None)
+                            if not code:
+                                code = _extract_yangyang_openai_code("", rendered_body) or _extract_code(rendered_body)
+                            if code:
+                                logger.info("[iCloud] Playwright 渲染 SPA DOM 提取到验证码=%s", code)
+                        except Exception as exc:
+                            rendered_unavailable = True
+                            last_error = f"Playwright 渲染失败: {type(exc).__name__}: {exc}"
+                            if rendered_reader is not None:
+                                rendered_reader.close()
+                                rendered_reader = None
+                    if not code:
+                        # 静态 HTML 邮件继续使用带 OpenAI 语义的抽取器，再回退整页识别。
+                        code = _extract_yangyang_openai_code("", body) or _extract_code(body)
                 if code:
                     # HTML 取码页只暴露“当前验证码”，没有邮件时间戳；2FA 重认证时
                     # 必须显式排除注册阶段已经使用过的验证码，等待页面更新为新码。
@@ -236,9 +341,13 @@ def fetch_latest_otp(
 
         now = time.time()
         if best and settle_until is not None and now >= settle_until:
+            if rendered_reader is not None:
+                rendered_reader.close()
             return best
         time.sleep(min(interval, max(0.1, deadline - now)))
 
+    if rendered_reader is not None:
+        rendered_reader.close()
     if best:
         logger.warning("[iCloud] 轮询超时但已有验证码，返回候选=%s", best)
         return best

@@ -104,6 +104,55 @@ def test_fetch_latest_otp_prefers_url_adapter_selector(monkeypatch):
     ) == "482931"
 
 
+def test_fetch_latest_otp_reads_remail_spa_json_api(monkeypatch):
+    account = icloud_client.ICloudEmailAccount(
+        email="sample@icloud.com",
+        code_url="https://remail.example/pickup?email=sample%40icloud.com&token=st_test",
+    )
+    shell = Mock(status_code=200, text='<title>Remail - 轻松收码</title><div id="root"></div>')
+    api = Mock(
+        status_code=200,
+        text='{"items":[{"receivedAt":"2026-09-07T03:40:03+08:00","verificationCode":"087490"}]}',
+    )
+    api.json.return_value = {"items": [{"receivedAt": "2026-09-07T03:40:03+08:00", "verificationCode": "087490"}]}
+    monkeypatch.setattr(icloud_client, "get_account_context", lambda _email: account)
+    monkeypatch.setattr(icloud_client, "selectors_for_url", lambda _url: [".ui-code span"])
+    calls = []
+
+    def get(url, *args, **kwargs):
+        calls.append(url)
+        return shell if len(calls) == 1 else api
+
+    monkeypatch.setattr(icloud_client.requests, "get", get)
+
+    assert icloud_client.fetch_latest_otp(account.email, max_wait=2, poll_interval=1, settle_seconds=0) == "087490"
+    assert calls[1] == "https://remail.example/v1/pickup?email=sample%40icloud.com&token=st_test"
+
+
+def test_fetch_latest_otp_renders_generic_spa_with_playwright_fallback(monkeypatch):
+    account = icloud_client.ICloudEmailAccount(
+        email="sample@icloud.com", code_url="https://provider.example/pickup/token"
+    )
+    shell = Mock(status_code=200, text='<div id="app"></div><script src="/app.js"></script>')
+    monkeypatch.setattr(icloud_client, "get_account_context", lambda _email: account)
+    monkeypatch.setattr(icloud_client, "selectors_for_url", lambda _url: [".ui-code span"])
+    monkeypatch.setattr(icloud_client.requests, "get", lambda *args, **kwargs: shell)
+
+    class FakeReader:
+        def __init__(self, url, timeout):
+            assert url == account.code_url
+
+        def fetch(self):
+            return '<div class="ui-code"><span>654321</span></div>'
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(icloud_client, "_PlaywrightOtpReader", FakeReader)
+
+    assert icloud_client.fetch_latest_otp(account.email, max_wait=2, poll_interval=1, settle_seconds=0) == "654321"
+
+
 def test_adapter_delete_removes_saved_url(tmp_path, monkeypatch):
     monkeypatch.setattr(icloud_adapter, "_ADAPTER_FILE", tmp_path / "adapters.json")
     item = icloud_adapter.add_adapter("https://remail.example/pickup")

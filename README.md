@@ -312,7 +312,7 @@ EMAIL_SOURCE = "outlook,icloud,generic_api"
 
 「配置 → 邮箱 / OTP → iCloud 邮箱」还提供 HTML 接码地址适配器：输入并添加接码 URL 后，点击列表中的“开始适配”，项目会启动可见浏览器并直接打开该公网 URL；在页面中点击验证码元素后会自动生成并保存完整 CSS 选择器。选择器按商家域名复用，同一域名后续更换邮箱、token 或路径时会自动使用已保存规则；删除适配记录后自动回退到通用六位验证码识别。桌面运行环境需要安装 Playwright Chromium；Docker 无图形桌面时使用“公网”按钮直接查看页面，适配操作建议在桌面运行端执行。
 
-如果不同 HTML 接码网站把验证码放在不同的元素中，可在「配置 → 邮箱 / OTP → 通用邮箱 / OTP」填写 `HTML_OTP_SELECTORS`，每行一个选择器。支持 `#otp`、`.verification-code`、`id=otp`、`class=verification-code`、`span#otp`、`div.code.highlight` 等写法；系统按顺序读取命中的元素文本，再回退到整页通用识别。对于首屏只有占位符、由脚本请求 `/data` 后填充验证码的邮箱页面，也会自动读取该数据接口。该配置同时适用于 `icloud` 和返回 HTML 的 `generic_api` 邮箱来源。
+如果不同 HTML 接码网站把验证码放在不同的元素中，可在「配置 → 邮箱 / OTP → 通用邮箱 / OTP」填写 `HTML_OTP_SELECTORS`，每行一个选择器。支持 `#otp`、`.verification-code`、`id=otp`、`class=verification-code`、`span#otp`、`div.code.highlight` 等写法，也支持从浏览器 DevTools 复制的完整后代选择器；系统按顺序读取命中的元素文本，再回退到整页通用识别。对于首屏只有占位符、由脚本请求 `/data` 或 JSON API 后填充验证码的邮箱页面，会自动读取对应数据接口；没有公开 JSON 接口时，iCloud 客户端会使用 Playwright Chromium 渲染 SPA 后再读取真实 DOM。该配置同时适用于 `icloud` 和返回 HTML 的 `generic_api` 邮箱来源。
 
 #### GPTMail 临时邮箱
 
