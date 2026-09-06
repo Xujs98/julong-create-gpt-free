@@ -211,11 +211,10 @@ REGISTRATION_TRAFFIC_MODE=stable
 macOS 命名空间，注册页面的指纹和本机部署一致。桥接未配置时，程序仍可回退到
 容器内匹配版本的 Linux Chromedriver，但跨系统附着会保留额外的 Auth/挑战风险。
 
-Docker 的 Roxy 会话同样执行「注册模式」对应的 CDP 请求规则。默认仍从
+Docker 的 Roxy 会话同样执行「注册模式」对应的 CDP 请求规则。注册固定从
 `chatgpt.com/auth/login` 进入，以保留完整 OAuth/挑战上下文；OAuth 回调进入
 ChatGPT 后会停止非必要的首页资源下载，再读取 `/api/auth/session`，核心 Auth、
-Sentinel 和挑战请求保持放行。需要测试其他入口时可通过 `ROXY_START_URL` 覆盖，
-提交邮箱失败会自动回退到 `ROXY_START_URL_FALLBACK`。
+Sentinel 和挑战请求保持放行。
 
 启动 RoxyBrowser 后重建应用：
 

@@ -14,16 +14,6 @@ def test_docker_roxy_installs_same_safe_traffic_rules_as_native():
     install.assert_called_once_with(driver, label="Roxy")
 
 
-def test_roxy_start_url_uses_lightweight_auth_page_with_compatibility_fallback():
-    with patch.object(roxy_registration._cfg, "ROXY_START_URL", "https://chatgpt.com/auth/login"), patch.object(
-        roxy_registration._cfg, "ROXY_START_URL_FALLBACK", "https://chatgpt.com/auth/login"
-    ):
-        assert roxy_registration._roxy_start_urls() == (
-            "https://chatgpt.com/auth/login",
-            "https://chatgpt.com/auth/login",
-        )
-
-
 def test_chatgpt_callback_stops_optional_spa_downloads_before_session_read():
     driver = type("Driver", (), {})()
     driver.execute_cdp_cmd = Mock()

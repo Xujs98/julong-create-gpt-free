@@ -483,10 +483,6 @@ EDITABLE_FIELDS = [
         "label": "Roxy 环境ID", "help": "指定要打开的 Roxy 浏览器环境/Profile ID；留空则尝试创建临时环境",
     },
     {
-        "key": "ROXY_START_URL", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
-        "label": "Roxy 注册起始页", "help": "默认直达 Auth 注册页以跳过 ChatGPT 大型首屏资源；失败时自动回退传统登录页",
-    },
-    {
         "key": "ROXY_WORKSPACE_ID", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
         "label": "Roxy 工作区ID", "help": "创建一号一环境时必填，会作为 workspaceId 提交给 Roxy 创建 Profile 接口",
     },
