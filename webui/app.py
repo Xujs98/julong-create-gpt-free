@@ -3691,6 +3691,67 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
     # ----------------------------------------------------------
+    # iCloud HTML 取码地址适配器
+    # ----------------------------------------------------------
+    @app.get("/api/icloud/adapters")
+    def api_icloud_adapters():
+        from core.icloud_adapter import list_adapters
+        return jsonify({"ok": True, "items": list_adapters()})
+
+    @app.post("/api/icloud/adapters")
+    def api_icloud_adapter_add():
+        from core.icloud_adapter import add_adapter
+        data = request.get_json(silent=True) or {}
+        try:
+            return jsonify({"ok": True, "item": add_adapter(data.get("url") or "")})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.delete("/api/icloud/adapters/<adapter_id>")
+    def api_icloud_adapter_delete(adapter_id: str):
+        from core.icloud_adapter import delete_adapter
+        if not delete_adapter(adapter_id):
+            return jsonify({"ok": False, "error": "适配地址不存在"}), 404
+        return jsonify({"ok": True})
+
+    @app.get("/api/icloud/adapters/<adapter_id>/adapt")
+    def api_icloud_adapter_workspace(adapter_id: str):
+        from core.icloud_adapter import get_adapter
+        item = get_adapter(adapter_id)
+        if not item:
+            return "适配地址不存在", 404
+        safe_id = str(item["id"])
+        return Response(f"""<!doctype html><meta charset='utf-8'><title>iCloud HTML 适配</title>
+<style>body{{font:14px system-ui;margin:0;background:#f5f7fa;color:#17202a}}header{{padding:16px 22px;background:#fff;border-bottom:1px solid #dfe5ec}}main{{padding:18px}}iframe{{width:100%;height:calc(100vh - 150px);border:1px solid #cbd5e1;background:#fff}}button{{padding:8px 14px;margin-right:8px}}#selected{{font-family:monospace;color:#08785f}}</style>
+<header><b>iCloud HTML 接码适配</b><div>请在下方页面点击验证码所在元素，然后保存选择器。</div><div>当前选择器：<span id='selected'>尚未选择</span> <button id='save' disabled>保存适配</button> <button onclick='window.close()'>关闭</button></div></header>
+<main><iframe src='/api/icloud/adapters/{safe_id}/proxy' title='接码页面'></iframe></main>
+<script>let current='';window.addEventListener('message',e=>{{if(!e.data||e.data.type!=='icloud-adapter-selector'||e.data.adapterId!=={json.dumps(safe_id)})return;current=e.data.selector||'';document.querySelector('#selected').textContent=current+(e.data.sample?' · '+e.data.sample:'');document.querySelector('#save').disabled=!current;}});document.querySelector('#save').onclick=async()=>{{const r=await fetch('/api/icloud/adapters/{safe_id}/selector',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{selector:current}})}});const d=await r.json();if(!r.ok){{alert(d.error||'保存失败');return}};alert('适配已保存');}};</script>""", mimetype="text/html")
+
+    @app.get("/api/icloud/adapters/<adapter_id>/proxy")
+    def api_icloud_adapter_proxy(adapter_id: str):
+        from core.icloud_adapter import fetch_proxy_html
+        try:
+            body, mimetype = fetch_proxy_html(adapter_id)
+            return Response(body, mimetype=mimetype, headers={"Cache-Control": "no-store"})
+        except LookupError as exc:
+            return str(exc), 404
+        except Exception as exc:
+            logger.exception("加载 iCloud 适配页面失败")
+            return f"加载接码页面失败：{type(exc).__name__}: {exc}", 502
+
+    @app.post("/api/icloud/adapters/<adapter_id>/selector")
+    def api_icloud_adapter_selector(adapter_id: str):
+        from core.icloud_adapter import save_selector
+        data = request.get_json(silent=True) or {}
+        try:
+            item = save_selector(adapter_id, data.get("selector") or "")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        if not item:
+            return jsonify({"ok": False, "error": "适配地址不存在"}), 404
+        return jsonify({"ok": True, "item": item})
+
+    # ----------------------------------------------------------
     # 配置读写
     # ----------------------------------------------------------
     @app.get("/api/config")

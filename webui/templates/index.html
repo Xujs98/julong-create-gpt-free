@@ -10622,6 +10622,9 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
   if (name === '邮箱 / OTP' && active === 'CloudMail') {
     extra = renderCloudMailTokenToolsV2();
   }
+  if (name === '邮箱 / OTP' && active === 'iCloud 邮箱') {
+    extra = renderICloudAdapterToolsV2();
+  }
   if (name === '接码平台' && active === 'Codex 接码助手') {
     extra = renderCodexSmsToolsV2();
   }
@@ -10642,6 +10645,60 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
       ${renderConfigSectionActionsV2()}
     </section>
   `;
+}
+function renderICloudAdapterToolsV2() {
+  return `
+    <div class="roxy-workspace-box" style="margin-top:18px;">
+      <div><b>HTML 接码地址适配</b><div class="hint">添加接码 URL 后点击“开始适配”，在打开的页面中点击验证码元素，系统会保存该地址的 CSS 选择器。</div></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+        <input id="icloudAdapterUrlV2" type="url" placeholder="https://example.com/pickup?..." style="flex:1;min-width:0;">
+        <button class="btn primary" type="button" id="btnAddICloudAdapterV2">添加地址</button>
+      </div>
+      <div id="icloudAdapterStatusV2" class="muted" style="font-size:12px;margin-top:8px;"></div>
+      <div id="icloudAdapterListV2" style="margin-top:12px;"></div>
+    </div>
+  `;
+}
+async function loadICloudAdaptersV2() {
+  const list = document.getElementById('icloudAdapterListV2');
+  if (!list) return;
+  try {
+    const result = await api('/api/icloud/adapters');
+    const items = Array.isArray(result.items) ? result.items : [];
+    list.innerHTML = items.length ? items.map(item => `
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:9px 0;border-top:1px solid var(--line,#e5e7eb);">
+        <div style="min-width:0;overflow-wrap:anywhere;font-family:monospace;font-size:12px;">${esc(item.url || '')}</div>
+        <span class="pill ${item.adapted ? 'status-ok' : 'status-pending'}">${item.adapted ? '已适配' : '未适配'}</span>
+        <div style="display:flex;gap:6px;"><a class="btn" target="_blank" rel="noopener" href="/api/icloud/adapters/${encodeURIComponent(item.id)}/adapt">开始适配</a><button class="btn" type="button" data-delete-icloud-adapter="${attrEsc(item.id)}">删除</button></div>
+      </div>
+    `).join('') : '<div class="muted">还没有保存接码地址。</div>';
+  } catch (error) { list.innerHTML = `<div class="banner warn">加载适配地址失败：${esc(error.message)}</div>`; }
+}
+async function addICloudAdapterV2() {
+  const input = document.getElementById('icloudAdapterUrlV2');
+  const status = document.getElementById('icloudAdapterStatusV2');
+  const url = String(input?.value || '').trim();
+  if (!url) { if (status) status.textContent = '请输入接码 HTML 地址'; return; }
+  try {
+    const result = await api('/api/icloud/adapters', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})});
+    if (input) input.value = '';
+    if (status) status.textContent = result.item?.adapted ? '地址已存在，保留原适配' : '地址已添加';
+    await loadICloudAdaptersV2();
+  } catch (error) { if (status) status.textContent = `添加失败：${error.message}`; }
+}
+async function deleteICloudAdapterV2(id) {
+  if (!await appConfirm('确定删除这个 HTML 接码地址吗？')) return;
+  try { await api(`/api/icloud/adapters/${encodeURIComponent(id)}`, {method:'DELETE'}); await loadICloudAdaptersV2(); }
+  catch (error) { const status = document.getElementById('icloudAdapterStatusV2'); if (status) status.textContent = `删除失败：${error.message}`; }
+}
+function bindICloudAdapterToolsV2() {
+  const add = document.getElementById('btnAddICloudAdapterV2');
+  if (add && !add.dataset.bound) { add.dataset.bound = '1'; add.addEventListener('click', addICloudAdapterV2); }
+  document.querySelectorAll('[data-delete-icloud-adapter]').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1'; btn.addEventListener('click', () => deleteICloudAdapterV2(btn.dataset.deleteIcloudAdapter));
+  });
+  loadICloudAdaptersV2();
 }
 function renderCloudMailTokenToolsV2() {
   const hasCloudMail = CONFIG.some(f => String(f.key || '').startsWith('CLOUDMAIL_'));
@@ -10891,6 +10948,7 @@ function renderConfigLayoutV2() {
   renderRegistrationDriverCard();
   bindRoxyWorkspaceToolsV2();
   bindCloudMailToolsV2();
+  bindICloudAdapterToolsV2();
   bindProxyTestToolsV2();
   bindPageAgentToolsV2();
   bindExtractLinkToolsV2();

@@ -18,6 +18,7 @@ from core.generic_api_mail_client import (
     _parse_generic_api_ts,
     _extract_yangyang_openai_code,
 )
+from core.icloud_adapter import selectors_for_url
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,8 @@ def fetch_latest_otp(
                 body = response.text or ""
                 # 部分 HTML 接码站点是 SPA：首屏只有 id="code" 占位符，真实内容由 /data JSON 注入。
                 # 先处理选择器和动态数据，避免整页 CSS 颜色值被误判为六位验证码。
-                code = _extract_html_selector_code(body)
+                adapter_selectors = selectors_for_url(account.code_url)
+                code = _extract_html_selector_code(body, adapter_selectors or None)
                 data_url = _mailbox_data_url(account.code_url, body)
                 if not code and data_url:
                     try:

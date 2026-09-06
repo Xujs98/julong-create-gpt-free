@@ -29,6 +29,15 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertIn('id="regEmailSourceV2"', html)
         self.assertIn('<option value="icloud">iCloud 邮箱</option>', html)
 
+    def test_config_page_exposes_icloud_html_adapter_tools(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("icloudAdapterUrlV2", html)
+        self.assertIn("开始适配", html)
+        self.assertIn("/api/icloud/adapters", html)
+
     def test_registration_driver_status_lists_all_five_modes(self):
         response = self.client.get("/api/registration-drivers/status")
 
