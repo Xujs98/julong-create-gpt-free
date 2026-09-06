@@ -10681,7 +10681,7 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
 function renderICloudAdapterToolsV2() {
   return `
     <div class="roxy-workspace-box" style="margin-top:18px;">
-      <div><b>HTML 接码地址适配</b><div class="hint">每个商家的验证码选择器可以不同。添加 URL 后优先在适配页点击验证码元素；公网页面被商家策略拦截时，可打开公网地址并手动填写 CSS 选择器。</div></div>
+      <div><b>HTML 接码地址适配</b><div class="hint">每个商家的验证码选择器可以不同。添加 URL 后打开适配小窗，直接选择验证码元素即可生成完整选择器；公网页面被商家策略拦截时，可打开公网地址并手动填写 CSS 选择器。</div></div>
       <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
         <input id="icloudAdapterUrlV2" type="url" placeholder="https://example.com/pickup?..." style="flex:1;min-width:0;">
         <button class="btn primary" type="button" id="btnAddICloudAdapterV2">添加地址</button>
@@ -10710,12 +10710,18 @@ async function loadICloudAdaptersV2() {
         <span class="icloud-adapter-status-v2 ${item.adapted ? 'is-ready' : 'is-pending'}">${item.adapted ? '已适配' : '待适配'}</span>
         <div class="icloud-adapter-actions-v2">
           <a class="icloud-adapter-action-v2" target="_blank" rel="noopener" href="${attrEsc(item.url || '')}" title="打开公网接码地址"><svg viewBox="0 0 24 24"><path d="M14 3h7v7M21 3l-9 9"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg><span>公网</span></a>
-          <a class="icloud-adapter-action-v2 is-primary" target="_blank" rel="noopener" href="/api/icloud/adapters/${encodeURIComponent(item.id)}/adapt"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg><span>${item.adapted ? '重新适配' : '开始适配'}</span></a>
+          <button class="icloud-adapter-action-v2 is-primary" type="button" data-adapt-icloud-adapter="${attrEsc(item.id)}"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg><span>${item.adapted ? '重新适配' : '开始适配'}</span></button>
           <button class="icloud-adapter-action-v2 is-danger" type="button" data-delete-icloud-adapter="${attrEsc(item.id)}" title="删除适配规则" aria-label="删除 ${attrEsc(icloudAdapterDomainV2(item.url))}"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button>
         </div>
       </div>
     `).join('') : '<div class="muted">还没有保存接码地址。</div>';
   } catch (error) { list.innerHTML = `<div class="banner warn">加载适配地址失败：${esc(error.message)}</div>`; }
+}
+function openICloudAdapterV2(id) {
+  const url = `/api/icloud/adapters/${encodeURIComponent(id)}/adapt`;
+  const popup = window.open(url, `icloud-adapter-${String(id || '').replace(/[^a-z0-9_-]/gi, '')}`, 'width=1120,height=780,resizable=yes,scrollbars=yes');
+  if (!popup) appAlert('浏览器拦截了适配小窗，请允许本站弹窗后重试。', { title: '需要允许弹窗' });
+  else popup.focus();
 }
 async function addICloudAdapterV2() {
   const input = document.getElementById('icloudAdapterUrlV2');
@@ -10743,6 +10749,8 @@ function bindICloudAdapterToolsV2() {
     list.addEventListener('click', event => {
       const btn = event.target.closest('[data-delete-icloud-adapter]');
       if (btn) deleteICloudAdapterV2(btn.dataset.deleteIcloudAdapter);
+      const adapt = event.target.closest('[data-adapt-icloud-adapter]');
+      if (adapt) openICloudAdapterV2(adapt.dataset.adaptIcloudAdapter);
     });
   }
   loadICloudAdaptersV2();

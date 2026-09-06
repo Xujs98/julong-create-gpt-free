@@ -168,6 +168,14 @@ def fetch_proxy_html(adapter_id: str) -> tuple[str, str]:
     if "html" not in content_type.lower() and "text" not in content_type.lower():
         raise ValueError("接码地址没有返回 HTML/文本页面")
     body = response.text or ""
+    # 商家页面经常自带 frame-src/frame-ancestors CSP，嵌入适配小窗时会直接空白。
+    # 代理只移除文档内的 CSP 声明，外部资源仍按原页面 base URL 加载。
+    body = re.sub(
+        r"<meta[^>]+http-equiv=[\"']?content-security-policy[\"']?[^>]*>",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    )
     base = f'<base href="{html.escape(row["url"], quote=True)}">'
     script = f"""
 <script>
@@ -176,20 +184,21 @@ def fetch_proxy_html(adapter_id: str) -> tuple[str, str]:
   const cssPath = (node) => {{
     if (node.id) return '#' + CSS.escape(node.id);
     const parts = [];
-    while (node && node.nodeType === 1 && node !== document.body) {{
+    while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {{
       let part = node.tagName.toLowerCase();
       if (node.classList.length) part += '.' + Array.from(node.classList).slice(0, 3).map(CSS.escape).join('.');
       const siblings = node.parentElement ? Array.from(node.parentElement.children).filter(x => x.tagName === node.tagName) : [];
-      if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
+      if (siblings.length) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
       parts.unshift(part); node = node.parentElement;
     }}
-    return parts.join(' > ');
+    return parts.join(' > ') || 'body';
   }};
   document.addEventListener('click', (event) => {{
     const target = event.target.closest ? event.target.closest('body *') : event.target;
     if (!target) return;
     event.preventDefault(); event.stopPropagation();
-    window.parent.postMessage({{type:'icloud-adapter-selector', adapterId, selector:cssPath(target), sample:(target.textContent || '').trim().slice(0, 120)}}, '*');
+    const receiver = window.parent !== window ? window.parent : window.opener;
+    if (receiver) receiver.postMessage({{type:'icloud-adapter-selector', adapterId, selector:cssPath(target), sample:(target.textContent || '').trim().slice(0, 120)}}, '*');
   }}, true);
 }})();
 </script>

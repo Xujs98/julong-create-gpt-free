@@ -46,6 +46,27 @@ def test_adapter_reads_legacy_records_without_host_key(tmp_path, monkeypatch):
     assert icloud_adapter.selectors_for_url("https://remail.example/other") == ["#code"]
 
 
+def test_fetch_proxy_html_injects_popup_selector_bridge(tmp_path, monkeypatch):
+    monkeypatch.setattr(icloud_adapter, "_ADAPTER_FILE", tmp_path / "adapters.json")
+    item = icloud_adapter.add_adapter("https://remail.example/pickup")
+    response = Mock(
+        status_code=200,
+        text=(
+            '<html><head><meta http-equiv="Content-Security-Policy" content="frame-ancestors none"></head>'
+            '<body><span id="code">482931</span></body></html>'
+        ),
+        headers={"Content-Type": "text/html"},
+    )
+    monkeypatch.setattr(icloud_adapter.requests, "get", lambda *args, **kwargs: response)
+
+    body, mimetype = icloud_adapter.fetch_proxy_html(item["id"])
+
+    assert mimetype == "text/html; charset=utf-8"
+    assert "Content-Security-Policy" not in body
+    assert "window.parent !== window ? window.parent : window.opener" in body
+    assert "icloud-adapter-selector" in body
+
+
 def test_fetch_latest_otp_prefers_url_adapter_selector(monkeypatch):
     account = icloud_client.ICloudEmailAccount(
         email="sample@icloud.com", code_url="https://remail.example/pickup?token=one"
