@@ -26,6 +26,9 @@ def test_adapter_reuses_selector_for_same_host_different_path(tmp_path, monkeypa
     assert icloud_adapter.selectors_for_url(
         "https://remail.example/pickup/session-b?email=next%40icloud.com"
     ) == [".otp-value"]
+    assert icloud_adapter.selectors_for_url(
+        "http://remail.example/pickup/session-c?email=other%40icloud.com"
+    ) == [".otp-value"]
 
 
 def test_adapter_reads_legacy_records_without_host_key(tmp_path, monkeypatch):

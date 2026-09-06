@@ -58,7 +58,12 @@ def url_key(value: str) -> str:
 
 def host_key(value: str) -> str:
     parsed = urlsplit(normalize_url(value))
-    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+    hostname = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return f"{hostname}:{port}" if port else hostname
 
 
 def list_adapters() -> list[dict]:
