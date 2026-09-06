@@ -50,6 +50,14 @@ class HtmlOtpSelectorTests(unittest.TestCase):
             "936885",
         )
 
+    def test_selector_targets_unclassified_paragraph_code(self):
+        """Remail-style messages place the OTP in a plain, unclassified <p>."""
+        html = "<p>输入此临时验证码以继续：</p><p>325085</p>"
+        self.assertEqual(
+            generic_api_mail_client._extract_html_selector_code(html, ["p"]),
+            "325085",
+        )
+
     @patch("core.icloud_client.requests.get")
     @patch("core.icloud_client.get_account_context")
     def test_icloud_prefers_configured_element_over_page_noise(self, get_context, request_get):
