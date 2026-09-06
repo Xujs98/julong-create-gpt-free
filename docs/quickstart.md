@@ -149,7 +149,9 @@ Docker 容器内的 `127.0.0.1` 不指向宿主机。使用 Roxy 时，先在 ma
 `./tools/roxy-chromedriver-bridge.sh`，并设置
 `ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`。Docker 随后通过宿主机
 macOS Chromedriver 附着 Roxy，避免 Linux Chromedriver 与 macOS Roxy 的跨系统差异；
-本机部署会忽略该 Docker 专用变量。
+本机部署会忽略该 Docker 专用变量。`REGISTRATION_TRAFFIC_MODE=stable` 在 Docker/Roxy
+中也会启用 CDP 流量规则；默认保留 ChatGPT OAuth 入口，OAuth 回调后停止非必要
+SPA 资源，异常时自动回退传统登录页。
 
 构建并推送到预设 Docker Hub 仓库（命令会校验当前为 `main` 分支）：
 

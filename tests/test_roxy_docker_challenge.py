@@ -1,17 +1,38 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from core import roxy_registration
 from core.roxybrowser_client import RoxyBrowserClient
 
 
-def test_docker_roxy_keeps_cloudflare_resources_unblocked():
+def test_docker_roxy_installs_same_safe_traffic_rules_as_native():
     driver = object()
     with patch("core.roxy_selenium._running_in_container", return_value=True), patch(
         "core.traffic_optimizer.install_selenium_network_optimization"
     ) as install:
         roxy_registration._install_registration_traffic_optimization(driver)
 
-    install.assert_not_called()
+    install.assert_called_once_with(driver, label="Roxy")
+
+
+def test_roxy_start_url_uses_lightweight_auth_page_with_compatibility_fallback():
+    with patch.object(roxy_registration._cfg, "ROXY_START_URL", "https://chatgpt.com/auth/login"), patch.object(
+        roxy_registration._cfg, "ROXY_START_URL_FALLBACK", "https://chatgpt.com/auth/login"
+    ):
+        assert roxy_registration._roxy_start_urls() == (
+            "https://chatgpt.com/auth/login",
+            "https://chatgpt.com/auth/login",
+        )
+
+
+def test_chatgpt_callback_stops_optional_spa_downloads_before_session_read():
+    driver = type("Driver", (), {})()
+    driver.execute_cdp_cmd = Mock()
+    driver.execute_script = Mock()
+
+    roxy_registration._stop_chatgpt_document_loading(driver)
+
+    driver.execute_cdp_cmd.assert_called_once_with("Page.stopLoading", {})
+    driver.execute_script.assert_called_once_with("window.stop();")
 
 
 def test_docker_roxy_email_submit_waits_before_authorize_fallback():

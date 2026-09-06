@@ -80,14 +80,23 @@ def _build_driver(opened: RoxyOpenResult):
 def _install_registration_traffic_optimization(driver) -> None:
     """安装 Roxy 注册阶段的 CDP URL 阻断；失败时保持原始请求。"""
     try:
-        from core.roxy_selenium import _running_in_container
-        if _running_in_container():
-            logger.info("[Roxy] Docker 环境跳过注册流量拦截，保留 Cloudflare 挑战资源")
-            return
         from core.traffic_optimizer import install_selenium_network_optimization
         install_selenium_network_optimization(driver, label="Roxy")
     except Exception as exc:
         logger.debug("[Roxy] 注册流量优化未安装：%s: %s", type(exc).__name__, str(exc)[:180])
+
+
+def _roxy_start_urls() -> tuple[str, str]:
+    """Return the optimized Auth start URL and its compatibility fallback."""
+    primary = str(
+        getattr(_cfg, "ROXY_START_URL", "https://auth.openai.com/create-account/")
+        or "https://auth.openai.com/create-account/"
+    ).strip()
+    fallback = str(
+        getattr(_cfg, "ROXY_START_URL_FALLBACK", "https://chatgpt.com/auth/login")
+        or "https://chatgpt.com/auth/login"
+    ).strip()
+    return primary, fallback
 
 
 def _center_browser_window(driver) -> None:
@@ -2806,6 +2815,25 @@ def _read_chatgpt_session_once(driver) -> dict | None:
     return None
 
 
+def _stop_chatgpt_document_loading(driver) -> None:
+    """Stop optional ChatGPT SPA assets once the OAuth callback is present.
+
+    The callback sets the session cookie server-side; the full home-page
+    bundle is not required to read ``/api/auth/session``.  Stopping that
+    document is best-effort and the session fetch below remains the source of
+    truth, so a driver/CDP implementation that rejects the command is safe.
+    """
+    try:
+        if hasattr(driver, "execute_cdp_cmd"):
+            driver.execute_cdp_cmd("Page.stopLoading", {})
+    except Exception:
+        pass
+    try:
+        driver.execute_script("window.stop();")
+    except Exception:
+        pass
+
+
 def _switch_to_chatgpt_window_if_any(driver) -> bool:
     """有些浏览器/适配层会在新窗口完成 callback；尝试切到已有 chatgpt.com 句柄。"""
     try:
@@ -2843,6 +2871,7 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
     auto_jump_end = time.time() + max(3, int(auto_jump_wait or 15))
     last_data = None
     forced_chatgpt_open = False
+    stopped_chatgpt_document = False
 
     while time.time() < end:
         try:
@@ -2867,6 +2896,9 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
                 continue
 
         if 'chatgpt.com' in current:
+            if not stopped_chatgpt_document:
+                _stop_chatgpt_document_loading(driver)
+                stopped_chatgpt_document = True
             try:
                 data = _read_chatgpt_session_once(driver)
                 if data:
@@ -2927,10 +2959,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         logger.info("[Roxy注册] 开始：%s，profile=%s", email, opened.profile_id)
 
         otp_after_ts = time.time()
-        logger.info("[Roxy注册] 打开登录页：https://chatgpt.com/auth/login")
+        start_url, fallback_start_url = _roxy_start_urls()
+        logger.info("[Roxy注册] 打开注册页：%s", start_url)
         _safe_get(
             driver,
-            "https://chatgpt.com/auth/login",
+            start_url,
             timeout=min(45, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
             attempts=2,
             accept_hosts=("chatgpt.com", "auth.openai.com"),
@@ -2948,7 +2981,34 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
 
         # 填邮箱。OpenAI UI 会随出口 IP/语言变化；这里只按 DOM 技术属性找邮箱入口，
         # 并排除 Google/Apple/Microsoft 等第三方入口，不依赖按钮可见文字。
-        next_state = _submit_email_and_wait_next(driver, email, attempts=3)
+        try:
+            next_state = _submit_email_and_wait_next(driver, email, attempts=3)
+        except Exception as primary_exc:
+            # Keep a compatibility path for older Roxy/Auth combinations or
+            # deployments that override the start page with a stale route.
+            if not fallback_start_url or fallback_start_url == start_url:
+                raise
+            logger.warning(
+                "[Roxy注册] 起始注册页未完成邮箱提交，回退备用地址：%s；原因=%s: %s",
+                fallback_start_url,
+                type(primary_exc).__name__,
+                str(primary_exc)[:180],
+            )
+            _safe_get(
+                driver,
+                fallback_start_url,
+                timeout=min(45, int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)),
+                attempts=2,
+                accept_hosts=("chatgpt.com", "auth.openai.com"),
+            )
+            human_delay("navigate")
+            _wait_for_cloudflare_challenge(
+                driver,
+                timeout=int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90),
+                headless=bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False)),
+            )
+            _maybe_accept(driver)
+            next_state = _submit_email_and_wait_next(driver, email, attempts=3)
         _wait_for_cloudflare_challenge(
             driver,
             timeout=int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90),
