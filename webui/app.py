@@ -33,6 +33,19 @@ _IMPORT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _IMPORT_URL_RE = re.compile(r"^(?:https?://|data:)[^\s]+$", re.IGNORECASE)
 
 
+def _normalize_import_value(value: str, *, url: bool = False) -> str:
+    """Normalize copied Markdown/escaped values before email-pool validation."""
+    text = str(value or "").strip()
+    if url:
+        markdown = re.fullmatch(r"\[[^\]]*\]\((https?://[^)\s]+)\)", text, re.IGNORECASE)
+        if markdown:
+            text = markdown.group(1).strip()
+        elif text.startswith("<") and text.endswith(">"):
+            text = text[1:-1].strip()
+    # Chat/Markdown exports commonly escape @, _, &, and URL punctuation.
+    return re.sub(r"\\([@_&?=:/%.#-])", r"\1", text)
+
+
 def _parse_email_import_text(text: str, source: str) -> dict:
     """解析并校验邮箱素材，返回统计信息、有效记录及逐行错误。"""
     source = str(source or "").strip().lower()
@@ -50,12 +63,13 @@ def _parse_email_import_text(text: str, source: str) -> dict:
         errors = []
         if len(parts) < expected:
             errors.append(f"字段不足（需要至少 {expected} 段）")
-        email = parts[0] if parts else ""
+        email = _normalize_import_value(parts[0] if parts else "")
+        code_url = _normalize_import_value(parts[1], url=True) if len(parts) >= 2 else ""
         if not _IMPORT_EMAIL_RE.fullmatch(email):
             errors.append("邮箱格式有误")
         if delimiter and any(not part for part in parts[:expected]):
             errors.append("必填字段不能为空")
-        if source in ("generic_api", "icloud", "cloudflare_domain") and len(parts) >= 2 and not _IMPORT_URL_RE.fullmatch(parts[1]):
+        if source in ("generic_api", "icloud", "cloudflare_domain") and len(parts) >= 2 and not _IMPORT_URL_RE.fullmatch(code_url):
             errors.append("取码地址需为 http(s) 或 data 地址")
         if errors:
             invalid.append({"line": line_no, "text": line, "email": email, "errors": errors})
@@ -63,7 +77,7 @@ def _parse_email_import_text(text: str, source: str) -> dict:
         if source in ("generic_api", "icloud", "cloudflare_domain"):
             records.append({
                 "email": email,
-                "code_url": parts[1],
+                "code_url": code_url,
                 "access_token": parts[2] if len(parts) > 2 else "",
                 "totp_secret": parts[3] if len(parts) > 3 else "",
             })

@@ -294,6 +294,14 @@ EMAIL_SOURCE = "outlook,generic_api,mailnest"
 email@icloud.com----https://取码服务地址/token/email@icloud.com
 ```
 
+也支持从聊天工具直接粘贴的 Markdown HTML 接码链接：
+
+```text
+email@icloud.com----[https://取码服务地址/pickup?email=...&token=...](https://取码服务地址/pickup?email=...&token=...)
+```
+
+导入时系统会自动去除 Markdown 链接包装和常见反斜杠转义，只保存括号内的真实 HTTPS 地址。
+
 取码地址应返回 HTML 页面；系统会轮询页面并提取最新六位验证码。然后在「配置 → 邮箱 / OTP → 通用邮箱 / OTP」把来源设为 `icloud`，或加入多来源组合：
 
 ```python

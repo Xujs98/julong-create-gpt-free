@@ -63,6 +63,30 @@ class ICloudWebUiTests(unittest.TestCase):
             }
         ])
 
+    @patch("webui.app.db.import_icloud_emails", return_value=(1, 0))
+    def test_import_route_normalizes_markdown_html_pickup_link(self, import_icloud):
+        response = self.client.post(
+            "/api/outlook/import",
+            json={
+                "source": "icloud",
+                "text": (
+                    "sample.50@icloud.com----"
+                    "[https://remail.example/pickup?email=sample.50%40icloud.com&token=st_test]"
+                    "(https://remail.example/pickup?email=sample.50%40icloud.com\\&token=st_test)"
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        import_icloud.assert_called_once_with([
+            {
+                "email": "sample.50@icloud.com",
+                "code_url": "https://remail.example/pickup?email=sample.50%40icloud.com&token=st_test",
+                "access_token": "",
+                "totp_secret": "",
+            }
+        ])
+
     @patch("webui.app.db.import_icloud_emails")
     def test_import_route_rejects_invalid_material_before_writing(self, import_icloud):
         """待修正素材会整批阻断，且不会调用数据库导入。"""
