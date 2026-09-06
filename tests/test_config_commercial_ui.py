@@ -42,6 +42,18 @@ def test_config_fields_switches_and_section_actions_share_design_system() -> Non
     assert 'data-config-state-v2' in html
 
 
+def test_proxy_mode_panels_are_mutually_exclusive_and_pool_editor_is_stable() -> None:
+    html = source()
+
+    # The selected source must remove the inactive editor from layout and AX tree,
+    # rather than leaving a disabled, drifting control visible below the active one.
+    assert "if (apiPanel) apiPanel.hidden = mode !== 'api';" in html
+    assert "if (poolPanel) poolPanel.hidden = mode === 'api';" in html
+    assert 'class="proxy-pool-editor-v2"' in html
+    assert 'PROXY_API_TIMEOUT' in html
+    assert ".proxy-pool-panel-v2.is-disabled" not in html
+
+
 def test_config_unsaved_changes_can_be_tracked_and_discarded() -> None:
     html = source()
 
