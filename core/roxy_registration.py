@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import string
 import time
 import uuid
@@ -419,8 +420,13 @@ def _cloudflare_challenge_state(driver) -> dict:
         const explicitChallenge = textChallenge
           || /just a moment/i.test(title)
           || /__cf_chl_|\/cdn-cgi\/challenge-platform/i.test(url);
+        // A previous challenge iframe can remain attached after auth moves to
+        // /email-verification. Treat it as a challenge only when the visible
+        // page itself still carries challenge wording; marker-only residue is
+        // common with the Docker/remote-CDP path.
+        const markerChallengeText = /verify|human|challenge|security|turnstile|验证|安全/i.test(`${title} ${visibleText}`);
         const normalAuthPage = authFlow && otpOrPasswordForm && !explicitChallenge
-          && !markers.length;
+          && !markerChallengeText;
         const normalWorkflowPage = normalAuthPage || (registrationProfile && !explicitChallenge);
         const challenge = normalWorkflowPage ? false : strongChallenge;
         return {
@@ -449,9 +455,11 @@ def _cloudflare_challenge_state(driver) -> dict:
             or "__cf_chl_" in state_url
             or "/cdn-cgi/challenge-platform" in state_url
         )
+        marker_text = f"{state.get('title') or ''} {state.get('visibleText') or ''}"
+        marker_challenge_text = bool(re.search(r"verify|human|challenge|security|turnstile|验证|安全", marker_text, re.I))
         normal_auth_page = bool(
             (state.get("normalAuthPage") or (state.get("authFlow") and state.get("otpOrPasswordForm")))
-            and not state.get("markers")
+            and not marker_challenge_text
             and not explicit_challenge
         )
         normal_workflow_page = bool(

@@ -111,6 +111,22 @@ class CloudflareChallengeWaitTests(unittest.TestCase):
         assert state["challenge"] is True
         assert state["normalAuthPage"] is False
 
+    def test_email_verification_with_stale_marker_and_unknown_error_is_not_challenge(self):
+        """Docker remote-CDP may expose a stale iframe and an unknown auth title."""
+        driver = Mock()
+        driver.execute_script.return_value = {
+            "challenge": True,
+            "title": "不明なエラーが発生しました - OpenAI",
+            "url": "https://auth.openai.com/email-verification",
+            "markers": ['iframe[src*="challenges.cloudflare.com"]'],
+            "textChallenge": False,
+            "authFlow": True,
+            "otpOrPasswordForm": True,
+        }
+        state = _cloudflare_challenge_state(driver)
+        assert state["challenge"] is False
+        assert state["normalAuthPage"] is True
+
     def test_headless_mode_fails_with_actionable_message(self):
         driver = Mock()
         driver.execute_script.return_value = {"challenge": True, "title": "Just a moment..."}
