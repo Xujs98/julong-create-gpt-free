@@ -224,11 +224,23 @@ def _cache_dir() -> Path:
     return Path.home() / ".cache" / "turb-gpt-free-register" / "roxy-drivers"
 
 
-def _linux_driver_platform() -> str:
+def _driver_platform() -> str:
+    """Return Chrome for Testing's platform name for this OS/CPU pair."""
+    system = platform.system().lower()
     machine = platform.machine().lower()
-    if machine in {"x86_64", "amd64"}:
-        return "linux64"
-    raise RuntimeError(f"Docker Roxy 自动下载 Chromedriver 暂不支持 CPU 架构：{machine}")
+    if system == "linux":
+        if machine in {"x86_64", "amd64"}:
+            return "linux64"
+        if machine in {"aarch64", "arm64"}:
+            return "linux-arm64"
+    elif system == "darwin":
+        if machine in {"x86_64", "amd64"}:
+            return "mac-x64"
+        if machine in {"arm64", "aarch64"}:
+            return "mac-arm64"
+    elif system == "windows" and machine in {"x86_64", "amd64"}:
+        return "win64"
+    raise RuntimeError(f"自动下载 Chromedriver 暂不支持系统/CPU 架构：{system}/{machine}")
 
 
 def _download_driver(remote_version: str, expected_major: str) -> Path:
@@ -238,12 +250,7 @@ def _download_driver(remote_version: str, expected_major: str) -> Path:
             "请设置 ROXY_CHROMEDRIVER_PATH 或检查调试端口连通性"
         )
 
-    platform_name = _linux_driver_platform() if platform.system().lower() == "linux" else {
-        "darwin": "mac-x64",
-        "windows": "win64",
-    }.get(platform.system().lower(), "")
-    if not platform_name:
-        raise RuntimeError(f"当前系统暂不支持自动下载 Chromedriver：{platform.system()}")
+    platform_name = _driver_platform()
 
     versions: list[str] = []
     exact = str(remote_version or "").strip()
@@ -275,7 +282,7 @@ def _download_driver(remote_version: str, expected_major: str) -> Path:
                 f"{version}/{platform_name}/chromedriver-{platform_name}.zip"
             )
             try:
-                logger.info("[Roxy] 下载 Linux Chromedriver：version=%s platform=%s", version, platform_name)
+                logger.info("[Roxy] 下载 Chromedriver：version=%s platform=%s", version, platform_name)
                 response = requests.get(url, timeout=90)
                 response.raise_for_status()
                 with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
@@ -303,7 +310,7 @@ def _download_driver(remote_version: str, expected_major: str) -> Path:
 
     detail = "; ".join(errors[-3:])
     raise RuntimeError(
-        "Docker 连接 Roxy 需要 Linux Chromedriver，自动下载失败。"
+        f"当前平台需要 {platform_name} Chromedriver，自动下载失败。"
         + (f" 详情：{detail}" if detail else "")
     )
 

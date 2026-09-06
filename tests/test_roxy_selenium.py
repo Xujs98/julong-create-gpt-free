@@ -73,3 +73,19 @@ def test_resolve_chromedriver_downloads_when_roxy_path_is_host_only(tmp_path, mo
     )
 
     assert result == str(downloaded)
+
+
+def test_driver_platform_supports_linux_arm64(monkeypatch):
+    monkeypatch.setattr(roxy_selenium.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(roxy_selenium.platform, "machine", lambda: "aarch64")
+
+    assert roxy_selenium._driver_platform() == "linux-arm64"
+
+
+def test_driver_platform_supports_macos_intel_and_apple_silicon(monkeypatch):
+    monkeypatch.setattr(roxy_selenium.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(roxy_selenium.platform, "machine", lambda: "x86_64")
+    assert roxy_selenium._driver_platform() == "mac-x64"
+
+    monkeypatch.setattr(roxy_selenium.platform, "machine", lambda: "arm64")
+    assert roxy_selenium._driver_platform() == "mac-arm64"

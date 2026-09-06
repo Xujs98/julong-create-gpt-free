@@ -203,7 +203,8 @@ ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515
 ./tools/roxy-chromedriver-bridge.sh
 ```
 
-桥接使用 Roxy 自带的 macOS Chromedriver，并监听 `9515`；Docker 通过
+桥接使用 Roxy 自带的 macOS Chromedriver，并监听 `9515`；脚本会自动使用当前 Mac
+架构对应的驱动（Intel=`mac-x64`，Apple Silicon=`mac-arm64`）。Docker 通过
 `host.docker.internal` 访问它。这样 Roxy、Chrome 和 Chromedriver 始终处于同一
 macOS 命名空间，注册页面的指纹和本机部署一致。桥接未配置时，程序仍可回退到
 容器内匹配版本的 Linux Chromedriver，但跨系统附着会保留额外的 Auth/挑战风险。
