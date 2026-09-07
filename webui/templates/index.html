@@ -329,7 +329,7 @@
       max-height: calc(min(760px, calc(100vh - 48px)) - 84px); overflow: auto;
       border: 1px solid #ebeef5; border-radius: 8px;
     }
-    .registration-task-log-table { width: 100%; min-width: 760px; table-layout: fixed; border-collapse: collapse; }
+    .registration-task-log-table { width: 100%; min-width: 840px; table-layout: fixed; border-collapse: collapse; }
     .registration-task-log-table th, .registration-task-log-table td {
       padding: 12px 14px; border-bottom: 1px solid #ebeef5; color: #606266;
       font-size: 13px; text-align: left; font-variant-numeric: tabular-nums;
@@ -581,6 +581,7 @@
     .registration-batch-summary .batch-summary-success { color: #169b76; font-weight: 700; }
     .registration-batch-summary .batch-summary-failed { color: #e64545; font-weight: 700; }
     .registration-batch-summary .batch-summary-rate { color: #0f766e; font-weight: 700; }
+    .registration-batch-summary .batch-summary-traffic { color: #b45309; font-weight: 700; }
     .registration-batch-summary .batch-summary-warning {
       flex-basis: 100%; color: #92600a; padding-top: 5px; border-top: 1px dashed #d8c27d;
     }
@@ -4311,7 +4312,7 @@ try {
   </div>
   <div class="registration-task-log-table-wrap">
     <table class="registration-task-log-table">
-      <thead><tr><th style="width: 170px">开始时间</th><th>类型</th><th>任务量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>成功率</th><th>状态</th></tr></thead>
+      <thead><tr><th style="width: 170px">开始时间</th><th>类型</th><th>任务量</th><th>并发线程</th><th>总耗时</th><th>成功</th><th>失败</th><th>成功率</th><th>本次流量</th><th>状态</th></tr></thead>
       <tbody id="registrationTaskLogBody"></tbody>
     </table>
     <div class="registration-task-log-empty hidden" id="registrationTaskLogEmpty">暂无任务日志</div>
@@ -4813,6 +4814,22 @@ function formatRegistrationSuccessRate(batch) {
   return `${Number(Math.max(0, Math.min(100, rate)).toFixed(2))}%`;
 }
 
+// Format the aggregate bytes reported by registration jobs for the batch bar.
+function formatRegistrationTraffic(value) {
+  const raw = Number(value || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return '0 B';
+  if (raw < 1024) return `${Math.round(raw)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = raw;
+  let unit = 'B';
+  for (let i = 0; i < units.length && amount >= 1024; i += 1) {
+    amount /= 1024;
+    unit = units[i];
+  }
+  const digits = amount >= 100 ? 0 : (amount >= 10 ? 1 : 2);
+  return `${amount.toFixed(digits)} ${unit}`;
+}
+
 // 按任务开始与完成时间计算墙钟耗时；运行中任务使用当前时间。
 function durationSecondsBetween(startedAt, completedAt='') {
   if (!startedAt) return 0;
@@ -4991,6 +5008,7 @@ function renderRegistrationBatchSummary() {
       <span class="batch-summary-success">成功：${Number(batch.success_count || 0)}</span>
       <span class="batch-summary-failed">失败：${Number(batch.failed_count || 0)}</span>
       <span class="batch-summary-rate">成功率：${formatRegistrationSuccessRate(batch)}</span>
+      <span class="batch-summary-traffic">本次流量：${formatRegistrationTraffic(batch.total_traffic_bytes ?? batch.traffic_bytes ?? batch.registration_traffic_bytes)}</span>
       ${active ? `<span>运行：${running}</span><span>排队：${pending}</span><span>类型：${taskType}</span>` : `<span>状态：${taskType}已完成</span>`}
       ${REGISTRATION_BATCH_WARNING ? `<span class="batch-summary-warning">${esc(REGISTRATION_BATCH_WARNING)}</span>` : ''}
     </div>`;
@@ -5370,6 +5388,7 @@ function renderRegistrationTaskLogs() {
       <td class="log-success">${Number(batch.success_count || 0)}</td>
       <td class="log-failed">${Number(batch.failed_count || 0)}</td>
       <td class="log-success">${formatRegistrationSuccessRate(batch)}</td>
+      <td>${formatRegistrationTraffic(batch.total_traffic_bytes ?? batch.traffic_bytes ?? batch.registration_traffic_bytes)}</td>
       <td class="${active ? 'log-running' : ''}">${active ? `执行中（运行 ${Number(batch.running_count || 0)} / 排队 ${Number(batch.pending_count || 0)}）` : '已完成'}</td>
     </tr>`;
   }).join('');

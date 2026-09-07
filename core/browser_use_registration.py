@@ -1964,6 +1964,10 @@ def run_browser_use_registration(
                     "message": f"{type(exc).__name__}: {str(exc)[:220]}",
                 }
 
+            # Include post-auth automation (when enabled) in the final task
+            # measurement instead of stopping at the access-token checkpoint.
+            from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+            registration_traffic = attach_optimization_snapshot(browser_performance_snapshot(page), page)
             account_id = save_account_data(
                 email=email,
                 access_token=access_token,
@@ -1999,6 +2003,7 @@ def run_browser_use_registration(
                 "account_id": account_id,
                 "access_token": access_token,
                 "totp_secret": totp_secret,
+                "registration_traffic": registration_traffic,
                 "codex": codex_result,
                 "error": None,
             }
@@ -2014,9 +2019,16 @@ def run_browser_use_registration(
             )
         except Exception:
             pass
+        failed_traffic = {}
+        try:
+            from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+            failed_traffic = attach_optimization_snapshot(browser_performance_snapshot(page), page)
+        except Exception:
+            pass
         return {
             "success": False,
             "email": email,
+            "registration_traffic": failed_traffic,
             "error": f"{type(exc).__name__}: {str(exc)[:300]}",
         }
     finally:

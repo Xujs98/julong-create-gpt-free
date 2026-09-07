@@ -492,6 +492,25 @@ def _mark_terminal(job_id: int, *, status: str, error: str | None = None, accoun
     db.update_job_fields(job_id, **fields)
 
 
+def _traffic_fields(result: dict) -> dict[str, Any]:
+    """Map a rebind driver's optional traffic snapshot to job fields."""
+    if not isinstance(result, dict):
+        return {}
+    snapshot = result.get("registration_traffic") or result.get("traffic")
+    if not isinstance(snapshot, dict):
+        return {}
+    try:
+        total = max(0, int(snapshot.get("total_bytes") or 0))
+    except (TypeError, ValueError):
+        total = 0
+    if not total:
+        return {}
+    return {
+        "registration_traffic_bytes": total,
+        "registration_traffic_source": str(snapshot.get("source") or "").strip()[:80],
+    }
+
+
 def _run_one(job_id: int) -> None:
     job = db.get_job(job_id)
     if not job:
@@ -499,6 +518,7 @@ def _run_one(job_id: int) -> None:
         return
     secrets = _secret_values(job)
     external_verified = False
+    result: dict[str, Any] = {}
     with _state_lock:
         _active_jobs.add(int(job_id))
         _stop_events.setdefault(int(job_id), threading.Event())
@@ -585,6 +605,7 @@ def _run_one(job_id: int) -> None:
             email=target.get("email"),
             completed_at=datetime.now().isoformat(timespec="seconds"),
             error=None,
+            **_traffic_fields(result),
         )
         _append_log({**job, "id": job_id}, f"换绑成功，新账号 id={new_id} email={target.get('email')}；原账号已清理")
     except Exception as exc:
@@ -614,6 +635,7 @@ def _run_one(job_id: int) -> None:
             email=current.get("rebind_target_email"),
             rebind_status=final_status,
             completed_at=datetime.now().isoformat(timespec="seconds"),
+            **_traffic_fields(result),
         )
         _append_log(
             {**current, "id": job_id},

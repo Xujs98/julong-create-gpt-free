@@ -3152,6 +3152,10 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         except Exception as exc:
             codex_result = {"status": "failed", "ok": False, "message": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
+        # Capture at task completion so 2FA/Codex requests made after the
+        # access-token checkpoint are included in the per-task total.
+        from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+        registration_traffic = attach_optimization_snapshot(browser_performance_snapshot(driver), driver)
         account_id = save_account_data(
             email=email,
             access_token=access_token,
@@ -3185,6 +3189,7 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             "account_id": account_id,
             "access_token": access_token,
             "totp_secret": totp_secret,
+            "registration_traffic": registration_traffic,
             "codex": codex_result,
             "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
         }
@@ -3199,7 +3204,13 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
             release_email(email, status="failed" if create_acknowledged else "available", note=f"Roxy注册失败: {str(exc)[:180]}")
         except Exception:
             pass
-        return {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        failed_traffic = {}
+        try:
+            from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+            failed_traffic = attach_optimization_snapshot(browser_performance_snapshot(driver), driver)
+        except Exception:
+            pass
+        return {"success": False, "email": email, "registration_traffic": failed_traffic, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
     finally:
         failed = not task_succeeded
         if driver and (failed or not bool(_cfg.ROXY_KEEP_BROWSER_OPEN)):

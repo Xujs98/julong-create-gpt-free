@@ -110,6 +110,31 @@ class RegistrationBatchStorageTests(unittest.TestCase):
         self.assertEqual(cleared, {"cleared": 0, "kept_active": 1})
         self.assertEqual(db.list_registration_batches()[0]["status"], "running")
 
+    def test_batch_accumulates_per_job_traffic(self):
+        batch = db.create_registration_batch(requested_count=2, workers=2, email_source="icloud")
+        first = db.create_job("icloud", batch_id=batch["id"])
+        second = db.create_job("icloud", batch_id=batch["id"])
+        db.seal_registration_batch(batch["id"], [first["id"], second["id"]])
+
+        db.update_job(
+            first["id"], status="success", completed_at="2026-09-07T01:00:00",
+            registration_traffic_bytes=1024, registration_traffic_source="browser_performance",
+        )
+        running = db.get_registration_batch(batch["id"])
+        self.assertEqual(running["traffic_bytes"], 1024)
+        self.assertEqual(running["total_traffic_bytes"], 1024)
+        self.assertEqual(running["traffic_task_count"], 1)
+        self.assertEqual(running["traffic_source"], "browser_performance")
+
+        db.update_job(
+            second["id"], status="failed", completed_at="2026-09-07T01:00:01",
+            registration_traffic_bytes=2048,
+        )
+        complete = db.get_registration_batch(batch["id"])
+        self.assertEqual(complete["status"], "completed")
+        self.assertEqual(complete["registration_traffic_bytes"], 3072)
+        self.assertEqual(complete["traffic_task_count"], 2)
+
     def test_backfills_legacy_rebind_jobs_and_exposes_latest_summary(self):
         rows = []
         for status, started_at, completed_at in (
@@ -180,6 +205,8 @@ class RegistrationBatchWebUiTests(unittest.TestCase):
         self.assertIn('function formatDurationSeconds(value)', html)
         self.assertIn('function formatRegistrationSuccessRate(batch)', html)
         self.assertIn('成功率：${formatRegistrationSuccessRate(batch)}', html)
+        self.assertIn('本次流量：${formatRegistrationTraffic(', html)
+        self.assertIn('<th>本次流量</th>', html)
         self.assertIn('.registration-task-type.is-registration', html)
         self.assertIn('.registration-task-type.is-rebind', html)
         self.assertIn('class="registration-task-type ${taskTypeClass}"', html)

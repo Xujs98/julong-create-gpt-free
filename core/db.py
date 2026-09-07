@@ -967,6 +967,11 @@ def _legacy_rebind_batch_row(job: dict, batch_id: int) -> dict | None:
         "job_ids": [job_id],
         "success_count": 1 if status == "success" else 0,
         "failed_count": 1 if status in {"failed", "stopped", "cancelled"} else 0,
+        "traffic_bytes": _registration_job_traffic_bytes(job),
+        "registration_traffic_bytes": _registration_job_traffic_bytes(job),
+        "total_traffic_bytes": _registration_job_traffic_bytes(job),
+        "traffic_task_count": 1 if _registration_job_traffic_bytes(job) else 0,
+        "traffic_source": str(job.get("registration_traffic_source") or job.get("traffic_source") or "").strip()[:80] or None,
         "success_rate": 100.0 if status == "success" else 0.0,
         "running_count": 1 if status in {"running", "stopping"} else 0,
         "pending_count": 1 if status == "pending" else 0,
@@ -4290,6 +4295,31 @@ def _registration_success_rate(success_count: Any, failed_count: Any) -> float:
     return round(success * 100 / completed, 2) if completed else 0.0
 
 
+def _registration_job_traffic_bytes(job: dict) -> int:
+    """Return the measured traffic for one registration job.
+
+    Drivers may persist the normalized snapshot directly on the job or expose
+    it through the historical ``traffic``/``registration_traffic`` shape.  A
+    single coercion point keeps batch aggregation compatible with all of them.
+    """
+    if not isinstance(job, dict):
+        return 0
+    candidates = (
+        job.get("registration_traffic_bytes"),
+        job.get("traffic_bytes"),
+        (job.get("registration_traffic") or {}).get("total_bytes")
+        if isinstance(job.get("registration_traffic"), dict) else None,
+        (job.get("traffic") or {}).get("total_bytes")
+        if isinstance(job.get("traffic"), dict) else None,
+    )
+    for value in candidates:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
 def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime | None = None) -> dict:
     """根据批次关联任务生成实时统计，不依赖前端自行猜测任务状态。"""
     current_time = now or datetime.now()
@@ -4303,6 +4333,19 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         result["success_rate"] = _registration_success_rate(
             result.get("success_count"), result.get("failed_count")
         )
+        # Historical completed rows may predate traffic aggregation.  Expose
+        # stable aliases with a zero value instead of forcing every client to
+        # handle a missing field.
+        measured = 0
+        for key in ("traffic_bytes", "registration_traffic_bytes", "total_traffic_bytes"):
+            try:
+                measured = max(measured, int(result.get(key) or 0))
+            except (TypeError, ValueError):
+                pass
+        result["traffic_bytes"] = measured
+        result["registration_traffic_bytes"] = measured
+        result["total_traffic_bytes"] = measured
+        result["traffic_task_count"] = max(0, int(result.get("traffic_task_count") or 0))
         result["elapsed_seconds"] = _elapsed_seconds(batch.get("started_at"), batch.get("completed_at"), now=current_time)
         return result
     batch_id = int(batch.get("id") or 0)
@@ -4323,9 +4366,19 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
             or (configured_ids and int(row.get("id") or 0) in configured_ids)
         ]
     status_counts: dict[str, int] = {}
+    traffic_bytes = 0
+    traffic_task_count = 0
+    traffic_sources: set[str] = set()
     for row in related:
         status = str(row.get("status") or "pending")
         status_counts[status] = status_counts.get(status, 0) + 1
+        measured = _registration_job_traffic_bytes(row)
+        if measured:
+            traffic_bytes += measured
+            traffic_task_count += 1
+        source = str(row.get("registration_traffic_source") or row.get("traffic_source") or "").strip()
+        if source:
+            traffic_sources.add(source[:80])
 
     requested = max(0, int(batch.get("requested_count") or batch.get("submitted_count") or len(related)))
     missing = max(0, requested - len(related))
@@ -4367,6 +4420,13 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         "running_count": running_count,
         "pending_count": pending_count,
         "completed_count": terminal_count,
+        # Keep explicit aliases so older API clients and the new summary can
+        # consume the same aggregate without another migration.
+        "traffic_bytes": traffic_bytes,
+        "registration_traffic_bytes": traffic_bytes,
+        "total_traffic_bytes": traffic_bytes,
+        "traffic_task_count": traffic_task_count,
+        "traffic_source": ", ".join(sorted(traffic_sources))[:160] if traffic_sources else None,
         "status": "completed" if is_completed else "running",
         "completed_at": completed_at,
         "elapsed_seconds": _elapsed_seconds(batch.get("started_at"), completed_at, now=current_time),
@@ -4414,6 +4474,11 @@ def create_registration_batch(
             "success_count": 0,
             "failed_count": 0,
             "success_rate": 0.0,
+            "traffic_bytes": 0,
+            "registration_traffic_bytes": 0,
+            "total_traffic_bytes": 0,
+            "traffic_task_count": 0,
+            "traffic_source": None,
             "running_count": 0,
             "pending_count": max(0, int(requested_count or 0)),
             "status": "running",
@@ -4454,7 +4519,11 @@ def list_registration_batches(limit: int = 200) -> list[dict]:
             # 终态字段只需在完成时固化；执行中耗时保持实时计算，避免每秒写盘。
             if snapshot.get("status") == "completed" and any(
                 row.get(key) != snapshot.get(key)
-                for key in ("completed_at", "success_count", "failed_count", "success_rate", "running_count", "pending_count", "completed_count", "status", "elapsed_seconds")
+                for key in (
+                    "completed_at", "success_count", "failed_count", "success_rate", "running_count",
+                    "pending_count", "completed_count", "status", "elapsed_seconds", "traffic_bytes",
+                    "registration_traffic_bytes", "total_traffic_bytes", "traffic_task_count", "traffic_source",
+                )
             ):
                 row.update(snapshot)
                 changed = True
@@ -4605,6 +4674,8 @@ def _new_job_row(
         "completed_at": None,
         "account_id": account_id,
         "batch_id": batch_id,
+        "registration_traffic_bytes": None,
+        "registration_traffic_source": None,
         "created_at": _now(),
     }
 
@@ -4767,6 +4838,8 @@ def update_job(
     started_at: str | None = None,
     completed_at: str | None = None,
     account_id: int | None = None,
+    registration_traffic_bytes: int | None = None,
+    registration_traffic_source: str | None = None,
 ) -> None:
     with _LOCK:
         rows = _load_jobs()
@@ -4785,6 +4858,15 @@ def update_job(
             row["completed_at"] = completed_at
         if account_id is not None:
             row["account_id"] = account_id
+        if registration_traffic_bytes is not None:
+            try:
+                row["registration_traffic_bytes"] = max(0, int(registration_traffic_bytes))
+            except (TypeError, ValueError):
+                pass
+        if registration_traffic_source is not None:
+            source = str(registration_traffic_source or "").strip()
+            if source:
+                row["registration_traffic_source"] = source[:80]
         _save_jobs(rows)
 
 
@@ -5311,6 +5393,7 @@ def prune_registration_jobs(
                     for key in (
                         "submitted_count", "success_count", "failed_count", "success_rate", "running_count",
                         "pending_count", "completed_count", "status", "completed_at", "elapsed_seconds",
+                        "traffic_bytes", "registration_traffic_bytes", "total_traffic_bytes", "traffic_task_count", "traffic_source",
                     )
                 ):
                     # 先固化终态批次统计，再删除其旧任务行；否则后续只剩最近 N

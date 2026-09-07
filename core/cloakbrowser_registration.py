@@ -760,6 +760,11 @@ def _run_cloak_registration_impl(
         except Exception as exc:
             codex_result = {"status": "failed", "ok": False, "message": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
+        # Re-snapshot immediately before persistence; the earlier checkpoint
+        # only covered registration through accessToken and omitted post-auth
+        # 2FA/Codex traffic.
+        from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+        registration_traffic = attach_optimization_snapshot(browser_performance_snapshot(driver), driver)
         account_id = save_account_data(
             email=email,
             access_token=access_token,
@@ -785,7 +790,7 @@ def _run_cloak_registration_impl(
             },
         )
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
-        return {"success": bool(codex_ok), "email": email, "account_id": account_id, "access_token": access_token, "totp_secret": totp_secret, "codex": codex_result, "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}"}
+        return {"success": bool(codex_ok), "email": email, "account_id": account_id, "access_token": access_token, "totp_secret": totp_secret, "registration_traffic": registration_traffic, "codex": codex_result, "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}"}
     except Exception as exc:
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
         try:
@@ -807,7 +812,13 @@ def _run_cloak_registration_impl(
                 release_email(email, status="failed" if create_acknowledged else "available", note=f"Cloak注册失败: {str(exc)[:180]}")
             except Exception:
                 pass
-        result = {"success": False, "email": email, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+        failed_traffic = {}
+        try:
+            from core.traffic import attach_optimization_snapshot, browser_performance_snapshot
+            failed_traffic = attach_optimization_snapshot(browser_performance_snapshot(driver), driver)
+        except Exception:
+            pass
+        result = {"success": False, "email": email, "registration_traffic": failed_traffic, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
         if _BROWSER_PROXY_CHALLENGE_MARKER in str(exc):
             result["_failed_proxy_url"] = str(
                 proxy or getattr(driver, "upstream_proxy_url", None) or ""

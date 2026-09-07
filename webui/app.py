@@ -385,6 +385,7 @@ def _compact_job_for_list(row: dict) -> dict:
     }
     for key in (
         "parent_job_id", "retry_attempt", "batch_id", "email", "started_at", "completed_at",
+        "registration_traffic_bytes", "registration_traffic_source",
         "display_status", "retryable", "retry_action", "retry_label",
         "manual_otp_required", "job_type", "rebind_status", "rebind_source_account_id",
         "rebind_source_email", "rebind_target_email", "rebind_target_source",
@@ -429,6 +430,7 @@ def _public_rebind_job(row: dict | None) -> dict:
         "rebind_group_id", "rebind_group_name", "rebind_driver",
         "rebind_login_driver", "rebind_action_driver", "rebind_hybrid_mode",
         "rebind_headless", "rebind_login_headless",
+        "registration_traffic_bytes", "registration_traffic_source",
     }
     public = {key: row[key] for key in allowed if key in row}
     if public.get("error_message") not in (None, ""):

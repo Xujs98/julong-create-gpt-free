@@ -136,6 +136,34 @@ def _append_job_log(job_id: int, message: str) -> None:
         pass
 
 
+def _job_traffic_fields(result: Any) -> tuple[int | None, str | None]:
+    """Extract a normalized traffic total from a driver result.
+
+    Registration drivers return their measurement under ``registration_traffic``
+    (with ``traffic`` kept for compatibility).  Keeping the extraction here
+    means every terminal task update persists the same per-job value that the
+    batch snapshot later sums.
+    """
+    if not isinstance(result, dict):
+        return None, None
+    snapshot = result.get("registration_traffic") or result.get("traffic")
+    if not isinstance(snapshot, dict):
+        return None, None
+    try:
+        total = max(0, int(snapshot.get("total_bytes") or 0))
+    except (TypeError, ValueError):
+        total = 0
+    if not total:
+        try:
+            total = max(0, int(snapshot.get("request_bytes") or 0)) + max(0, int(snapshot.get("response_bytes") or 0))
+        except (TypeError, ValueError):
+            total = 0
+    if not total:
+        return None, None
+    source = str(snapshot.get("source") or "").strip()[:80] or None
+    return total, source
+
+
 def _random_display_name() -> str:
     """生成符合 OpenAI 限制的英文字母显示名。"""
     from core.name_samples import random_display_name
@@ -592,6 +620,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
 
     email: str | None = None
+    result: Any = None
     try:
         with _JobLogContext(log_file):
             from main import run_registration
@@ -686,27 +715,34 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 raise RuntimeError("注册流程未返回结果")
             if is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
+                traffic_bytes, traffic_source = _job_traffic_fields(result)
                 db.update_job(
                     job_id,
                     status="stopped",
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
+                    registration_traffic_bytes=traffic_bytes,
+                    registration_traffic_source=traffic_source,
                 )
                 log_logger.warning(f"[Job {job_id}] 已按用户请求停止")
                 return
             if isinstance(result, dict) and result.get("success"):
+                traffic_bytes, traffic_source = _job_traffic_fields(result)
                 db.update_job(
                     job_id,
                     status="success",
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
+                    registration_traffic_bytes=traffic_bytes,
+                    registration_traffic_source=traffic_source,
                 )
                 log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
             else:
                 # 注意：失败也可能伴随 account_id（如 Codex 失败但账号已注册成功）
                 err = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 result_email = (result or {}).get("email") if isinstance(result, dict) else None
+                traffic_bytes, traffic_source = _job_traffic_fields(result)
                 db.update_job(
                     job_id,
                     status="failed",
@@ -714,6 +750,8 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
                     error=str(err)[:500],
                     completed_at=datetime.now().isoformat(timespec="seconds"),
+                    registration_traffic_bytes=traffic_bytes,
+                    registration_traffic_source=traffic_source,
                 )
                 email_to_handle = str(result_email or email or "").strip()
                 if _should_disable_failed_registration_email(err):
@@ -724,11 +762,14 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
+        traffic_bytes, traffic_source = _job_traffic_fields(result)
         db.update_job(
             job_id,
             status="stopped",
             error="用户手动停止",
             completed_at=datetime.now().isoformat(timespec="seconds"),
+            registration_traffic_bytes=traffic_bytes,
+            registration_traffic_source=traffic_source,
         )
     except Exception as exc:
         err_text = f"{type(exc).__name__}: {exc}"
@@ -738,19 +779,25 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             _release_unconsumed_job_email(email, err_text)
         if is_stop_requested(job_id):
             log_logger.warning(f"[Job {job_id}] 停止中捕获异常，按停止处理: {type(exc).__name__}: {exc}")
+            traffic_bytes, traffic_source = _job_traffic_fields(result)
             db.update_job(
                 job_id,
                 status="stopped",
                 error="用户手动停止",
                 completed_at=datetime.now().isoformat(timespec="seconds"),
+                registration_traffic_bytes=traffic_bytes,
+                registration_traffic_source=traffic_source,
             )
             return
         log_logger.exception(f"[Job {job_id}] 异常")
+        traffic_bytes, traffic_source = _job_traffic_fields(result)
         db.update_job(
             job_id,
             status="failed",
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
+            registration_traffic_bytes=traffic_bytes,
+            registration_traffic_source=traffic_source,
         )
     finally:
         _deactivate_job(job_id)

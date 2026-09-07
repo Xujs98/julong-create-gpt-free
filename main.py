@@ -713,6 +713,7 @@ def run_registration(
         return {"success": task_success, "email": email, "account_id": account_id,
                 "access_token": access_token, "totp_secret": totp_secret,
                 "registration_password": openai_password,
+                "registration_traffic": registration_traffic,
                 "flow": flow_result, "codex": codex_result,
                 "error": task_error}
 
@@ -745,7 +746,13 @@ def run_registration(
                     logger.info(f"[邮箱:{src}] {email} 已恢复 available")
         except Exception:
             pass
-        return {"success": False, "email": email, "error": str(e)}
+        failed_traffic = {}
+        try:
+            from core.traffic import normalize_snapshot
+            failed_traffic = normalize_snapshot(session.traffic_snapshot())
+        except Exception:
+            pass
+        return {"success": False, "email": email, "registration_traffic": failed_traffic, "error": str(e)}
 
 
 def main():
