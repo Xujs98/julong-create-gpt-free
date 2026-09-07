@@ -34,9 +34,10 @@ ROXY_DEBUGGER_RESOLVE_HOST: bool = True
 # Chromedriver 在宿主机命名空间内附着 Roxy；本机进程始终忽略此值。
 ROXY_DOCKER_WEBDRIVER_URL: str = env_str("ROXY_DOCKER_WEBDRIVER_URL", "")
 
-# Roxy 返回的 driver 路径属于 Roxy 所在主机。配置 Docker 宿主机桥接后不再
-# 需要容器执行该路径；桥接不可达时客户端会按远端 Chrome 主版本自动下载
-# Linux driver 到此缓存目录。本机存在且版本匹配的 Roxy driver 仍优先复用。
+# Roxy 返回的 driver 路径属于 Roxy 所在主机。Docker 调用 macOS Roxy 时必须
+# 配置宿主机桥接，让 macOS Chromedriver 与 Roxy/Chrome 处于同一命名空间；
+# 不能把 macOS driver 路径直接交给 Linux 容器。桥接不可达时仅在 Chrome for
+# Testing 确实发布了对应 Linux 架构驱动的版本上尝试容器内下载。
 ROXY_CHROMEDRIVER_PATH: str = env_str("ROXY_CHROMEDRIVER_PATH", "")
 ROXY_DRIVER_CACHE_DIR: str = env_str("ROXY_DRIVER_CACHE_DIR", "")
 

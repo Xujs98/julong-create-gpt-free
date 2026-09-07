@@ -23,7 +23,8 @@
 
 ## 平台兼容要求
 
-- 后续新增或修改代码、配置、脚本、部署文件和依赖时，必须同时考虑并验证：macOS Intel（x86_64）、macOS Apple Silicon（arm64）、Docker ARM64、Docker x86_64 和 Windows。
-- 涉及系统、CPU 架构、浏览器、Chromedriver、路径、动态库或容器镜像的逻辑，禁止写死单一平台；应使用明确的平台映射、运行时探测或可配置回退，并为关键分支补充测试。
-- Docker 调用宿主机 RoxyBrowser 时，必须保留宿主机 Chromedriver 桥接方案：容器传递原始调试地址给宿主机驱动；桥接不可用时，按容器 CPU 架构选择匹配的 Linux Chromedriver。
-- 提交前检查上述五个平台的启动链路、依赖安装方式和文档示例是否一致；无法在当前机器实测的平台，至少使用模拟架构测试或静态配置检查覆盖。
+- 后续新增或修改代码、配置、脚本、部署文件和依赖时，必须同时考虑并验证：macOS Intel（x86_64）、macOS Apple Silicon（arm64）、Docker ARM64、Docker x86_64 和 Windows（x86_64，必要时覆盖 arm64）。
+- 涉及系统、CPU 架构、浏览器、Chromedriver、路径、动态库或容器镜像的逻辑，禁止写死单一平台；必须优先使用运行时系统/架构探测（例如 `platform.system()`、`platform.machine()`）和明确的平台映射，并为关键分支补充测试。
+- 浏览器驱动下载必须校验目标版本和平台资源是否真实存在；下载 404 时给出对应平台的可执行修复提示，不得把不存在的驱动包当作可用回退。
+- Docker 调用宿主机 RoxyBrowser 时，必须保留宿主机 Chromedriver 桥接方案：容器传递原始调试地址给宿主机驱动。桥接可用时优先桥接；桥接不可用时，按容器 CPU 架构和 Chrome for Testing 实际发布的平台资源选择回退。Apple 芯片 Docker 使用旧版 Chrome 且没有 `linux-arm64` 驱动时，必须提示启动 macOS 宿主机桥接。
+- 提交前检查上述平台的启动链路、依赖安装方式和文档示例是否一致；无法在当前机器实测的平台，至少使用模拟系统/架构测试、Compose 配置检查或静态配置检查覆盖。

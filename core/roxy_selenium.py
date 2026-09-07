@@ -309,8 +309,16 @@ def _download_driver(remote_version: str, expected_major: str) -> Path:
                     pass
 
     detail = "; ".join(errors[-3:])
+    bridge_hint = ""
+    if platform_name == "linux-arm64":
+        bridge_hint = (
+            " Docker ARM64 对当前 Chrome 版本没有可用的 linux-arm64 Chromedriver；"
+            "请在 macOS 宿主机运行 ./tools/roxy-chromedriver-bridge.sh，"
+            "并确认容器可访问 http://host.docker.internal:9515/status。"
+        )
     raise RuntimeError(
         f"当前平台需要 {platform_name} Chromedriver，自动下载失败。"
+        + bridge_hint
         + (f" 详情：{detail}" if detail else "")
     )
 

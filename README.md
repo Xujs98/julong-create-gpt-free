@@ -196,7 +196,7 @@ docker compose logs -f app
 docker compose down
 ```
 
-> Docker 调用宿主机 Roxy：先在 macOS 宿主机运行 `./tools/roxy-chromedriver-bridge.sh`，再在 `.env` 设置 `REGISTRATION_DRIVER=roxy`、`ROXY_API_BASE=http://host.docker.internal:50000`、`ROXY_DEBUGGER_HOST=host.docker.internal` 和 `ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`，最后执行 `docker compose up -d --build --force-recreate`。容器会把 Roxy 原始调试地址交给宿主机 Chromedriver；桥接不可用时按 Docker CPU 架构回退到 `linux64` 或 `linux-arm64` 驱动。本机部署仍保持原有 Selenium 路径。Docker 详细配置见[完整部署指南](docs/deployment.md)。
+> Docker 调用宿主机 Roxy：先在 macOS 宿主机运行 `./tools/roxy-chromedriver-bridge.sh`，再在 `.env` 设置 `REGISTRATION_DRIVER=roxy`、`ROXY_API_BASE=http://host.docker.internal:50000`、`ROXY_DEBUGGER_HOST=host.docker.internal` 和 `ROXY_DOCKER_WEBDRIVER_URL=http://host.docker.internal:9515`，最后执行 `docker compose up -d --build --force-recreate`。容器会把 Roxy 原始调试地址交给宿主机 Chromedriver；桥接不可用时仅按 Docker CPU 架构和 Chrome for Testing 实际存在的驱动资源回退。Apple 芯片 Docker 使用旧版 Chrome 且没有 `linux-arm64` 驱动时，必须启动 macOS 宿主机桥接。本机部署仍保持原有 Selenium 路径。Docker 详细配置见[完整部署指南](docs/deployment.md)。
 
 已预设 Docker Hub 镜像名 `qq1371446705/turb-gpt-free-register`。构建和推送命令会强制检查当前分支为 `main`，避免误发布其他分支。登录 Docker Hub 后，一条命令即可在本地构建并推送：
 

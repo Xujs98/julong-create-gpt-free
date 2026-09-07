@@ -82,6 +82,29 @@ def test_driver_platform_supports_linux_arm64(monkeypatch):
     assert roxy_selenium._driver_platform() == "linux-arm64"
 
 
+def test_linux_arm64_download_failure_explains_host_bridge_requirement(monkeypatch):
+    class NotFoundResponse:
+        ok = False
+        text = ""
+
+        def raise_for_status(self):
+            raise RuntimeError("404")
+
+    monkeypatch.setattr(roxy_selenium, "_driver_platform", lambda: "linux-arm64")
+    monkeypatch.setattr(roxy_selenium, "_cache_dir", lambda: Path("/tmp/roxy-driver-test-cache"))
+    monkeypatch.setattr(roxy_selenium.requests, "get", lambda *args, **kwargs: NotFoundResponse())
+
+    try:
+        roxy_selenium._download_driver("152.0.7977.65", "152")
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected Linux ARM64 driver download to fail")
+
+    assert "macOS 宿主机运行 ./tools/roxy-chromedriver-bridge.sh" in message
+    assert "host.docker.internal:9515/status" in message
+
+
 def test_driver_platform_supports_macos_intel_and_apple_silicon(monkeypatch):
     monkeypatch.setattr(roxy_selenium.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(roxy_selenium.platform, "machine", lambda: "x86_64")
@@ -89,3 +112,10 @@ def test_driver_platform_supports_macos_intel_and_apple_silicon(monkeypatch):
 
     monkeypatch.setattr(roxy_selenium.platform, "machine", lambda: "arm64")
     assert roxy_selenium._driver_platform() == "mac-arm64"
+
+
+def test_driver_platform_supports_windows_x64(monkeypatch):
+    monkeypatch.setattr(roxy_selenium.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(roxy_selenium.platform, "machine", lambda: "AMD64")
+
+    assert roxy_selenium._driver_platform() == "win64"

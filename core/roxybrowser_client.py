@@ -589,7 +589,8 @@ class RoxyBrowserClient:
             )
             if docker_webdriver and _running_in_container() and not use_docker_bridge:
                 logger.warning(
-                    "[Roxy] Docker 宿主机 Chromedriver 桥接不可达：%s；回退容器内匹配架构的 Chromedriver",
+                    "[Roxy] Docker 宿主机 Chromedriver 桥接不可达：%s；"
+                    "将尝试容器内驱动（Apple 芯片 ARM64/旧版 Chrome 可能没有对应下载包）",
                     docker_webdriver,
                 )
             debugger_address = (
