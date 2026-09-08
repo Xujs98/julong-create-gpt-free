@@ -537,15 +537,22 @@ const copyStore = new Map();
 
 function fmt(v) {{ return v == null || v === '' ? '-' : String(v); }}
 function fmtTraffic(v) {{
-  if (v == null || v === '') return '流量未记录';
+  if (v == null || v === '') return '';
   const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) return '流量未记录';
-  if (n < 1024) return `流量 ${{Math.round(n)}} B`;
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return `${{Math.round(n)}} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let amount = n, unit = units[0];
   for (let i = 0; i < units.length && amount >= 1024; i += 1) {{ amount /= 1024; unit = units[i]; }}
   const digits = amount >= 100 ? 0 : (amount >= 10 ? 1 : 2);
-  return `流量 ${{amount.toFixed(digits)}} ${{unit}}`;
+  return `${{amount.toFixed(digits)}} ${{unit}}`;
+}}
+function fmtTrafficBreakdown(total, upload, download) {{
+  const totalText = fmtTraffic(total);
+  if (!totalText) return '流量未记录';
+  const hasDirections = [upload, download].some((v) => v !== null && v !== undefined && v !== '');
+  if (!hasDirections) return `流量 ${{totalText}}`;
+  return `流量 ${{totalText}}（↑ ${{fmtTraffic(upload) || '0 B'}} / ↓ ${{fmtTraffic(download) || '0 B'}}）`;
 }}
 function esc(v) {{
   return fmt(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -613,7 +620,7 @@ function render() {{
       <td><span class="mono">${{esc(short(r.access_token || '', 42))}}</span></td>
       <td title="${{esc(r.note || '')}}">${{r.note ? esc(short(r.note, 60)) : '<span class="muted">-</span>'}}</td>
       <td>${{r.totp_secret ? '已启用' : '<span class="muted">未启用</span>'}}</td>
-      <td class="muted"><div>${{esc(r.created_at || '-')}}</div><div class="traffic-cell">${{esc(fmtTraffic(r.registration_traffic_bytes))}}</div></td>
+      <td class="muted"><div>${{esc(r.created_at || '-')}}</div><div class="traffic-cell">${{esc(fmtTrafficBreakdown(r.registration_traffic_bytes, r.registration_upload_bytes, r.registration_download_bytes))}}</div></td>
       <td class="actions">${{btn('复制Token', r.access_token, 'primary')}} ${{btn('复制整行', r.copy_line, 'good')}}</td>
     </tr>`).join('');
   $('#outlookBody').innerHTML = outlook.map((r) => `
@@ -970,6 +977,10 @@ def _legacy_rebind_batch_row(job: dict, batch_id: int) -> dict | None:
         "traffic_bytes": _registration_job_traffic_bytes(job),
         "registration_traffic_bytes": _registration_job_traffic_bytes(job),
         "total_traffic_bytes": _registration_job_traffic_bytes(job),
+        "upload_traffic_bytes": _registration_job_direction_bytes(job, "upload"),
+        "download_traffic_bytes": _registration_job_direction_bytes(job, "download"),
+        "registration_upload_bytes": _registration_job_direction_bytes(job, "upload"),
+        "registration_download_bytes": _registration_job_direction_bytes(job, "download"),
         "traffic_task_count": 1 if _registration_job_traffic_bytes(job) else 0,
         "traffic_source": str(job.get("registration_traffic_source") or job.get("traffic_source") or "").strip()[:80] or None,
         "success_rate": 100.0 if status == "success" else 0.0,
@@ -1398,8 +1409,16 @@ def insert_account(
     codex_status: str | None = None,   # success / failed / skipped / missing
     codex_error: str | None = None,    # 失败原因（仅 codex_status=failed 时有意义）
     registration_method: str | None = None,
+    registration_upload_bytes: int | None = None,
+    registration_download_bytes: int | None = None,
     registration_traffic_bytes: int | None = None,
     registration_traffic_source: str | None = None,
+    registration_traffic_scope: str | None = None,
+    registration_traffic_confidence: str | None = None,
+    registration_traffic_measurement: str | None = None,
+    registration_traffic_request_count: int | None = None,
+    registration_traffic_response_count: int | None = None,
+    registration_traffic_measurement_errors: int | None = None,
 ) -> int:
     """插入或更新注册成功账号，返回本地文件中的 id。"""
     with _LOCK:
@@ -1426,12 +1445,13 @@ def insert_account(
             row_id = int(row["id"])
             row["group_name"] = str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip() or DEFAULT_ACCOUNT_GROUP
 
-        traffic_value = row.get("registration_traffic_bytes")
-        if registration_traffic_bytes is not None:
+        def traffic_value(name: str, supplied: Any) -> Any:
+            if supplied is None:
+                return row.get(name)
             try:
-                traffic_value = max(0, int(registration_traffic_bytes))
+                return max(0, int(supplied))
             except (TypeError, ValueError):
-                traffic_value = row.get("registration_traffic_bytes")
+                return row.get(name)
         row.update({
             "access_token": access_token,
             "totp_secret": totp_secret if totp_secret is not None else row.get("totp_secret"),
@@ -1475,11 +1495,37 @@ def insert_account(
             "expires_at": expires_at if expires_at is not None else row.get("expires_at"),
             "device_id": device_id if device_id is not None else row.get("device_id"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
-            "registration_traffic_bytes": traffic_value,
+            "registration_upload_bytes": traffic_value("registration_upload_bytes", registration_upload_bytes),
+            "registration_download_bytes": traffic_value("registration_download_bytes", registration_download_bytes),
+            "registration_traffic_bytes": traffic_value("registration_traffic_bytes", registration_traffic_bytes),
             "registration_traffic_source": (
                 str(registration_traffic_source or "").strip()[:80]
                 if registration_traffic_source is not None
                 else row.get("registration_traffic_source")
+            ),
+            "registration_traffic_scope": (
+                str(registration_traffic_scope or "").strip()[:80]
+                if registration_traffic_scope is not None
+                else row.get("registration_traffic_scope")
+            ),
+            "registration_traffic_confidence": (
+                str(registration_traffic_confidence or "").strip()[:80]
+                if registration_traffic_confidence is not None
+                else row.get("registration_traffic_confidence")
+            ),
+            "registration_traffic_measurement": (
+                str(registration_traffic_measurement or "").strip()[:80]
+                if registration_traffic_measurement is not None
+                else row.get("registration_traffic_measurement")
+            ),
+            "registration_traffic_request_count": traffic_value(
+                "registration_traffic_request_count", registration_traffic_request_count
+            ),
+            "registration_traffic_response_count": traffic_value(
+                "registration_traffic_response_count", registration_traffic_response_count
+            ),
+            "registration_traffic_measurement_errors": traffic_value(
+                "registration_traffic_measurement_errors", registration_traffic_measurement_errors
             ),
             "proxy_geo": (
                 dict((extra or {}).get("proxy_geo"))
@@ -1552,6 +1598,36 @@ def update_account_codex_status(email: str, codex_status: str, codex_error: str 
             row["sms_completed_at"] = row.get("sms_completed_at") or _now()
             row["sms_status_source"] = "codex"
             row["sms_status_updated_at"] = _now()
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_registration_traffic(account_id: int, fields: dict[str, Any] | None) -> bool:
+    """Replace one account's normalized registration traffic summary."""
+    allowed_text = {
+        "registration_traffic_source", "registration_traffic_scope",
+        "registration_traffic_confidence", "registration_traffic_measurement",
+    }
+    allowed_int = {
+        "registration_upload_bytes", "registration_download_bytes",
+        "registration_traffic_bytes", "registration_traffic_request_count",
+        "registration_traffic_response_count", "registration_traffic_measurement_errors",
+    }
+    supplied = fields if isinstance(fields, dict) else {}
+    if not supplied:
+        return False
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((item for item in accounts if int(item.get("id") or 0) == int(account_id)), None)
+        if row is None:
+            return False
+        for key in allowed_int:
+            if key in supplied and supplied[key] is not None:
+                row[key] = _traffic_int(supplied[key])
+        for key in allowed_text:
+            if key in supplied and str(supplied[key] or "").strip():
+                row[key] = str(supplied[key]).strip()[:80]
         row["updated_at"] = _now()
         _save_accounts(accounts)
         return True
@@ -4295,6 +4371,30 @@ def _registration_success_rate(success_count: Any, failed_count: Any) -> float:
     return round(success * 100 / completed, 2) if completed else 0.0
 
 
+def _traffic_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _registration_job_direction_bytes(job: dict, direction: str) -> int:
+    if not isinstance(job, dict):
+        return 0
+    if direction == "upload":
+        keys = ("registration_upload_bytes", "upload_bytes", "request_bytes")
+    else:
+        keys = ("registration_download_bytes", "download_bytes", "response_bytes")
+    snapshots = (job, job.get("registration_traffic"), job.get("traffic"))
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        for key in keys:
+            if snapshot.get(key) not in (None, ""):
+                return _traffic_int(snapshot.get(key))
+    return 0
+
+
 def _registration_job_traffic_bytes(job: dict) -> int:
     """Return the measured traffic for one registration job.
 
@@ -4313,11 +4413,9 @@ def _registration_job_traffic_bytes(job: dict) -> int:
         if isinstance(job.get("traffic"), dict) else None,
     )
     for value in candidates:
-        try:
-            return max(0, int(value or 0))
-        except (TypeError, ValueError):
-            continue
-    return 0
+        if value not in (None, ""):
+            return _traffic_int(value)
+    return _registration_job_direction_bytes(job, "upload") + _registration_job_direction_bytes(job, "download")
 
 
 def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime | None = None) -> dict:
@@ -4345,6 +4443,22 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         result["traffic_bytes"] = measured
         result["registration_traffic_bytes"] = measured
         result["total_traffic_bytes"] = measured
+        has_directions = any(
+            key in result and result.get(key) is not None
+            for key in (
+                "upload_traffic_bytes", "download_traffic_bytes",
+                "registration_upload_bytes", "registration_download_bytes",
+            )
+        )
+        if has_directions:
+            result["upload_traffic_bytes"] = _traffic_int(
+                result.get("upload_traffic_bytes") or result.get("registration_upload_bytes")
+            )
+            result["download_traffic_bytes"] = _traffic_int(
+                result.get("download_traffic_bytes") or result.get("registration_download_bytes")
+            )
+            result["registration_upload_bytes"] = result["upload_traffic_bytes"]
+            result["registration_download_bytes"] = result["download_traffic_bytes"]
         result["traffic_task_count"] = max(0, int(result.get("traffic_task_count") or 0))
         result["elapsed_seconds"] = _elapsed_seconds(batch.get("started_at"), batch.get("completed_at"), now=current_time)
         return result
@@ -4367,6 +4481,9 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         ]
     status_counts: dict[str, int] = {}
     traffic_bytes = 0
+    upload_traffic_bytes = 0
+    download_traffic_bytes = 0
+    directional_traffic_task_count = 0
     traffic_task_count = 0
     traffic_sources: set[str] = set()
     for row in related:
@@ -4376,6 +4493,13 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         if measured:
             traffic_bytes += measured
             traffic_task_count += 1
+        upload_traffic_bytes += _registration_job_direction_bytes(row, "upload")
+        download_traffic_bytes += _registration_job_direction_bytes(row, "download")
+        if any(
+            row.get(key) is not None
+            for key in ("registration_upload_bytes", "registration_download_bytes")
+        ):
+            directional_traffic_task_count += 1
         source = str(row.get("registration_traffic_source") or row.get("traffic_source") or "").strip()
         if source:
             traffic_sources.add(source[:80])
@@ -4411,6 +4535,13 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
             str(row.get("job_type") or "").strip().lower() == "rebind"
             for row in related
         ) else "registration"
+    traffic_directions = ({
+        "upload_traffic_bytes": upload_traffic_bytes,
+        "download_traffic_bytes": download_traffic_bytes,
+        "registration_upload_bytes": upload_traffic_bytes,
+        "registration_download_bytes": download_traffic_bytes,
+        "directional_traffic_task_count": directional_traffic_task_count,
+    } if directional_traffic_task_count else {})
     result.update({
         "task_type": task_type,
         "submitted_count": len(related),
@@ -4430,6 +4561,7 @@ def _registration_batch_snapshot(batch: dict, jobs: list[dict], *, now: datetime
         "status": "completed" if is_completed else "running",
         "completed_at": completed_at,
         "elapsed_seconds": _elapsed_seconds(batch.get("started_at"), completed_at, now=current_time),
+        **traffic_directions,
     })
     return result
 
@@ -4477,6 +4609,10 @@ def create_registration_batch(
             "traffic_bytes": 0,
             "registration_traffic_bytes": 0,
             "total_traffic_bytes": 0,
+            "upload_traffic_bytes": 0,
+            "download_traffic_bytes": 0,
+            "registration_upload_bytes": 0,
+            "registration_download_bytes": 0,
             "traffic_task_count": 0,
             "traffic_source": None,
             "running_count": 0,
@@ -4523,6 +4659,8 @@ def list_registration_batches(limit: int = 200) -> list[dict]:
                     "completed_at", "success_count", "failed_count", "success_rate", "running_count",
                     "pending_count", "completed_count", "status", "elapsed_seconds", "traffic_bytes",
                     "registration_traffic_bytes", "total_traffic_bytes", "traffic_task_count", "traffic_source",
+                    "upload_traffic_bytes", "download_traffic_bytes",
+                    "registration_upload_bytes", "registration_download_bytes",
                 )
             ):
                 row.update(snapshot)
@@ -4675,7 +4813,15 @@ def _new_job_row(
         "account_id": account_id,
         "batch_id": batch_id,
         "registration_traffic_bytes": None,
+        "registration_upload_bytes": None,
+        "registration_download_bytes": None,
         "registration_traffic_source": None,
+        "registration_traffic_scope": None,
+        "registration_traffic_confidence": None,
+        "registration_traffic_measurement": None,
+        "registration_traffic_request_count": None,
+        "registration_traffic_response_count": None,
+        "registration_traffic_measurement_errors": None,
         "created_at": _now(),
     }
 
@@ -4839,7 +4985,15 @@ def update_job(
     completed_at: str | None = None,
     account_id: int | None = None,
     registration_traffic_bytes: int | None = None,
+    registration_upload_bytes: int | None = None,
+    registration_download_bytes: int | None = None,
     registration_traffic_source: str | None = None,
+    registration_traffic_scope: str | None = None,
+    registration_traffic_confidence: str | None = None,
+    registration_traffic_measurement: str | None = None,
+    registration_traffic_request_count: int | None = None,
+    registration_traffic_response_count: int | None = None,
+    registration_traffic_measurement_errors: int | None = None,
 ) -> None:
     with _LOCK:
         rows = _load_jobs()
@@ -4858,15 +5012,24 @@ def update_job(
             row["completed_at"] = completed_at
         if account_id is not None:
             row["account_id"] = account_id
-        if registration_traffic_bytes is not None:
-            try:
-                row["registration_traffic_bytes"] = max(0, int(registration_traffic_bytes))
-            except (TypeError, ValueError):
-                pass
-        if registration_traffic_source is not None:
-            source = str(registration_traffic_source or "").strip()
-            if source:
-                row["registration_traffic_source"] = source[:80]
+        for key, supplied in (
+            ("registration_traffic_bytes", registration_traffic_bytes),
+            ("registration_upload_bytes", registration_upload_bytes),
+            ("registration_download_bytes", registration_download_bytes),
+            ("registration_traffic_request_count", registration_traffic_request_count),
+            ("registration_traffic_response_count", registration_traffic_response_count),
+            ("registration_traffic_measurement_errors", registration_traffic_measurement_errors),
+        ):
+            if supplied is not None:
+                row[key] = _traffic_int(supplied)
+        for key, supplied in (
+            ("registration_traffic_source", registration_traffic_source),
+            ("registration_traffic_scope", registration_traffic_scope),
+            ("registration_traffic_confidence", registration_traffic_confidence),
+            ("registration_traffic_measurement", registration_traffic_measurement),
+        ):
+            if supplied is not None and str(supplied).strip():
+                row[key] = str(supplied).strip()[:80]
         _save_jobs(rows)
 
 
@@ -5394,6 +5557,8 @@ def prune_registration_jobs(
                         "submitted_count", "success_count", "failed_count", "success_rate", "running_count",
                         "pending_count", "completed_count", "status", "completed_at", "elapsed_seconds",
                         "traffic_bytes", "registration_traffic_bytes", "total_traffic_bytes", "traffic_task_count", "traffic_source",
+                        "upload_traffic_bytes", "download_traffic_bytes",
+                        "registration_upload_bytes", "registration_download_bytes",
                     )
                 ):
                     # 先固化终态批次统计，再删除其旧任务行；否则后续只剩最近 N

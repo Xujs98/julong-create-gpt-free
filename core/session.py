@@ -548,7 +548,11 @@ class BrowserSession:
         self._raise_if_circuit_open()
         headers = self._attach_openai_target_headers_for_url(url, headers)
         self.traffic_meter.record_request(url, headers, kwargs)
-        resp = self.session.get(url, headers=headers, **kwargs)
+        try:
+            resp = self.session.get(url, headers=headers, **kwargs)
+        except Exception:
+            self.traffic_meter.record_request_failure()
+            raise
         self.traffic_meter.record_response(resp)
         return self._observe_response_for_circuit_breaker(resp, url)
 
@@ -557,7 +561,11 @@ class BrowserSession:
         self._raise_if_circuit_open()
         headers = self._attach_openai_target_headers_for_url(url, headers)
         self.traffic_meter.record_request(url, headers, kwargs)
-        resp = self.session.post(url, headers=headers, **kwargs)
+        try:
+            resp = self.session.post(url, headers=headers, **kwargs)
+        except Exception:
+            self.traffic_meter.record_request_failure()
+            raise
         self.traffic_meter.record_response(resp)
         return self._observe_response_for_circuit_breaker(resp, url)
 

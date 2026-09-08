@@ -162,7 +162,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "REGISTRATION_TRAFFIC_MODE", "file": "traffic.py", "type": "str", "group": "注册方式",
-        "label": "注册模式", "help": "默认保持原始请求；稳定模式阻断媒体和低风险遥测但放行 A/B；节流模式追加阻断 A/B 初始化",
+        "label": "注册模式", "help": "默认保持原始请求；稳定模式阻断媒体和低风险遥测但放行 A/B；节流模式极致压缩 A/B、源码映射和同域遥测，核心 CSS/Auth/OTP/Sentinel/Cloudflare 始终放行",
         "choices": ["default", "stable", "throttle"],
         "choice_labels": {"default": "默认（保持原来的不变）", "stable": "稳定模式", "throttle": "节流模式"},
     },

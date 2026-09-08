@@ -693,6 +693,12 @@ def build_cloak_driver(
     driver._registration_log_prefix = "[Cloak注册]"
     driver.set_page_load_timeout(int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90))
     try:
+        from core.traffic import install_playwright_traffic_meter
+        meter = install_playwright_traffic_meter(context, page)
+        driver._registration_traffic_meter = meter
+    except Exception as exc:
+        logger.debug("[Cloak] 双向流量计量未安装：%s: %s", type(exc).__name__, str(exc)[:180])
+    try:
         from core.traffic_optimizer import install_playwright_network_optimization
         optimization_handle = install_playwright_network_optimization(context, page, label="Cloak")
         # 注册层通过 Selenium 适配器读取流量快照；同步保存同一 handle，

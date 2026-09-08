@@ -119,6 +119,7 @@ class RegistrationBatchStorageTests(unittest.TestCase):
         db.update_job(
             first["id"], status="success", completed_at="2026-09-07T01:00:00",
             registration_traffic_bytes=1024, registration_traffic_source="browser_performance",
+            registration_upload_bytes=128, registration_download_bytes=896,
         )
         running = db.get_registration_batch(batch["id"])
         self.assertEqual(running["traffic_bytes"], 1024)
@@ -128,11 +129,14 @@ class RegistrationBatchStorageTests(unittest.TestCase):
 
         db.update_job(
             second["id"], status="failed", completed_at="2026-09-07T01:00:01",
-            registration_traffic_bytes=2048,
+            registration_traffic_bytes=2048, registration_upload_bytes=256,
+            registration_download_bytes=1792,
         )
         complete = db.get_registration_batch(batch["id"])
         self.assertEqual(complete["status"], "completed")
         self.assertEqual(complete["registration_traffic_bytes"], 3072)
+        self.assertEqual(complete["upload_traffic_bytes"], 384)
+        self.assertEqual(complete["download_traffic_bytes"], 2688)
         self.assertEqual(complete["traffic_task_count"], 2)
 
     def test_backfills_legacy_rebind_jobs_and_exposes_latest_summary(self):
@@ -205,7 +209,7 @@ class RegistrationBatchWebUiTests(unittest.TestCase):
         self.assertIn('function formatDurationSeconds(value)', html)
         self.assertIn('function formatRegistrationSuccessRate(batch)', html)
         self.assertIn('成功率：${formatRegistrationSuccessRate(batch)}', html)
-        self.assertIn('本次流量：${formatRegistrationTraffic(', html)
+        self.assertIn('本次流量：${formatRegistrationTrafficBreakdown(', html)
         self.assertIn('<th>本次流量</th>', html)
         self.assertIn('.registration-task-type.is-registration', html)
         self.assertIn('.registration-task-type.is-rebind', html)

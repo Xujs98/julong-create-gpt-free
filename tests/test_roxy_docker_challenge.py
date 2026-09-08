@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 
 from core import roxy_registration
-from core.roxybrowser_client import RoxyBrowserClient
+from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 
 
 def test_docker_roxy_installs_same_safe_traffic_rules_as_native():
@@ -94,3 +94,39 @@ def test_native_roxy_ignores_docker_bridge_configuration(monkeypatch):
     assert opened.docker_bridge is False
     assert opened.debugger_address == "127.0.0.1:61234"
     assert opened.webdriver_url is None
+
+
+def test_docker_bridge_driver_enables_performance_log_before_connecting():
+    opened = RoxyOpenResult(
+        "profile", {}, debugger_address="127.0.0.1:61234",
+        webdriver_url="http://host.docker.internal:9515", docker_bridge=True,
+    )
+    driver = Mock()
+    driver.get_log.return_value = []
+    with patch("selenium.webdriver.remote.webdriver.WebDriver", return_value=driver) as remote, patch(
+        "core.roxy_registration._apply_browser_automation_mask"
+    ), patch("core.roxy_registration._install_registration_traffic_optimization"):
+        result = roxy_registration._build_driver(opened)
+
+    options = remote.call_args.kwargs["options"]
+    assert options.capabilities["goog:loggingPrefs"] == {"performance": "ALL"}
+    assert result._registration_traffic_meter.source == "selenium_performance"
+    driver.get_log.assert_called_once_with("performance")
+
+
+def test_native_driver_enables_performance_log_before_connecting():
+    opened = RoxyOpenResult("profile", {}, debugger_address="127.0.0.1:61234")
+    driver = Mock()
+    driver.get_log.return_value = []
+    with patch("selenium.webdriver.Chrome", return_value=driver) as chrome, patch(
+        "core.roxy_selenium.resolve_chromedriver", return_value="/tmp/chromedriver"
+    ), patch("core.roxy_registration._apply_browser_automation_mask"), patch(
+        "core.roxy_registration._install_registration_traffic_optimization"
+    ):
+        result = roxy_registration._build_driver(opened)
+
+    options = chrome.call_args.kwargs["options"]
+    assert options.capabilities["goog:loggingPrefs"] == {"performance": "ALL"}
+    assert options.experimental_options["debuggerAddress"] == "127.0.0.1:61234"
+    assert result._registration_traffic_meter.source == "selenium_performance"
+    driver.get_log.assert_called_once_with("performance")

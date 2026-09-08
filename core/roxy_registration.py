@@ -51,6 +51,7 @@ def _build_driver(opened: RoxyOpenResult):
         logger.info("[Roxy] Selenium 连接 webdriver_url=%s", opened.webdriver_url)
         options = Options()
         options.page_load_strategy = "eager"
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         # The Docker bridge runs on the Roxy host. Passing the unmodified
         # 127.0.0.1 debugger address makes that host-side driver attach to the
         # already-open profile; the native path remains unchanged.
@@ -59,6 +60,8 @@ def _build_driver(opened: RoxyOpenResult):
         driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
         _apply_browser_automation_mask(driver)
         _install_registration_traffic_optimization(driver)
+        from core.traffic import install_selenium_traffic_meter
+        install_selenium_traffic_meter(driver)
         return driver
 
     if opened.debugger_address:
@@ -66,12 +69,15 @@ def _build_driver(opened: RoxyOpenResult):
         options = Options()
         # 页面里长轮询/风控脚本偶尔会让 driver.get 等到超时；eager 只等 DOMContentLoaded。
         options.page_load_strategy = "eager"
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         options.add_experimental_option("debuggerAddress", opened.debugger_address)
         driver_path = resolve_chromedriver(opened.raw, opened.debugger_address)
         logger.info("[Roxy] 使用 Chromedriver=%s", driver_path)
         driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
         _apply_browser_automation_mask(driver)
         _install_registration_traffic_optimization(driver)
+        from core.traffic import install_selenium_traffic_meter
+        install_selenium_traffic_meter(driver)
         return driver
 
     raise RuntimeError("Roxy 未返回可连接的 Selenium 地址")

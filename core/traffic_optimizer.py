@@ -72,7 +72,23 @@ def _media_patterns() -> list[str]:
         return []
     hosts = [str(item).strip() for item in (getattr(_cfg, "REGISTRATION_MEDIA_HOSTS", ()) or ()) if str(item).strip()]
     extensions = [str(item).strip().lower() for item in (getattr(_cfg, "REGISTRATION_MEDIA_EXTENSIONS", ()) or ()) if str(item).strip()]
+    if _mode() == "throttle":
+        extensions.extend(
+            str(item).strip().lower()
+            for item in (getattr(_cfg, "REGISTRATION_THROTTLE_ONLY_EXTENSIONS", ()) or ())
+            if str(item).strip()
+        )
     return [f"*://{host}/*{extension}*" for host in hosts for extension in extensions]
+
+
+def _throttle_url_patterns() -> list[str]:
+    if _mode() != "throttle":
+        return []
+    return [
+        str(item).strip()
+        for item in (getattr(_cfg, "REGISTRATION_THROTTLE_ONLY_URLS", ()) or ())
+        if str(item).strip()
+    ]
 
 
 def blocked_url_patterns() -> list[str]:
@@ -82,6 +98,7 @@ def blocked_url_patterns() -> list[str]:
     patterns: list[str] = []
     for host in _host_patterns():
         patterns.extend((f"*://{host}/*", f"*://{host}:*/*"))
+    patterns.extend(_throttle_url_patterns())
     patterns.extend(_media_patterns())
     # 保持去重，避免重复规则增加 DevTools payload。
     return list(dict.fromkeys(patterns))
@@ -105,6 +122,8 @@ def should_block_url(url: str, *, resource_type: str | None = None) -> bool:
         return False
     if any(_host_matches(host, pattern) for pattern in _host_patterns()):
         return True
+    if any(fnmatch.fnmatchcase(str(url or "").lower(), pattern.lower()) for pattern in _throttle_url_patterns()):
+        return True
     if not bool(getattr(_cfg, "REGISTRATION_BLOCK_MEDIA", True)):
         return False
     if host not in {
@@ -115,7 +134,10 @@ def should_block_url(url: str, *, resource_type: str | None = None) -> bool:
     media_types = {"image", "media", "font", "texttrack"}
     if resource_type and str(resource_type).lower() in media_types:
         return True
-    return any(path.endswith(extension) for extension in getattr(_cfg, "REGISTRATION_MEDIA_EXTENSIONS", ()) or ())
+    extensions = list(getattr(_cfg, "REGISTRATION_MEDIA_EXTENSIONS", ()) or ())
+    if _mode() == "throttle":
+        extensions.extend(getattr(_cfg, "REGISTRATION_THROTTLE_ONLY_EXTENSIONS", ()) or ())
+    return any(path.endswith(str(extension).lower()) for extension in extensions)
 
 
 def _store_handle(target, handle: TrafficOptimizationHandle) -> TrafficOptimizationHandle:

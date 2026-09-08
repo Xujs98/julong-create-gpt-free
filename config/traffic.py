@@ -11,7 +11,7 @@ from config.env_loader import apply_env_overrides
 # 注册模式：
 #   default  = 保持原始浏览器和协议配置，不安装流量拦截。
 #   stable   = 阻断媒体和低风险遥测，放行 A/B 初始化。
-#   throttle = 在 stable 基础上追加阻断 A/B 初始化。
+#   throttle = 在 stable 基础上追加阻断 A/B、源码映射和同域遥测。
 REGISTRATION_TRAFFIC_MODE: str = "default"
 
 # 兼容此前的高级开关；default 模式始终保持原始请求，stable/throttle 才读取。
@@ -55,6 +55,16 @@ REGISTRATION_THROTTLE_ONLY_HOSTS: tuple[str, ...] = (
     "ab.chatgpt.com",
 )
 
+# 仅 throttle 阻断的同域可选请求。规则限定到明确的遥测路径，不会匹配
+# /api/auth、Sentinel、OTP、Turnstile 或注册所需 XHR/fetch。
+REGISTRATION_THROTTLE_ONLY_URLS: tuple[str, ...] = (
+    "*://chatgpt.com/ces/*",
+    "*://chatgpt.com/cdn-cgi/rum*",
+    "*://chatgpt.com/cdn-cgi/zaraz/*",
+    "*://auth.openai.com/cdn-cgi/rum*",
+    "*://auth.openai.com/cdn-cgi/zaraz/*",
+)
+
 # 仅在核心站点上拦截表单无关的静态资源；挑战/验证码主机不在此列表。
 REGISTRATION_MEDIA_HOSTS: tuple[str, ...] = (
     "chatgpt.com",
@@ -66,6 +76,11 @@ REGISTRATION_MEDIA_HOSTS: tuple[str, ...] = (
 REGISTRATION_MEDIA_EXTENSIONS: tuple[str, ...] = (
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg", ".ico",
     ".woff", ".woff2", ".ttf", ".otf", ".mp4", ".webm", ".mp3", ".m4a",
+)
+
+# Source map 是开发诊断资源；核心 CSS 保留，避免改变元素可见性和挑战布局。
+REGISTRATION_THROTTLE_ONLY_EXTENSIONS: tuple[str, ...] = (
+    ".map",
 )
 
 

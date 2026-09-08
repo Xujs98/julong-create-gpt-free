@@ -1416,7 +1416,15 @@ def save_account_data(
     if traffic_snapshot:
         extra["registration_traffic"] = traffic_snapshot
     traffic_bytes = int(traffic_snapshot.get("total_bytes") or 0) if traffic_snapshot else None
+    traffic_upload_bytes = int(traffic_snapshot.get("upload_bytes") or 0) if traffic_snapshot else None
+    traffic_download_bytes = int(traffic_snapshot.get("download_bytes") or 0) if traffic_snapshot else None
     traffic_source = str(traffic_snapshot.get("source") or "").strip() or None
+    traffic_scope = str(traffic_snapshot.get("scope") or "").strip() or None
+    traffic_confidence = str(traffic_snapshot.get("confidence") or "").strip() or None
+    traffic_measurement = str(traffic_snapshot.get("measurement") or "").strip() or None
+    traffic_request_count = int(traffic_snapshot.get("request_count") or 0) if traffic_snapshot else None
+    traffic_response_count = int(traffic_snapshot.get("response_count") or 0) if traffic_snapshot else None
+    traffic_measurement_errors = int(traffic_snapshot.get("measurement_errors") or 0) if traffic_snapshot else None
     proxy_geo = _capture_proxy_geo(extra, proxy_used)
     if proxy_geo:
         # 顶层字段便于列表接口/搜索直接使用；extra 中仍保留完整驱动元数据。
@@ -1461,8 +1469,16 @@ def save_account_data(
         codex_status=codex_status,
         codex_error=codex_error,
         registration_method=registration_method,
+        registration_upload_bytes=traffic_upload_bytes,
+        registration_download_bytes=traffic_download_bytes,
         registration_traffic_bytes=traffic_bytes,
         registration_traffic_source=traffic_source,
+        registration_traffic_scope=traffic_scope,
+        registration_traffic_confidence=traffic_confidence,
+        registration_traffic_measurement=traffic_measurement,
+        registration_traffic_request_count=traffic_request_count,
+        registration_traffic_response_count=traffic_response_count,
+        registration_traffic_measurement_errors=traffic_measurement_errors,
     )
     batch_folder = _append_batch_archive(
         row_id=row_id,

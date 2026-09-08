@@ -136,8 +136,8 @@ def _append_job_log(job_id: int, message: str) -> None:
         pass
 
 
-def _job_traffic_fields(result: Any) -> tuple[int | None, str | None]:
-    """Extract a normalized traffic total from a driver result.
+def _job_traffic_fields(result: Any) -> dict[str, Any]:
+    """Extract normalized bidirectional traffic fields from a result.
 
     Registration drivers return their measurement under ``registration_traffic``
     (with ``traffic`` kept for compatibility).  Keeping the extraction here
@@ -145,23 +145,36 @@ def _job_traffic_fields(result: Any) -> tuple[int | None, str | None]:
     batch snapshot later sums.
     """
     if not isinstance(result, dict):
-        return None, None
+        return {}
     snapshot = result.get("registration_traffic") or result.get("traffic")
     if not isinstance(snapshot, dict):
-        return None, None
+        return {}
     try:
-        total = max(0, int(snapshot.get("total_bytes") or 0))
-    except (TypeError, ValueError):
-        total = 0
+        from core.traffic import normalize_snapshot
+        snapshot = normalize_snapshot(snapshot)
+    except Exception:
+        return {}
+    total = int(snapshot.get("total_bytes") or 0)
     if not total:
-        try:
-            total = max(0, int(snapshot.get("request_bytes") or 0)) + max(0, int(snapshot.get("response_bytes") or 0))
-        except (TypeError, ValueError):
-            total = 0
-    if not total:
-        return None, None
-    source = str(snapshot.get("source") or "").strip()[:80] or None
-    return total, source
+        return {}
+    fields: dict[str, Any] = {
+        "registration_upload_bytes": int(snapshot.get("upload_bytes") or 0),
+        "registration_download_bytes": int(snapshot.get("download_bytes") or 0),
+        "registration_traffic_bytes": total,
+        "registration_traffic_request_count": int(snapshot.get("request_count") or 0),
+        "registration_traffic_response_count": int(snapshot.get("response_count") or 0),
+        "registration_traffic_measurement_errors": int(snapshot.get("measurement_errors") or 0),
+    }
+    for field, key in (
+        ("registration_traffic_source", "source"),
+        ("registration_traffic_scope", "scope"),
+        ("registration_traffic_confidence", "confidence"),
+        ("registration_traffic_measurement", "measurement"),
+    ):
+        value = str(snapshot.get(key) or "").strip()
+        if value:
+            fields[field] = value[:80]
+    return fields
 
 
 def _random_display_name() -> str:
@@ -638,6 +651,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             db.update_job(job_id, email=email)
             check_stop_requested()
             result = None
+            cumulative_traffic: dict[str, Any] = {}
             retry_limit = _registration_transient_retry_limit()
             for registration_attempt in range(0, retry_limit + 1):
                 check_stop_requested()
@@ -654,6 +668,12 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     if registration_proxy:
                         registration_kwargs["proxy"] = registration_proxy
                     result = run_registration(**registration_kwargs)
+                    if isinstance(result, dict):
+                        attempt_traffic = result.get("registration_traffic") or result.get("traffic")
+                        if isinstance(attempt_traffic, dict):
+                            from core.traffic import merge_snapshots
+                            cumulative_traffic = merge_snapshots(cumulative_traffic, attempt_traffic)
+                            result["registration_traffic"] = cumulative_traffic
                 except StopRequested:
                     raise
                 except Exception as exc:
@@ -713,36 +733,37 @@ def _run_one_job(job_id: int, log_file: str) -> None:
 
             if result is None:
                 raise RuntimeError("注册流程未返回结果")
+            traffic_fields = _job_traffic_fields(result)
+            if isinstance(result, dict) and result.get("account_id") and traffic_fields:
+                # The successful attempt persisted its own bytes while it was
+                # running. Replace them with the task-wide sum when transient
+                # attempts preceded it, so account/job/batch totals agree.
+                db.update_account_registration_traffic(int(result["account_id"]), traffic_fields)
             if is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
-                traffic_bytes, traffic_source = _job_traffic_fields(result)
                 db.update_job(
                     job_id,
                     status="stopped",
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
-                    registration_traffic_bytes=traffic_bytes,
-                    registration_traffic_source=traffic_source,
+                    **traffic_fields,
                 )
                 log_logger.warning(f"[Job {job_id}] 已按用户请求停止")
                 return
             if isinstance(result, dict) and result.get("success"):
-                traffic_bytes, traffic_source = _job_traffic_fields(result)
                 db.update_job(
                     job_id,
                     status="success",
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
-                    registration_traffic_bytes=traffic_bytes,
-                    registration_traffic_source=traffic_source,
+                    **traffic_fields,
                 )
                 log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
             else:
                 # 注意：失败也可能伴随 account_id（如 Codex 失败但账号已注册成功）
                 err = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 result_email = (result or {}).get("email") if isinstance(result, dict) else None
-                traffic_bytes, traffic_source = _job_traffic_fields(result)
                 db.update_job(
                     job_id,
                     status="failed",
@@ -750,8 +771,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
                     error=str(err)[:500],
                     completed_at=datetime.now().isoformat(timespec="seconds"),
-                    registration_traffic_bytes=traffic_bytes,
-                    registration_traffic_source=traffic_source,
+                    **traffic_fields,
                 )
                 email_to_handle = str(result_email or email or "").strip()
                 if _should_disable_failed_registration_email(err):
@@ -762,14 +782,12 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
-        traffic_bytes, traffic_source = _job_traffic_fields(result)
         db.update_job(
             job_id,
             status="stopped",
             error="用户手动停止",
             completed_at=datetime.now().isoformat(timespec="seconds"),
-            registration_traffic_bytes=traffic_bytes,
-            registration_traffic_source=traffic_source,
+            **_job_traffic_fields(result),
         )
     except Exception as exc:
         err_text = f"{type(exc).__name__}: {exc}"
@@ -779,25 +797,21 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             _release_unconsumed_job_email(email, err_text)
         if is_stop_requested(job_id):
             log_logger.warning(f"[Job {job_id}] 停止中捕获异常，按停止处理: {type(exc).__name__}: {exc}")
-            traffic_bytes, traffic_source = _job_traffic_fields(result)
             db.update_job(
                 job_id,
                 status="stopped",
                 error="用户手动停止",
                 completed_at=datetime.now().isoformat(timespec="seconds"),
-                registration_traffic_bytes=traffic_bytes,
-                registration_traffic_source=traffic_source,
+                **_job_traffic_fields(result),
             )
             return
         log_logger.exception(f"[Job {job_id}] 异常")
-        traffic_bytes, traffic_source = _job_traffic_fields(result)
         db.update_job(
             job_id,
             status="failed",
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
-            registration_traffic_bytes=traffic_bytes,
-            registration_traffic_source=traffic_source,
+            **_job_traffic_fields(result),
         )
     finally:
         _deactivate_job(job_id)

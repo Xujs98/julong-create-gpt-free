@@ -7,13 +7,13 @@ TEMPLATE = Path(__file__).parents[1] / "webui" / "templates" / "index.html"
 def test_account_created_at_uses_two_line_date_and_time_layout():
     source = TEMPLATE.read_text(encoding="utf-8")
 
-    assert "function _accountCreatedAtCell(value, trafficBytes)" in source
+    assert "function _accountCreatedAtCell(value, trafficBytes, uploadBytes, downloadBytes, trafficScope, trafficConfidence)" in source
     assert 'class="acc-v2-created-date"' in source
     assert 'class="acc-v2-created-meta"' in source
     assert 'class="acc-v2-created-time"' in source
     assert 'class="acc-v2-created-traffic-row"' in source
     assert '${trafficHtml}</div></div>`;' in source
-    assert "${_accountCreatedAtCell(r.created_at, r.registration_traffic_bytes)}" in source
+    assert "${_accountCreatedAtCell(r.created_at, r.registration_traffic_bytes, r.registration_upload_bytes, r.registration_download_bytes, r.registration_traffic_scope, r.registration_traffic_confidence)}" in source
 
 
 def test_account_created_at_relative_label_is_limited_to_seven_days():

@@ -223,7 +223,11 @@ def _compact_account_for_list(row: dict) -> dict:
     # 这些是列表固定列直接展示字段。
     for key in (
         "user_name", "email_source", "note", "archived", "created_at",
-        "registration_traffic_bytes", "registration_traffic_source",
+        "registration_traffic_bytes", "registration_upload_bytes", "registration_download_bytes",
+        "registration_traffic_source", "registration_traffic_scope",
+        "registration_traffic_confidence", "registration_traffic_measurement",
+        "registration_traffic_request_count", "registration_traffic_response_count",
+        "registration_traffic_measurement_errors",
         "link_completed", "payment_completed", "sms_completed", "proxy_country_code",
         "proxy_country_name", "proxy_region", "proxy_city", "proxy_exit_ip",
         "plan_type", "current_plan_type", "plus_trial_eligible",
@@ -385,7 +389,11 @@ def _compact_job_for_list(row: dict) -> dict:
     }
     for key in (
         "parent_job_id", "retry_attempt", "batch_id", "email", "started_at", "completed_at",
-        "registration_traffic_bytes", "registration_traffic_source",
+        "registration_traffic_bytes", "registration_upload_bytes", "registration_download_bytes",
+        "registration_traffic_source", "registration_traffic_scope",
+        "registration_traffic_confidence", "registration_traffic_measurement",
+        "registration_traffic_request_count", "registration_traffic_response_count",
+        "registration_traffic_measurement_errors",
         "display_status", "retryable", "retry_action", "retry_label",
         "manual_otp_required", "job_type", "rebind_status", "rebind_source_account_id",
         "rebind_source_email", "rebind_target_email", "rebind_target_source",
@@ -430,7 +438,11 @@ def _public_rebind_job(row: dict | None) -> dict:
         "rebind_group_id", "rebind_group_name", "rebind_driver",
         "rebind_login_driver", "rebind_action_driver", "rebind_hybrid_mode",
         "rebind_headless", "rebind_login_headless",
-        "registration_traffic_bytes", "registration_traffic_source",
+        "registration_traffic_bytes", "registration_upload_bytes", "registration_download_bytes",
+        "registration_traffic_source", "registration_traffic_scope",
+        "registration_traffic_confidence", "registration_traffic_measurement",
+        "registration_traffic_request_count", "registration_traffic_response_count",
+        "registration_traffic_measurement_errors",
     }
     public = {key: row[key] for key in allowed if key in row}
     if public.get("error_message") not in (None, ""):

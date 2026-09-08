@@ -30,6 +30,10 @@ def test_traffic_optimizer_blocks_optional_hosts_but_keeps_core_and_challenge_ur
 
     with patch("config.traffic.REGISTRATION_TRAFFIC_MODE", "throttle"):
         assert should_block_url("https://ab.chatgpt.com/v1/initialize", resource_type="xhr")
+        assert should_block_url("https://chatgpt.com/ces/v1/t", resource_type="xhr")
+        assert should_block_url("https://chatgpt.com/assets/app.js.map", resource_type="fetch")
+        assert not should_block_url("https://chatgpt.com/assets/app.css", resource_type="stylesheet")
+        assert not should_block_url("https://auth.openai.com/api/accounts/email-otp/validate", resource_type="xhr")
 
 
 def test_default_mode_keeps_original_browser_requests():

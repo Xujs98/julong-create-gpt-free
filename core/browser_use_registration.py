@@ -1738,6 +1738,11 @@ def run_browser_use_registration(
             page.set_default_timeout(_timeout_ms())
             page.set_default_navigation_timeout(_timeout_ms(getattr(_cfg, "BROWSER_USE_NAVIGATION_TIMEOUT", 90)))
             try:
+                from core.traffic import install_playwright_traffic_meter
+                install_playwright_traffic_meter(context, page)
+            except Exception as exc:
+                logger.debug("[%s] 双向流量计量未安装：%s: %s", cloud_label, type(exc).__name__, str(exc)[:180])
+            try:
                 from core.traffic_optimizer import install_playwright_network_optimization
                 install_playwright_network_optimization(context, page, label=cloud_label)
             except Exception as exc:

@@ -505,10 +505,20 @@ def _traffic_fields(result: dict) -> dict[str, Any]:
         total = 0
     if not total:
         return {}
-    return {
+    fields = {
+        "registration_upload_bytes": max(0, int(snapshot.get("upload_bytes") or snapshot.get("request_bytes") or 0)),
+        "registration_download_bytes": max(0, int(snapshot.get("download_bytes") or snapshot.get("response_bytes") or 0)),
         "registration_traffic_bytes": total,
         "registration_traffic_source": str(snapshot.get("source") or "").strip()[:80],
     }
+    for field, key in (
+        ("registration_traffic_scope", "scope"),
+        ("registration_traffic_confidence", "confidence"),
+        ("registration_traffic_measurement", "measurement"),
+    ):
+        if str(snapshot.get(key) or "").strip():
+            fields[field] = str(snapshot[key]).strip()[:80]
+    return fields
 
 
 def _run_one(job_id: int) -> None:

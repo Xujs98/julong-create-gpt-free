@@ -780,6 +780,7 @@
     .jobs-table-v2 .jobs-v2-task-type.is-rebind { color: #7c3aed; border-color: #d8b4fe; background: #f5f3ff; }
     .jobs-table-v2 .col-time { width: 170px; }
     .jobs-table-v2 .col-duration { width: 118px; font-variant-numeric: tabular-nums; }
+    .jobs-table-v2 .col-traffic { width: 176px; font-size: 11px; font-variant-numeric: tabular-nums; }
     .jobs-table-v2 .col-error { width: auto; min-width: 160px; }
     .jobs-table-v2 .col-actions {
       width: 168px; overflow: visible; text-overflow: clip; white-space: nowrap;
@@ -3753,7 +3754,7 @@ try {
         <table class="jobs-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-status"><col class="col-task-type"><col class="col-email">
-            <col class="col-time"><col class="col-time"><col class="col-duration"><col class="col-error"><col class="col-actions">
+            <col class="col-time"><col class="col-time"><col class="col-duration"><col class="col-traffic"><col class="col-error"><col class="col-actions">
           </colgroup>
           <thead>
             <tr>
@@ -3765,6 +3766,7 @@ try {
               <th class="col-time">开始</th>
               <th class="col-time">完成</th>
               <th class="col-duration">耗时</th>
+              <th class="col-traffic">流量</th>
               <th class="col-error">错误</th>
               <th class="col-actions">操作</th>
             </tr>
@@ -4829,6 +4831,12 @@ function formatRegistrationTraffic(value) {
   const digits = amount >= 100 ? 0 : (amount >= 10 ? 1 : 2);
   return `${amount.toFixed(digits)} ${unit}`;
 }
+function formatRegistrationTrafficBreakdown(total, upload, download) {
+  const totalText = formatRegistrationTraffic(total);
+  const hasDirections = [upload, download].some(value => value !== null && value !== undefined && value !== '');
+  if (!hasDirections) return totalText;
+  return `${totalText}（↑ ${formatRegistrationTraffic(upload)} / ↓ ${formatRegistrationTraffic(download)}）`;
+}
 
 // 按任务开始与完成时间计算墙钟耗时；运行中任务使用当前时间。
 function durationSecondsBetween(startedAt, completedAt='') {
@@ -5008,7 +5016,7 @@ function renderRegistrationBatchSummary() {
       <span class="batch-summary-success">成功：${Number(batch.success_count || 0)}</span>
       <span class="batch-summary-failed">失败：${Number(batch.failed_count || 0)}</span>
       <span class="batch-summary-rate">成功率：${formatRegistrationSuccessRate(batch)}</span>
-      <span class="batch-summary-traffic">本次流量：${formatRegistrationTraffic(batch.total_traffic_bytes ?? batch.traffic_bytes ?? batch.registration_traffic_bytes)}</span>
+      <span class="batch-summary-traffic">本次流量：${formatRegistrationTrafficBreakdown(batch.total_traffic_bytes ?? batch.traffic_bytes ?? batch.registration_traffic_bytes, batch.upload_traffic_bytes ?? batch.registration_upload_bytes, batch.download_traffic_bytes ?? batch.registration_download_bytes)}</span>
       ${active ? `<span>运行：${running}</span><span>排队：${pending}</span><span>类型：${taskType}</span>` : `<span>状态：${taskType}已完成</span>`}
       ${REGISTRATION_BATCH_WARNING ? `<span class="batch-summary-warning">${esc(REGISTRATION_BATCH_WARNING)}</span>` : ''}
     </div>`;
@@ -5237,6 +5245,7 @@ function renderJobs() {
         <td class="col-time" title="${esc(started)}">${esc(started)}</td>
         <td class="col-time" title="${esc(completed)}">${esc(completed)}</td>
         <td class="col-duration" data-duration-start="${attrEsc(j.started_at || '')}" data-duration-end="${attrEsc(j.completed_at || '')}" title="${esc(duration)}">${esc(duration)}</td>
+        <td class="col-traffic" title="${esc(formatRegistrationTrafficBreakdown(j.registration_traffic_bytes, j.registration_upload_bytes, j.registration_download_bytes))}">${esc(j.registration_traffic_bytes == null ? '-' : formatRegistrationTrafficBreakdown(j.registration_traffic_bytes, j.registration_upload_bytes, j.registration_download_bytes))}</td>
         <td class="col-error" title="${esc(err)}">${esc(err ? short(err, 60) : '-')}</td>
         <td class="col-actions">
           <div class="jobs-v2-ops">
@@ -5248,7 +5257,7 @@ function renderJobs() {
           </div>
         </td>
       </tr>`;
-    }).join('') || '<tr><td colspan="10" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
+    }).join('') || '<tr><td colspan="11" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
   }
 
 
@@ -5388,7 +5397,7 @@ function renderRegistrationTaskLogs() {
       <td class="log-success">${Number(batch.success_count || 0)}</td>
       <td class="log-failed">${Number(batch.failed_count || 0)}</td>
       <td class="log-success">${formatRegistrationSuccessRate(batch)}</td>
-      <td>${formatRegistrationTraffic(batch.total_traffic_bytes ?? batch.traffic_bytes ?? batch.registration_traffic_bytes)}</td>
+      <td>${formatRegistrationTrafficBreakdown(batch.total_traffic_bytes ?? batch.traffic_bytes ?? batch.registration_traffic_bytes, batch.upload_traffic_bytes ?? batch.registration_upload_bytes, batch.download_traffic_bytes ?? batch.registration_download_bytes)}</td>
       <td class="${active ? 'log-running' : ''}">${active ? `执行中（运行 ${Number(batch.running_count || 0)} / 排队 ${Number(batch.pending_count || 0)}）` : '已完成'}</td>
     </tr>`;
   }).join('');
@@ -6677,7 +6686,7 @@ function _formatRegistrationTraffic(value) {
   const digits = amount >= 100 ? 0 : (amount >= 10 ? 1 : 2);
   return `${amount.toFixed(digits)} ${unit}`;
 }
-function _accountCreatedAtCell(value, trafficBytes) {
+function _accountCreatedAtCell(value, trafficBytes, uploadBytes, downloadBytes, trafficScope, trafficConfidence) {
   const raw = String(value || '').trim();
   if (!raw) return '<span class="acc-v2-muted">-</span>';
   const normalized = /^\d{4}-\d{2}-\d{2} /.test(raw) ? raw.replace(' ', 'T') : raw;
@@ -6693,8 +6702,12 @@ function _accountCreatedAtCell(value, trafficBytes) {
   const dayLabel = dayDiff === 0 ? '今天' : (dayDiff >= 1 && dayDiff <= 7 ? `${dayDiff}天前` : '');
   const labelHtml = dayLabel ? `<span class="acc-v2-created-day">${esc(dayLabel)}</span>` : '';
   const trafficText = _formatRegistrationTraffic(trafficBytes);
+  const uploadText = _formatRegistrationTraffic(uploadBytes);
+  const downloadText = _formatRegistrationTraffic(downloadBytes);
+  const directionalText = uploadText || downloadText ? `（↑ ${uploadText || '0 B'} / ↓ ${downloadText || '0 B'}）` : '';
+  const trafficTitle = ["注册阶段应用层流量", trafficScope, trafficConfidence ? `可信度 ${trafficConfidence}` : ''].filter(Boolean).join('；');
   const trafficHtml = trafficText
-    ? `<span class="acc-v2-created-traffic" title="注册阶段累计传输量">流量 ${esc(trafficText)}</span>`
+    ? `<span class="acc-v2-created-traffic" title="${esc(trafficTitle)}">流量 ${esc(trafficText + directionalText)}</span>`
     : '<span class="acc-v2-created-traffic is-muted">流量未记录</span>';
   return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span></div><div class="acc-v2-created-traffic-row">${trafficHtml}</div></div>`;
 }
@@ -6721,7 +6734,7 @@ function renderAccounts() {
       <td class="col-small acc-v2-totp-cell">${_accountTotpCell(r, accountIcons)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-agent">${_codexAgentCell(r)}</td>
-      <td class="col-time">${_accountCreatedAtCell(r.created_at, r.registration_traffic_bytes)}</td>
+      <td class="col-time">${_accountCreatedAtCell(r.created_at, r.registration_traffic_bytes, r.registration_upload_bytes, r.registration_download_bytes, r.registration_traffic_scope, r.registration_traffic_confidence)}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
           <button type="button" class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button>
