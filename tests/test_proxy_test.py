@@ -207,10 +207,16 @@ class ProxyTestTests(unittest.TestCase):
         self.assertEqual(result["inconclusive"], 1)
         self.assertEqual(result["unhealthy_proxy_urls"], ["http://dirty.test:2"])
         self.assertEqual(result["inconclusive_proxy_urls"], ["http://retry.test:3"])
-    def test_cloak_uses_remote_dns_for_explicit_socks5(self):
+    def test_cloak_keeps_playwright_supported_socks5_scheme(self):
         self.assertEqual(
             normalize_cloak_proxy("socks5://user:pass@proxy.example:3000"),
-            "socks5h://user:pass@proxy.example:3000",
+            "socks5://user:pass@proxy.example:3000",
+        )
+
+    def test_cloak_converts_socks5h_to_playwright_supported_scheme(self):
+        self.assertEqual(
+            normalize_cloak_proxy("socks5h://user:pass@proxy.example:3000"),
+            "socks5://user:pass@proxy.example:3000",
         )
 
     @patch("core.proxy_test.Session")

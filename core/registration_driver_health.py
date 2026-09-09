@@ -51,13 +51,23 @@ def roxy_api_runtime_check(value: str | None = None, *, timeout: float = 0.8) ->
     if value is None:
         from config import roxybrowser as cfg
         value = getattr(cfg, "ROXY_API_BASE", "")
-    raw = str(value or "").strip()
+    configured = str(value or "").strip()
+    # 注册主流程会在 Docker 内把宿主机 Roxy 的 loopback 地址改写为
+    # host.docker.internal；补跑预检必须复用同一规则，否则会错误探测容器
+    # 自身的 127.0.0.1 并降级到 Cloak。
+    try:
+        from core.roxy_selenium import normalize_api_base
+        raw = str(normalize_api_base(configured) or configured).strip()
+    except Exception:  # pragma: no cover - 地址改写失败时仍保留原探测行为
+        raw = configured
     result = {
         "reachable": False,
         "host": "",
         "port": None,
         "error": None,
         "api_base": raw,
+        "configured_api_base": configured,
+        "runtime_rewritten": raw != configured,
     }
     try:
         parsed = urlsplit(raw)
@@ -100,6 +110,9 @@ def registration_driver_runtime_preflight(value: str | None = None, *, timeout: 
         "host": probe.get("host", ""),
         "port": probe.get("port"),
         "error": probe.get("error"),
+        "configured_api_base": probe.get("configured_api_base", ""),
+        "api_base": probe.get("api_base", ""),
+        "runtime_rewritten": bool(probe.get("runtime_rewritten")),
     })
     if not probe.get("reachable"):
         error = str(probe.get("error") or "未知连接错误")

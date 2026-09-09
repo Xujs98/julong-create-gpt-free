@@ -75,6 +75,11 @@ _LEGACY_OUTLOOK_JSON = _LEGACY_DATA_DIR / "outlook_accounts.json"
 _LEGACY_ACCOUNTS_JSON = _LEGACY_DATA_DIR / "registered_accounts.json"
 _LEGACY_JOBS_JSON = _LEGACY_DATA_DIR / "registration_jobs.json"
 _LOCK = threading.RLock()
+_VIEWER_REFRESH_LOCK = threading.Lock()
+_VIEWER_REFRESH_TIMER: threading.Timer | None = None
+_VIEWER_REFRESH_PENDING = False
+_VIEWER_REFRESH_RUNNING = False
+_VIEWER_REFRESH_DELAY = 1.0
 
 
 def _now() -> str:
@@ -335,10 +340,20 @@ def _viewer_snapshot(outlook_rows: list[dict], account_rows: list[dict]) -> dict
         (a.get("email") or "").lower(): a
         for a in account_rows
     }
+    icloud_by_email = {
+        str(item.get("email") or "").strip().casefold(): item
+        for item in _load_icloud_emails()
+        if str(item.get("email") or "").strip()
+    }
+    domain_by_email = {
+        str(item.get("email") or "").strip().casefold(): item
+        for item in _load_domain_pool()
+        if str(item.get("email") or "").strip()
+    }
     return {
         "generated_at": _now(),
         "accounts": [
-            _decorate_account(r)
+            _decorate_account(r, icloud_by_email=icloud_by_email, domain_by_email=domain_by_email)
             for r in sorted(account_rows, key=lambda x: int(x.get("id") or 0), reverse=True)
         ],
         "outlook": [
@@ -672,6 +687,50 @@ render();
             return fallback
 
 
+def _schedule_static_viewer_refresh() -> None:
+    """Coalesce compatibility viewer writes during account/email bursts."""
+    global _VIEWER_REFRESH_TIMER, _VIEWER_REFRESH_PENDING
+    with _VIEWER_REFRESH_LOCK:
+        _VIEWER_REFRESH_PENDING = True
+        if _VIEWER_REFRESH_RUNNING:
+            return
+        if _VIEWER_REFRESH_TIMER is not None and _VIEWER_REFRESH_TIMER.is_alive():
+            return
+        timer = threading.Timer(_VIEWER_REFRESH_DELAY, _run_scheduled_static_viewer_refresh)
+        timer.daemon = True
+        _VIEWER_REFRESH_TIMER = timer
+        timer.start()
+
+
+def _run_scheduled_static_viewer_refresh() -> None:
+    """Render the newest SQLite snapshot outside the database lock."""
+    global _VIEWER_REFRESH_TIMER, _VIEWER_REFRESH_PENDING, _VIEWER_REFRESH_RUNNING
+    with _VIEWER_REFRESH_LOCK:
+        _VIEWER_REFRESH_TIMER = None
+        if not _VIEWER_REFRESH_PENDING:
+            return
+        _VIEWER_REFRESH_PENDING = False
+        _VIEWER_REFRESH_RUNNING = True
+    try:
+        # Snapshot reads are brief; the expensive HTML serialization and file
+        # replacement happen after releasing _LOCK so registration workers do
+        # not queue behind a 13 MB compatibility export.
+        with _LOCK:
+            outlook_rows = _load_outlook()
+            account_rows = _load_accounts()
+        _render_static_viewer(outlook_rows=outlook_rows, account_rows=account_rows)
+    except Exception as exc:  # pragma: no cover - compatibility export is best effort
+        logger.warning("静态账号查看器异步刷新失败：%s: %s", type(exc).__name__, str(exc)[:180])
+    finally:
+        with _VIEWER_REFRESH_LOCK:
+            _VIEWER_REFRESH_RUNNING = False
+            if _VIEWER_REFRESH_PENDING and _VIEWER_REFRESH_TIMER is None:
+                timer = threading.Timer(_VIEWER_REFRESH_DELAY, _run_scheduled_static_viewer_refresh)
+                timer.daemon = True
+                _VIEWER_REFRESH_TIMER = timer
+                timer.start()
+
+
 def _load_outlook() -> list[dict]:
     if _uses_sqlite(_OUTLOOK_JSON, _DEFAULT_OUTLOOK_JSON):
         return _sqlite_store().load_records("outlook_pool")
@@ -684,6 +743,10 @@ def _load_outlook() -> list[dict]:
 def _save_outlook(rows: list[dict]) -> None:
     if _uses_sqlite(_OUTLOOK_JSON, _DEFAULT_OUTLOOK_JSON):
         _sqlite_store().replace_records("outlook_pool", rows)
+        _write_json(_OUTLOOK_JSON, rows)
+        _sync_outlook_txt(rows)
+        _schedule_static_viewer_refresh()
+        return
     _write_json(_OUTLOOK_JSON, rows)
     _sync_outlook_txt(rows)
     _render_static_viewer(outlook_rows=rows)
@@ -738,6 +801,11 @@ def _save_accounts(rows: list[dict]) -> None:
         row["copy_line"] = _account_line(row)
     if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
         _sqlite_store().replace_records("registered_accounts", rows)
+        _write_json(_ACCOUNTS_JSON, rows)
+        _sync_accounts_txt(rows)
+        _sync_tokens_txt(rows)
+        _schedule_static_viewer_refresh()
+        return
     _write_json(_ACCOUNTS_JSON, rows)
     _sync_accounts_txt(rows)
     _sync_tokens_txt(rows)
@@ -1240,7 +1308,12 @@ def _account_proxy_country_code(row: dict) -> str:
     return _country_code_from_value(row.get("proxy_used"))
 
 
-def _decorate_account(row: dict) -> dict:
+def _decorate_account(
+    row: dict,
+    *,
+    icloud_by_email: dict[str, dict] | None = None,
+    domain_by_email: dict[str, dict] | None = None,
+) -> dict:
     out = dict(row)
     out["note"] = out.get("note") or ""
     out["note_updated_at"] = out.get("note_updated_at") or ""
@@ -1266,9 +1339,15 @@ def _decorate_account(row: dict) -> dict:
     email_value = str(out.get("email") or "")
     code_url_row = None
     if email_source == "icloud":
-        code_url_row = _find_by_email(_load_icloud_emails(), email_value)
+        if icloud_by_email is None:
+            code_url_row = _find_by_email(_load_icloud_emails(), email_value)
+        else:
+            code_url_row = icloud_by_email.get(email_value.casefold())
     elif email_source == "cloudflare_domain":
-        code_url_row = _find_domain_email(_load_domain_pool(), email_value)
+        if domain_by_email is None:
+            code_url_row = _find_domain_email(_load_domain_pool(), email_value)
+        else:
+            code_url_row = domain_by_email.get(email_value.casefold())
     code_url_available = bool(str((code_url_row or {}).get("code_url") or "").strip())
     if email_source in {"icloud", "cloudflare_domain"}:
         out["email_code_url_available"] = code_url_available
@@ -2430,7 +2509,29 @@ def _filtered_decorated_accounts(
         pass
     else:
         rows = [r for r in rows if not bool(r.get("archived"))]
-    decorated = [_decorate_account(r) for r in rows]
+    # Account decoration used to reload the complete iCloud/domain pool once
+    # per account. With hundreds of accounts this turned a 2-second UI poll
+    # into repeated SQLite scans and held the single Gunicorn worker under
+    # load. Build the two small lookup maps once per request instead.
+    sources = {str(row.get("email_source") or "").strip().lower() for row in rows}
+    icloud_by_email = None
+    domain_by_email = None
+    if "icloud" in sources:
+        icloud_by_email = {
+            str(item.get("email") or "").strip().casefold(): item
+            for item in _load_icloud_emails()
+            if str(item.get("email") or "").strip()
+        }
+    if "cloudflare_domain" in sources:
+        domain_by_email = {
+            str(item.get("email") or "").strip().casefold(): item
+            for item in _load_domain_pool()
+            if str(item.get("email") or "").strip()
+        }
+    decorated = [
+        _decorate_account(r, icloud_by_email=icloud_by_email, domain_by_email=domain_by_email)
+        for r in rows
+    ]
     group_names = _account_group_filter_names(group_filter)
     if group_names:
         decorated = [
@@ -3925,7 +4026,7 @@ def outlook_pool_summary() -> dict:
             out[status] = out.get(status, 0) + 1
         # ``total`` 保留池内全部记录数量；``available`` 只统计带接码 URL
         # 且可实际领取的素材，历史缺 URL 行单独落在 ``missing_url``。
-        out["total"] = len(_load_domain_pool())
+        out["total"] = sum(v for k, v in out.items() if k != "total")
         return out
 
 

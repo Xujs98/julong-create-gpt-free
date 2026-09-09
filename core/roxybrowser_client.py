@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 # Roxy 本地服务在异步创建 Profile 时不接受并发 /browser/create 请求。
 # 进程内所有客户端共享这把锁，避免注册/查活/换绑任务同时创建环境。
 _ROXY_CREATE_LOCK = threading.Lock()
+_DOCKER_WEBDRIVER_PROBE_LOCK = threading.Lock()
+_DOCKER_WEBDRIVER_PROBE_CACHE: dict[str, tuple[float, bool]] = {}
+_DOCKER_WEBDRIVER_PROBE_TTL = 30.0
 
 
 @dataclass
@@ -216,15 +219,26 @@ class RoxyBrowserClient:
     @staticmethod
     def _docker_webdriver_available(url: str) -> bool:
         """Probe the host-side bridge before switching Docker to remote mode."""
-        endpoint = str(url or "").rstrip("/") + "/status"
+        base = str(url or "").strip().rstrip("/")
+        if not base:
+            return False
+        now = time.monotonic()
+        with _DOCKER_WEBDRIVER_PROBE_LOCK:
+            cached = _DOCKER_WEBDRIVER_PROBE_CACHE.get(base)
+            if cached is not None and now - cached[0] < _DOCKER_WEBDRIVER_PROBE_TTL:
+                return cached[1]
+        endpoint = base + "/status"
+        available = False
         try:
             response = requests.get(endpoint, timeout=2)
-            if not response.ok:
-                return False
-            payload = response.json()
-            return bool(payload.get("value", {}).get("ready", payload.get("ready", False)))
+            if response.ok:
+                payload = response.json()
+                available = bool(payload.get("value", {}).get("ready", payload.get("ready", False)))
         except Exception:
-            return False
+            available = False
+        with _DOCKER_WEBDRIVER_PROBE_LOCK:
+            _DOCKER_WEBDRIVER_PROBE_CACHE[base] = (time.monotonic(), available)
+        return available
 
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
         url = _join_url(self.api_base, path)

@@ -61,6 +61,21 @@ class RegistrationDriverHealthTests(unittest.TestCase):
         self.assertEqual(result["port"], 50000)
         create_connection.assert_called_once_with(("127.0.0.1", 50000), timeout=0.8)
 
+    @patch("core.registration_driver_health.socket.create_connection")
+    @patch("core.roxy_selenium.normalize_api_base", return_value="http://192.168.65.254:50003")
+    def test_roxy_runtime_check_uses_docker_rewritten_api_address(self, normalize, create_connection):
+        create_connection.return_value.__enter__.return_value = object()
+
+        result = roxy_api_runtime_check("http://127.0.0.1:50003")
+
+        self.assertTrue(result["reachable"], result)
+        self.assertEqual(result["configured_api_base"], "http://127.0.0.1:50003")
+        self.assertEqual(result["api_base"], "http://192.168.65.254:50003")
+        self.assertTrue(result["runtime_rewritten"])
+        self.assertEqual(result["host"], "192.168.65.254")
+        normalize.assert_called_once_with("http://127.0.0.1:50003")
+        create_connection.assert_called_once_with(("192.168.65.254", 50003), timeout=0.8)
+
     @patch(
         "core.registration_driver_health.socket.create_connection",
         side_effect=ConnectionRefusedError(61, "Connection refused"),

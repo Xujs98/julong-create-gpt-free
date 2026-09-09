@@ -493,10 +493,14 @@ class CloakSeleniumDriver:
 
 
 def _normalize_proxy(proxy: str | None) -> str | None:
-    """兼容代理池的四段格式，并转换为 CloakBrowser 接受的 URL。"""
+    """兼容代理池四段格式，并只返回 Chromium 支持的代理协议。"""
     normalized = normalize_proxy_url(proxy, default_scheme="auto")
-    if normalized and normalized.lower().startswith("socks5://"):
-        return f"socks5h://{normalized.split('://', 1)[1]}"
+    # requests/curl 用 socks5h 表示远端 DNS，但 Playwright/Chromium 的
+    # proxy.server 不识别该 scheme，会报 net::ERR_NO_SUPPORTED_PROXIES。
+    # 带认证 SOCKS 随后会进入本地 HTTP bridge（bridge 内强制 rdns=True）；
+    # 无认证 SOCKS 则直接以 Chromium 支持的 socks5 scheme 启动。
+    if normalized and normalized.lower().startswith("socks5h://"):
+        return f"socks5://{normalized.split('://', 1)[1]}"
     return normalized
 
 

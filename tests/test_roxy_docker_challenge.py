@@ -2,6 +2,7 @@ from unittest.mock import Mock, patch
 
 from core import roxy_registration
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
+import core.roxybrowser_client as roxy_client_module
 
 
 def test_docker_roxy_installs_same_safe_traffic_rules_as_native():
@@ -94,6 +95,16 @@ def test_native_roxy_ignores_docker_bridge_configuration(monkeypatch):
     assert opened.docker_bridge is False
     assert opened.debugger_address == "127.0.0.1:61234"
     assert opened.webdriver_url is None
+
+
+def test_docker_webdriver_probe_is_cached_for_short_burst(monkeypatch):
+    roxy_client_module._DOCKER_WEBDRIVER_PROBE_CACHE.clear()
+    response = Mock(ok=True)
+    response.json.return_value = {"value": {"ready": True}}
+    with patch("core.roxybrowser_client.requests.get", return_value=response) as get:
+        assert RoxyBrowserClient._docker_webdriver_available("http://bridge.test:9515") is True
+        assert RoxyBrowserClient._docker_webdriver_available("http://bridge.test:9515") is True
+    get.assert_called_once_with("http://bridge.test:9515/status", timeout=2)
 
 
 def test_docker_bridge_driver_enables_performance_log_before_connecting():

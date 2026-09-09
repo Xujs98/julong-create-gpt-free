@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+from unittest.mock import Mock
 from unittest.mock import patch
 
 from core import account_export
@@ -135,6 +136,41 @@ def test_account_decoration_exposes_domain_code_url_availability():
         decorated = db._decorate_account(account)
 
     assert decorated["email_code_url_available"] is True
+
+
+def test_account_list_decoration_indexes_mail_pools_once(monkeypatch):
+    accounts = [
+        {"id": 1, "email": "one@icloud.test", "email_source": "icloud"},
+        {"id": 2, "email": "two@icloud.test", "email_source": "icloud"},
+    ]
+    pool = [{"email": "one@icloud.test", "code_url": "https://mail.test/one"}]
+    monkeypatch.setattr(db, "_load_accounts", lambda: accounts)
+    monkeypatch.setattr(db, "_load_icloud_emails", lambda: pool)
+
+    result = db._filtered_decorated_accounts()
+
+    by_email = {row["email"]: row for row in result}
+    assert by_email["one@icloud.test"]["email_code_url_available"] is True
+    assert by_email["two@icloud.test"]["email_code_url_available"] is False
+
+
+def test_sqlite_account_save_defers_expensive_static_viewer_export(monkeypatch):
+    store = Mock()
+    schedule = Mock()
+    render = Mock()
+    monkeypatch.setattr(db, "_uses_sqlite", lambda *_args: True)
+    monkeypatch.setattr(db, "_sqlite_store", lambda: store)
+    monkeypatch.setattr(db, "_write_json", Mock())
+    monkeypatch.setattr(db, "_sync_accounts_txt", Mock())
+    monkeypatch.setattr(db, "_sync_tokens_txt", Mock())
+    monkeypatch.setattr(db, "_schedule_static_viewer_refresh", schedule)
+    monkeypatch.setattr(db, "_render_static_viewer", render)
+
+    db._save_accounts([{"id": 1, "email": "one@example.test", "access_token": "AT"}])
+
+    store.replace_records.assert_called_once()
+    schedule.assert_called_once_with()
+    render.assert_not_called()
 
 
 def test_account_token_cell_exposes_at_and_saved_session_copy_actions():

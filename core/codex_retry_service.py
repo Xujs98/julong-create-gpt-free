@@ -250,9 +250,11 @@ def run_worker(
                     )
                     if fallback_result and fallback_result.get("ok"):
                         error = runtime_details.get("error") or "未知连接错误"
+                        configured_api = runtime_details.get("configured_api_base") or "未配置"
+                        effective_api = runtime_details.get("api_base") or configured_api
                         logger.warning(
-                            "[Codex 补跑] Roxy API 不可达（%s），自动切换到 %s",
-                            error,
+                            "[Codex 补跑] Roxy API 不可达（%s；配置=%s；实际探测=%s），自动切换到 %s",
+                            error, configured_api, effective_api,
                             fallback_result.get("label", fallback_driver),
                         )
                         retry_driver = fallback_driver
