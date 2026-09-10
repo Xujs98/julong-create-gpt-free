@@ -286,6 +286,7 @@ def _protocol_preflight_with_fallback(
                 candidate,
                 max_attempts=2,
                 rotate_proxy_on_retry=True,
+                screen_hint="login",
             )
         except Exception as exc:
             if not _is_browser_network_error(exc):
@@ -686,6 +687,7 @@ def _protocol_login_builtin(
     """Run a fresh protocol login and retain the resulting authenticated session."""
     from core.account_export import fetch_session, follow_oauth_callback
     from core.account_liveness import (
+        _auth_page_type,
         _auth_payload_value,
         _is_email_verification_state,
         _navigate_auth_step,
@@ -711,105 +713,112 @@ def _protocol_login_builtin(
         _safe_log(log, "协议登录步骤 2/7：网络预检通过，打开授权登录流程")
         final_url = follow_authorize(session, authorize_url, allow_password_page=bool(login_password))
 
-        if login_password:
-            _safe_log(log, "协议登录步骤 3/7：原账号保存了密码，进入邮箱和密码验证")
-            email_otp_state = _is_email_verification_state(final_url)
-            if not email_otp_state and "/log-in/password" not in final_url.lower():
-                payload = continue_authorize_with_email(session, email)
-                email_otp_state = _is_email_verification_state(payload=payload)
-                next_url = _auth_payload_value(payload, "continue_url", "external_url", "redirect_url", "url")
-                if next_url:
-                    if _is_email_verification_state(next_url):
-                        email_otp_state = True
-                    elif "password" in next_url.lower():
-                        final_url = _navigate_auth_step(session, next_url, final_url)
+        def auth_step(url: str = "", payload: Mapping[str, Any] | None = None) -> str:
+            data = dict(payload or {})
+            next_url = _auth_payload_value(
+                data,
+                "continue_url",
+                "external_url",
+                "redirect_url",
+                "url",
+                "location",
+            )
+            page_type = _auth_page_type(data)
+            text = f"{url} {next_url} {page_type}".lower().replace("-", "_")
+            if _is_email_verification_state(url, data) or _is_email_verification_state(next_url):
+                return "email_otp"
+            if extract_totp_factor(data) or "mfa" in text or "totp" in text:
+                return "totp"
+            if "password" in text and "create_account" not in text:
+                return "password"
+            return "unknown"
 
-            # A few auth deployments show the email-OTP screen first even for
-            # password accounts.  The reference implementation tries the
-            # password endpoint in that same auth session before falling back
-            # to a freshly sent mailbox code; this preserves the password +
-            # TOTP fast path while keeping protocol mode usable on both flows.
-            _safe_log(log, "协议登录步骤 4/7：提交账号密码")
-            auth_result: dict | None = None
+        _safe_log(log, "协议登录步骤 3/7：提交原账号邮箱并识别服务端登录方式")
+        auth_payload: dict = {}
+        step = auth_step(final_url)
+        if step == "unknown":
+            auth_payload = continue_authorize_with_email(session, email, screen_hint="login")
+            next_url = _auth_payload_value(
+                auth_payload,
+                "continue_url",
+                "external_url",
+                "redirect_url",
+                "url",
+                "location",
+            )
+            step = auth_step(next_url, auth_payload)
+            if next_url and step in {"password", "email_otp"}:
+                final_url = _navigate_auth_step(session, next_url, final_url)
+                step = auth_step(final_url, auth_payload)
+
+        if step == "password":
+            if not login_password:
+                raise RebindDriverError("服务端要求账号密码，但原账号未保存注册密码")
+            _safe_log(log, "协议登录步骤 4/7：服务端要求账号密码，提交已保存密码")
             try:
                 candidate = verify_login_password(session, login_password)
-                auth_result = candidate if isinstance(candidate, Mapping) else {}
-            except Exception:
-                if not email_otp_state:
-                    raise
-                _safe_log(log, "协议登录步骤 4/7：密码页未接受当前步骤，回退原邮箱验证码登录")
-            if auth_result is not None:
-                auth_url = _auth_payload_value(
-                    auth_result,
-                    "continue_url",
-                    "external_url",
-                    "redirect_url",
-                    "url",
-                    "location",
-                )
-                candidate_email_otp_state = _is_email_verification_state(payload=auth_result) or _is_email_verification_state(auth_url)
-                # A successful password response is authoritative even when
-                # the preceding navigation briefly displayed email-OTP.
-                email_otp_state = candidate_email_otp_state
+            except Exception as exc:
+                detail = _browser_error_text(exc) or type(exc).__name__
+                raise RebindDriverError(f"账号密码验证失败，未切换原邮箱验证码：{detail}") from exc
+            auth_result = candidate if isinstance(candidate, Mapping) else {}
+            if _is_email_verification_state(payload=auth_result):
+                raise RebindDriverError("密码验证后意外返回邮箱验证码步骤，已停止且未读取原邮箱")
 
-            if email_otp_state:
-                _safe_log(log, "协议登录步骤 5/7：发送原邮箱验证码并完成登录")
-                otp_after_ts = time.time()
-                send_email_otp(session)
-                code = otp_getter(email=email, after_ts=otp_after_ts, target={"email": email})
-                validate_result = validate_email_otp(session, code)
-                continue_url = _auth_payload_value(
-                    validate_result,
-                    "continue_url",
-                    "external_url",
-                    "redirect_url",
-                    "url",
-                    "location",
-                )
-                if not continue_url:
-                    raise RebindDriverError("原邮箱 OTP 登录未返回 OAuth continue_url")
-                follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/email-verification")
-            else:
-                if auth_result is None:
-                    raise RebindDriverError("密码登录未返回认证结果")
-                factor = extract_totp_factor(auth_result)
-                if factor:
-                    secret = _account_totp_secret(account)
-                    if not secret:
-                        raise RebindDriverError("账号要求 TOTP，但未保存 TOTP secret")
-                    _safe_log(log, "协议登录步骤 5/7：检测到 2FA，生成并提交动态验证码")
-                    challenge = issue_mfa_challenge(session, factor)
-                    challenge_id = _auth_payload_value(challenge, "mfa_request_id")
-                    verify_factor = dict(factor)
-                    if challenge_id:
-                        verify_factor["metadata"] = {**(factor.get("metadata") or {}), "mfa_request_id": challenge_id}
-                    auth_result = verify_mfa_code(session, verify_factor, pyotp.TOTP(secret).now())
-                    _safe_log(log, "协议登录步骤 5/7：2FA 验证已通过")
-                continue_url = _auth_payload_value(
-                    auth_result,
-                    "continue_url",
-                    "external_url",
-                    "redirect_url",
-                    "url",
-                    "location",
-                )
-                if not continue_url:
-                    raise RebindDriverError("密码登录未返回 OAuth continue_url")
-                follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/log-in/password")
-        else:
-            _safe_log(log, "协议登录步骤 3/7：账号未保存密码，切换原邮箱验证码登录")
-            # Capture the boundary before sending the message so fast mailboxes
-            # cannot race between the send request and OTP polling.
+            factor = extract_totp_factor(auth_result)
+            page_type = _auth_page_type(auth_result)
+            if factor or "mfa" in page_type or "totp" in page_type:
+                if not factor:
+                    raise RebindDriverError("密码验证要求 2FA，但响应缺少 TOTP 因子")
+                secret = _account_totp_secret(account)
+                if not secret:
+                    raise RebindDriverError("账号要求 TOTP，但未保存 TOTP secret")
+                _safe_log(log, "协议登录步骤 5/7：服务端要求 2FA，生成并提交动态验证码")
+                challenge = issue_mfa_challenge(session, factor)
+                challenge_id = _auth_payload_value(challenge, "mfa_request_id")
+                verify_factor = dict(factor)
+                if challenge_id:
+                    metadata = factor.get("metadata") if isinstance(factor.get("metadata"), Mapping) else {}
+                    verify_factor["metadata"] = {**metadata, "mfa_request_id": challenge_id}
+                auth_result = verify_mfa_code(session, verify_factor, pyotp.TOTP(secret).now())
+                if _is_email_verification_state(payload=auth_result):
+                    raise RebindDriverError("2FA 验证后意外返回邮箱验证码步骤，已停止且未读取原邮箱")
+                _safe_log(log, "协议登录步骤 5/7：2FA 验证已通过")
+
+            continue_url = _auth_payload_value(
+                auth_result,
+                "continue_url",
+                "external_url",
+                "redirect_url",
+                "url",
+                "location",
+            )
+            if not continue_url:
+                raise RebindDriverError("密码/2FA 登录未返回 OAuth continue_url")
+            referer = "https://auth.openai.com/mfa-challenge" if factor else "https://auth.openai.com/log-in/password"
+            follow_oauth_callback(session, continue_url, referer=referer)
+        elif step == "email_otp":
+            _safe_log(log, "协议登录步骤 4/7：服务端明确要求原邮箱验证码，发送并开始取码")
             otp_after_ts = time.time()
             send_email_otp(session)
-            _safe_log(log, "协议登录步骤 4/7：原邮箱登录验证码已发送，开始取码")
             code = otp_getter(email=email, after_ts=otp_after_ts, target={"email": email})
             _safe_log(log, "协议登录步骤 5/7：已取得原邮箱验证码并提交")
             validate_result = validate_email_otp(session, code)
-            continue_url = _auth_payload_value(validate_result, "continue_url", "external_url", "redirect_url", "url", "location")
+            continue_url = _auth_payload_value(
+                validate_result,
+                "continue_url",
+                "external_url",
+                "redirect_url",
+                "url",
+                "location",
+            )
             if not continue_url:
                 raise RebindDriverError("邮箱 OTP 登录未返回 OAuth continue_url")
             follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/email-verification")
+        else:
+            page_type = _auth_page_type(auth_payload) or "unknown"
+            raise RebindDriverError(
+                f"提交邮箱后未识别服务端登录步骤：page={page_type} url={str(final_url or '')[:160]}"
+            )
 
         _safe_log(log, "协议登录步骤 6/7：OAuth 回调已完成，刷新远端 Session")
         info = _fetch_protocol_session(session)

@@ -392,7 +392,15 @@ def test_protocol_preflight_rotates_failed_proxy_within_pool(monkeypatch):
 
     assert result == ("live-session", "authorize-url")
     assert [item[1] for item in calls] == ["DEAD", "POOL"]
-    assert all(item[2] == {"max_attempts": 2, "rotate_proxy_on_retry": True} for item in calls)
+    assert all(
+        item[2]
+        == {
+            "max_attempts": 2,
+            "rotate_proxy_on_retry": True,
+            "screen_hint": "login",
+        }
+        for item in calls
+    )
     assert any("轮换代理池出口" in line for line in logs)
 
 
@@ -860,6 +868,7 @@ def test_browser_settings_reopens_after_totp_returns_to_logged_in_shell():
 
 def test_protocol_login_accepts_legacy_password_and_totp_fields(monkeypatch):
     calls = []
+    logs = []
     fake_session = FakeTransport()
 
     monkeypatch.setattr(
@@ -869,6 +878,18 @@ def test_protocol_login_accepts_legacy_password_and_totp_fields(monkeypatch):
     )
     monkeypatch.setattr(
         "core.openai_auth.follow_authorize",
+        lambda *_args, **_kwargs: "https://auth.openai.com/log-in",
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.continue_authorize_with_email",
+        lambda _session, email, **kwargs: calls.append(("email", email, kwargs.get("screen_hint")))
+        or {
+            "continue_url": "https://auth.openai.com/log-in/password",
+            "page": {"type": "login_password"},
+        },
+    )
+    monkeypatch.setattr(
+        "core.account_liveness._navigate_auth_step",
         lambda *_args, **_kwargs: "https://auth.openai.com/log-in/password",
     )
     monkeypatch.setattr(
@@ -899,18 +920,21 @@ def test_protocol_login_accepts_legacy_password_and_totp_fields(monkeypatch):
             "twofa": "JBSWY3DPEHPK3PXP",
         },
         proxy="POOL",
-        otp_getter=lambda **_kwargs: "654321",
-        log=None,
+        otp_getter=lambda **_kwargs: calls.append("get_email_otp") or "654321",
+        log=logs.append,
         hooks={},
     )
 
     assert session is fake_session
     assert info["user"]["email"] == OLD
-    assert calls[0] == ("password", "legacy-chatgpt-password")
-    assert calls[1][0] == "totp"
+    assert calls[0] == ("email", OLD, "login")
+    assert calls[1] == ("password", "legacy-chatgpt-password")
+    assert calls[2][0] == "totp"
+    assert "get_email_otp" not in calls
+    assert not any("原邮箱验证码" in message for message in logs)
 
 
-def test_protocol_login_falls_back_to_source_email_otp_when_password_page_is_first(monkeypatch):
+def test_protocol_login_password_failure_does_not_fall_back_to_source_email_otp(monkeypatch):
     calls = []
     fake_session = FakeTransport()
 
@@ -921,7 +945,7 @@ def test_protocol_login_falls_back_to_source_email_otp_when_password_page_is_fir
     )
     monkeypatch.setattr(
         "core.openai_auth.follow_authorize",
-        lambda *_args, **_kwargs: "https://auth.openai.com/email-verification",
+        lambda *_args, **_kwargs: "https://auth.openai.com/log-in/password",
     )
 
     def verify_password(_session, _password):
@@ -930,12 +954,39 @@ def test_protocol_login_falls_back_to_source_email_otp_when_password_page_is_fir
 
     monkeypatch.setattr("core.openai_auth.verify_login_password", verify_password)
     monkeypatch.setattr("core.openai_auth.send_email_otp", lambda *_args, **_kwargs: calls.append("send_otp"))
+    with pytest.raises(rebind_driver.RebindDriverError, match="未切换原邮箱验证码"):
+        rebind_driver._protocol_login_builtin(
+            {"email": OLD, "registration_password": "pw"},
+            proxy="POOL",
+            otp_getter=lambda **_kwargs: calls.append("get_otp") or "123456",
+            log=None,
+            hooks={},
+        )
+
+    assert calls == ["password"]
+    assert fake_session.closed is True
+
+
+def test_protocol_login_uses_source_email_otp_only_when_server_explicitly_requests_it(monkeypatch):
+    calls = []
+    fake_session = FakeTransport()
+    monkeypatch.setattr(
+        rebind_driver,
+        "_protocol_preflight_with_fallback",
+        lambda email, proxy, log=None: (fake_session, "https://auth.example.test/authorize"),
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.follow_authorize",
+        lambda *_args, **_kwargs: "https://auth.openai.com/email-verification",
+    )
+    monkeypatch.setattr("core.openai_auth.verify_login_password", lambda *_args: calls.append("password"))
+    monkeypatch.setattr("core.openai_auth.send_email_otp", lambda *_args, **_kwargs: calls.append("send_otp"))
     monkeypatch.setattr(
         "core.openai_auth.validate_email_otp",
         lambda _session, code: calls.append(("validate_otp", code))
         or {"continue_url": "https://auth.openai.com/authorize/continue"},
     )
-    monkeypatch.setattr("core.account_export.follow_oauth_callback", lambda *_args, **_kwargs: "https://chatgpt.com/")
+    monkeypatch.setattr("core.account_export.follow_oauth_callback", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         rebind_driver,
         "_fetch_protocol_session",
@@ -945,13 +996,38 @@ def test_protocol_login_falls_back_to_source_email_otp_when_password_page_is_fir
     session, _info = rebind_driver._protocol_login_builtin(
         {"email": OLD, "registration_password": "pw"},
         proxy="POOL",
-        otp_getter=lambda **_kwargs: "123456",
+        otp_getter=lambda **_kwargs: calls.append("get_otp") or "123456",
         log=None,
         hooks={},
     )
 
     assert session is fake_session
-    assert calls == ["password", "send_otp", ("validate_otp", "123456")]
+    assert calls == ["send_otp", "get_otp", ("validate_otp", "123456")]
+
+
+def test_protocol_login_rejects_unknown_auth_state_without_sending_otp(monkeypatch):
+    calls = []
+    fake_session = FakeTransport()
+    monkeypatch.setattr(
+        rebind_driver,
+        "_protocol_preflight_with_fallback",
+        lambda email, proxy, log=None: (fake_session, "https://auth.example.test/authorize"),
+    )
+    monkeypatch.setattr("core.openai_auth.follow_authorize", lambda *_args, **_kwargs: "https://auth.openai.com/log-in")
+    monkeypatch.setattr("core.openai_auth.continue_authorize_with_email", lambda *_args, **_kwargs: {"page": {"type": "mystery"}})
+    monkeypatch.setattr("core.openai_auth.send_email_otp", lambda *_args, **_kwargs: calls.append("send_otp"))
+
+    with pytest.raises(rebind_driver.RebindDriverError, match="未识别服务端登录步骤"):
+        rebind_driver._protocol_login_builtin(
+            {"email": OLD, "registration_password": "pw"},
+            proxy="POOL",
+            otp_getter=lambda **_kwargs: calls.append("get_otp") or "123456",
+            log=None,
+            hooks={},
+        )
+
+    assert calls == []
+    assert fake_session.closed is True
 
 
 def test_builtin_protocol_rebind_falls_back_to_add_email_routes(monkeypatch):

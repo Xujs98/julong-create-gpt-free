@@ -60,6 +60,7 @@ def _network_preflight_with_retry(
     max_attempts: int = 4,
     *,
     rotate_proxy_on_retry: bool = True,
+    screen_hint: str = "login_or_signup",
 ) -> tuple[BrowserSession, str]:
     """Providers → CSRF → Signin 网络预检；可选择固定已保存代理环境。"""
     session: BrowserSession | None = None
@@ -80,7 +81,7 @@ def _network_preflight_with_retry(
         try:
             get_providers(session)
             csrf = get_csrf_token(session)
-            authorize_url = signin_openai(session, csrf, email)
+            authorize_url = signin_openai(session, csrf, email, screen_hint=screen_hint)
             return session, authorize_url
         except Exception as exc:
             last_exc = exc
