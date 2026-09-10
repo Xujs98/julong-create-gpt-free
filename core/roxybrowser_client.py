@@ -273,14 +273,23 @@ class RoxyBrowserClient:
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
         url = _join_url(self.api_base, path)
         method_u = method.upper()
+        normalized_path = str(path or "").strip().lower().rstrip("/")
         # create 超时后服务端可能已创建环境，普通网络错误仍不重试，
         # 但 Roxy 明确返回“正在创建中”时，说明请求未开始，需要串行退避重试。
-        is_create = str(path or "").rstrip("/").endswith("/create") or "browser/create" in str(path or "")
+        is_create = normalized_path.endswith("/create") or "browser/create" in normalized_path
+        # /open 可能已经启动浏览器，重放请求会造成重复启动或更长的卡顿；
+        # close/delete 同样只执行一次，失败由 cleanup_profile 记录后继续回收。
+        is_lifecycle = any(
+            marker in normalized_path
+            for marker in ("browser/open", "browser/close", "browser/delete")
+        ) or normalized_path.endswith(("/open", "/close", "/delete"))
         if is_create:
             max_attempts = max(
                 1,
                 int(getattr(_cfg, "ROXY_CREATE_RETRIES", getattr(_cfg, "ROXY_API_RETRIES", 3)) or 3),
             )
+        elif is_lifecycle:
+            max_attempts = 1
         else:
             max_attempts = max(1, int(getattr(_cfg, "ROXY_API_RETRIES", 3) or 3))
         base_delay = max(0.5, float(getattr(_cfg, "ROXY_API_RETRY_DELAY", 2) or 2))

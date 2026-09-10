@@ -6,6 +6,7 @@ import time
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 
@@ -92,6 +93,24 @@ def test_request_uses_longer_timeout_for_browser_open():
         client.request("GET", "/browser/workspace")
 
     assert [item["timeout"] for item in calls] == [180, 12]
+
+
+def test_browser_lifecycle_request_does_not_replay_after_timeout():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise requests.exceptions.ReadTimeout("Roxy open is still starting")
+
+    client.http.request = request
+    with patch("core.roxybrowser_client._cfg.ROXY_OPEN_TIMEOUT", 180), patch(
+        "core.roxybrowser_client._cfg.ROXY_API_RETRIES", 3
+    ):
+        with pytest.raises(requests.exceptions.ReadTimeout):
+            client.request("POST", "/browser/open", json_body={})
+
+    assert len(calls) == 1
 
 
 def test_create_profile_applies_workspace_fingerprint_and_task_proxy_config():
