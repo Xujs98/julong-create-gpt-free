@@ -195,9 +195,22 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
-def _pick_rebind_pool_proxy(failed_proxy: str | None = None) -> str:
-    """Pick one rebind route strictly from PROXY_POOL."""
+def _rebind_proxy_mode() -> str:
     from config import proxy as proxy_cfg
+
+    configured = str(
+        getattr(proxy_cfg, "PROXY_MODE", "pool") or "pool"
+    ).strip().lower()
+    return "api" if configured == "api" else "pool"
+
+
+def _pick_rebind_proxy_source(failed_proxy: str | None = None) -> str:
+    """Pick a rebind route from the configured API or static pool source."""
+    from config import proxy as proxy_cfg
+
+    mode = _rebind_proxy_mode()
+    if mode == "api":
+        return str(proxy_cfg.pick_proxy() or "").strip()
 
     failed = str(failed_proxy or "").strip()
     candidates: list[str] = []
@@ -213,13 +226,23 @@ def _pick_rebind_pool_proxy(failed_proxy: str | None = None) -> str:
 
 
 def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None) -> str:
-    """Select a rebind route exclusively from the current PROXY_POOL.
+    """Select a rebind route from PROXY_MODE without any direct fallback.
 
     Account-level ``live_check_proxy_used``/``proxy_used`` values intentionally
-    do not participate: rebind always starts from the current proxy pool rather
-    than inheriting an old account route.
+    do not participate. API mode always obtains a fresh API proxy; pool mode
+    accepts only a current PROXY_POOL member or selects one from that pool.
     """
     from config import proxy as proxy_cfg
+
+    mode = _rebind_proxy_mode()
+    if mode == "api":
+        try:
+            selected = _pick_rebind_proxy_source()
+        except Exception as exc:
+            raise RebindDriverError(f"换绑代理 API 获取失败：{type(exc).__name__}") from exc
+        if not selected:
+            raise RebindDriverError("换绑代理 API 未返回可用代理")
+        return selected
 
     pool = [
         str(raw or "").strip()
@@ -233,7 +256,7 @@ def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None
         if requested not in pool:
             raise RebindDriverError("换绑指定代理不属于当前 PROXY_POOL")
         return requested
-    return _pick_rebind_pool_proxy()
+    return _pick_rebind_proxy_source()
 
 
 def _browser_error_text(exc: BaseException | None) -> str:
@@ -257,15 +280,16 @@ def _is_browser_network_error(exc: BaseException | None) -> bool:
         "http error 429", "http 429", "status 429",
         "http error 502", "http error 503", "http error 504",
         "err_socks_connection_failed", "err_proxy_connection_failed", "proxy",
-        "net::err_", "connection refused", "connection reset", "timed out",
+        "net::err_", "connection refused", "connection reset", "connection closed",
+        "ssl_connect", "ssl_error_syscall", "timed out",
         "network is unreachable", "name_not_resolved",
     ))
 
 
 def _rebind_proxy_fallbacks(failed_proxy: str | None) -> list[str]:
-    """Return one pool route for retry; rebind never falls back to direct."""
+    """Return one configured-source route for retry without using direct."""
     try:
-        selected = _pick_rebind_pool_proxy(failed_proxy)
+        selected = _pick_rebind_proxy_source(failed_proxy)
     except Exception:
         selected = ""
     return [selected] if selected else []
@@ -277,27 +301,16 @@ def _protocol_preflight_with_fallback(
     *,
     log: Callable[[str], None] | None,
 ) -> tuple[Any, str]:
-    """Run protocol preflight and rotate only within the configured pool."""
+    """Run protocol preflight and retry through the configured proxy source."""
     from core.account_liveness import _network_preflight_with_retry
 
     candidates: list[str | None] = [proxy]
-    if proxy:
-        candidates.extend(_rebind_proxy_fallbacks(proxy))
-    unique: list[str | None] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = "<none>" if candidate is None else str(candidate)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-
     errors: list[str] = []
-    for index, candidate in enumerate(unique):
+    for index, candidate in enumerate(candidates):
         if index:
             _safe_log(
                 log,
-                "协议登录出口连接异常，轮换代理池出口（模式=proxy_pool）",
+                "协议登录出口连接异常，按当前代理来源重新获取出口",
             )
         try:
             return _network_preflight_with_retry(
@@ -311,6 +324,8 @@ def _protocol_preflight_with_fallback(
             if not _is_browser_network_error(exc):
                 raise
             errors.append(_browser_error_text(exc) or type(exc).__name__)
+            if index == 0 and candidate:
+                candidates.extend(_rebind_proxy_fallbacks(candidate))
 
     detail = "; ".join(item for item in errors if item)[:500]
     raise RebindDriverError(f"协议登录网络出口均失败：{detail or '代理连接失败'}")
@@ -2910,9 +2925,11 @@ def rebind_account(
     hook_map = _hook_map(hooks)
     otp_getter = _make_otp_getter(hook_map.get("otp"), default_target=target, log=log)
     effective_proxy = _resolve_rebind_proxy(account, proxy)
+    proxy_mode = _rebind_proxy_mode()
+    route_mode = "proxy_api" if proxy_mode == "api" else "proxy_pool"
     _safe_log(
         log,
-        "换绑网络出口：使用代理池出口（模式=proxy_pool，禁止直连）",
+        f"换绑网络出口：使用配置代理出口（模式={route_mode}，禁止直连）",
     )
     context = RebindContext(
         account=account,
@@ -2972,7 +2989,7 @@ def rebind_account(
                 browser = closer = info = None
                 fallback_errors: list[str] = []
                 for fallback_proxy in _rebind_proxy_fallbacks(effective_proxy):
-                    _safe_log(log, f"{login_name} 登录出口连接异常，轮换代理池出口（模式=proxy_pool）")
+                    _safe_log(log, f"{login_name} 登录出口连接异常，按当前代理来源重新获取出口")
                     try:
                         browser, closer, info = _browser_login_builtin(
                             account,

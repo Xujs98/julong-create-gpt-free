@@ -14,6 +14,11 @@ OLD = "source@example.test"
 TARGET = "target@example.test"
 
 
+@pytest.fixture(autouse=True)
+def _use_static_proxy_pool_by_default(monkeypatch):
+    monkeypatch.setattr("config.proxy.PROXY_MODE", "pool")
+
+
 @dataclass
 class FakeTransport:
     closed: bool = False
@@ -134,14 +139,21 @@ def test_explicit_rebind_proxy_outside_pool_is_rejected(monkeypatch):
         )
 
 
-def test_rebind_pool_selection_does_not_use_proxy_api_mode(monkeypatch):
-    monkeypatch.setattr("config.proxy.PROXY_POOL", ["socks5h://pool.example:4000"])
-    monkeypatch.setattr(
-        "config.proxy.pick_proxy",
-        lambda: (_ for _ in ()).throw(AssertionError("pick_proxy must not be called")),
+def test_rebind_api_mode_uses_fresh_api_proxy_and_ignores_static_pool(monkeypatch):
+    proxies = iter(["socks5h://api-one.example:4000", "socks5h://api-two.example:4000"])
+    monkeypatch.setattr("config.proxy.PROXY_MODE", "api")
+    monkeypatch.setattr("config.proxy.PROXY_POOL", ["socks5h://stale-pool.example:4000"])
+    monkeypatch.setattr("config.proxy.pick_proxy", lambda: next(proxies))
+
+    selected = rebind_driver._resolve_rebind_proxy(
+        {},
+        "socks5h://stale-pool.example:4000",
     )
 
-    assert rebind_driver._pick_rebind_pool_proxy() == "socks5h://pool.example:4000"
+    assert selected == "socks5h://api-one.example:4000"
+    assert rebind_driver._rebind_proxy_fallbacks(selected) == [
+        "socks5h://api-two.example:4000"
+    ]
 
 
 def test_rebind_requires_non_empty_proxy_pool(monkeypatch):
@@ -432,7 +444,43 @@ def test_protocol_preflight_rotates_failed_proxy_within_pool(monkeypatch):
         }
         for item in calls
     )
-    assert any("轮换代理池出口" in line for line in logs)
+    assert any("按当前代理来源重新获取出口" in line for line in logs)
+
+
+def test_protocol_preflight_rebuilds_same_single_pool_route(monkeypatch):
+    calls = []
+
+    def preflight(_email, proxy, **_kwargs):
+        calls.append(proxy)
+        if len(calls) == 1:
+            raise RuntimeError("curl: (35) SSL_connect: Connection closed abruptly")
+        return "live-session", "authorize-url"
+
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["SAME"])
+    monkeypatch.setattr("core.account_liveness._network_preflight_with_retry", preflight)
+
+    result = rebind_driver._protocol_preflight_with_fallback(OLD, "SAME", log=None)
+
+    assert result == ("live-session", "authorize-url")
+    assert calls == ["SAME", "SAME"]
+
+
+def test_protocol_preflight_does_not_fetch_fallback_before_failure(monkeypatch):
+    fallback_calls = []
+    monkeypatch.setattr(
+        rebind_driver,
+        "_rebind_proxy_fallbacks",
+        lambda failed: fallback_calls.append(failed) or ["UNUSED"],
+    )
+    monkeypatch.setattr(
+        "core.account_liveness._network_preflight_with_retry",
+        lambda *_args, **_kwargs: ("live-session", "authorize-url"),
+    )
+
+    result = rebind_driver._protocol_preflight_with_fallback(OLD, "PRIMARY", log=None)
+
+    assert result == ("live-session", "authorize-url")
+    assert fallback_calls == []
 
 
 @pytest.mark.parametrize("message", [
