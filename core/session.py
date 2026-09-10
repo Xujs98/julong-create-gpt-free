@@ -543,10 +543,11 @@ class BrowserSession:
         logger.warning("[熔断] 当前会话收到 HTTP %s，进入冷却 %ss，停止后续请求：%s", status, min(cool_down, 3600), url)
         return resp
 
-    def get(self, url: str, headers: dict = None, **kwargs):
+    def get(self, url: str, headers: dict = None, *, _attach_target_headers: bool = True, **kwargs):
         """发送 GET 请求"""
         self._raise_if_circuit_open()
-        headers = self._attach_openai_target_headers_for_url(url, headers)
+        if _attach_target_headers:
+            headers = self._attach_openai_target_headers_for_url(url, headers)
         self.traffic_meter.record_request(url, headers, kwargs)
         try:
             resp = self.session.get(url, headers=headers, **kwargs)
@@ -556,10 +557,11 @@ class BrowserSession:
         self.traffic_meter.record_response(resp)
         return self._observe_response_for_circuit_breaker(resp, url)
 
-    def post(self, url: str, headers: dict = None, **kwargs):
+    def post(self, url: str, headers: dict = None, *, _attach_target_headers: bool = True, **kwargs):
         """发送 POST 请求"""
         self._raise_if_circuit_open()
-        headers = self._attach_openai_target_headers_for_url(url, headers)
+        if _attach_target_headers:
+            headers = self._attach_openai_target_headers_for_url(url, headers)
         self.traffic_meter.record_request(url, headers, kwargs)
         try:
             resp = self.session.post(url, headers=headers, **kwargs)

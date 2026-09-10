@@ -660,10 +660,12 @@ def test_builtin_pure_protocol_rebind_replaces_revoked_session(monkeypatch):
 
 
 class FakeResponse:
-    def __init__(self, status_code, data, url):
+    def __init__(self, status_code, data, url, *, headers=None, text=""):
         self.status_code = status_code
         self._data = data
         self.url = url
+        self.headers = dict(headers or {})
+        self.text = text
 
     def json(self):
         return self._data
@@ -1160,6 +1162,177 @@ def test_builtin_protocol_rebind_retries_target_code_without_fetching_a_new_code
     assert verify_requests[0][2] == verify_requests[1][2] == {"email": TARGET, "code": "654321"}
     assert [item[3] for item in verify_requests] == [False, True]
     assert otp_emails == [TARGET]
+
+
+def test_builtin_protocol_rebind_runs_full_begin_matrix_with_fresh_sentinel(monkeypatch):
+    transport = FakeBuiltinEmailChangeSession()
+    transport.blocked_until = 0.0
+    transport.blocked_reason = ""
+    requests = []
+    sentinel_count = 0
+    otp_emails = []
+
+    def request(_transport, spec, *, method, url, payload=None):
+        headers = dict(spec.get("headers") or {})
+        sentinel = headers.get("openai-sentinel-token", "")
+        body = dict(payload or {})
+        requests.append((method, url, body, sentinel))
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True, "eligibility_type": "password"}}
+        if url.endswith("add_email/begin") and body.get("remove_social_subs") is False and sentinel:
+            return {"status": 200, "data": {"ok": True}}
+        if url.endswith("/begin"):
+            transport.blocked_until = 9999999999.0
+            transport.blocked_reason = "HTTP 403"
+            raise rebind_driver.RebindHttpError(
+                403,
+                data={"error": {"code": "challenge_required"}},
+                diagnostic={"code": "challenge_required", "content_type": "application/json"},
+            )
+        return {"status": 200, "data": {"ok": True}}
+
+    def sentinel(active_transport, _flow):
+        nonlocal sentinel_count
+        assert active_transport.blocked_until == 0.0
+        assert active_transport.blocked_reason == ""
+        sentinel_count += 1
+        return {"token": f"challenge-{sentinel_count}"}
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    monkeypatch.setattr("core.openai_auth.request_sentinel_token", sentinel)
+    monkeypatch.setattr(
+        "core.openai_auth.build_sentinel_header",
+        lambda _transport, challenge, _flow: (f"proof-{challenge['token']}", None),
+    )
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=transport,
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+
+    result = rebind_driver._builtin_chatgpt_protocol_action(
+        context,
+        otp_getter=lambda email, **_kwargs: otp_emails.append(email) or "654321",
+        log=None,
+    )
+
+    begin_requests = [item for item in requests if item[1].endswith("/begin")]
+    assert result["ok"] is True
+    assert len(begin_requests) == 8
+    assert [bool(item[3]) for item in begin_requests] == [False, True] * 4
+    assert len({item[3] for item in begin_requests if item[3]}) == 4
+    assert otp_emails == [TARGET]
+
+
+def test_builtin_protocol_rebind_reuses_one_target_code_across_full_verify_matrix(monkeypatch):
+    transport = FakeBuiltinEmailChangeSession()
+    transport.blocked_until = 0.0
+    transport.blocked_reason = ""
+    requests = []
+    sentinel_count = 0
+    otp_emails = []
+
+    def request(_transport, spec, *, method, url, payload=None):
+        sentinel = str((spec.get("headers") or {}).get("openai-sentinel-token") or "")
+        body = dict(payload or {})
+        requests.append((method, url, body, sentinel))
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True, "eligibility_type": "password"}}
+        if url.endswith("/begin"):
+            return {"status": 200, "data": {"ok": True}}
+        if url.endswith("add_email/verify") and body.get("remove_social_subs") is False and sentinel:
+            return {"status": 200, "data": {"ok": True}}
+        transport.blocked_until = 9999999999.0
+        transport.blocked_reason = "HTTP 403"
+        raise rebind_driver.RebindHttpError(
+            403,
+            data={"error": {"code": "challenge_required"}},
+            diagnostic={"code": "challenge_required", "content_type": "application/json"},
+        )
+
+    def sentinel(active_transport, _flow):
+        nonlocal sentinel_count
+        assert active_transport.blocked_until == 0.0
+        assert active_transport.blocked_reason == ""
+        sentinel_count += 1
+        return {"token": f"challenge-{sentinel_count}"}
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    monkeypatch.setattr("core.openai_auth.request_sentinel_token", sentinel)
+    monkeypatch.setattr(
+        "core.openai_auth.build_sentinel_header",
+        lambda _transport, challenge, _flow: (f"proof-{challenge['token']}", None),
+    )
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=transport,
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+
+    result = rebind_driver._builtin_chatgpt_protocol_action(
+        context,
+        otp_getter=lambda email, **_kwargs: otp_emails.append(email) or "654321",
+        log=None,
+    )
+
+    verify_requests = [item for item in requests if item[1].endswith("/verify")]
+    assert result["ok"] is True
+    assert len(verify_requests) == 8
+    assert {item[2]["code"] for item in verify_requests} == {"654321"}
+    assert [bool(item[3]) for item in verify_requests] == [False, True] * 4
+    assert len({item[3] for item in verify_requests if item[3]}) == 4
+    assert otp_emails == [TARGET]
+
+
+def test_protocol_request_omits_target_headers_and_classifies_403():
+    class DecoratedSession(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self._rebind_session_info = {"accessToken": "token"}
+            self.kwargs = {}
+
+        def _attach_openai_target_headers_for_url(self, url, headers):
+            raise AssertionError("email-change request must skip target headers")
+
+        def get_chatgpt_headers(self, referer):
+            return {"referer": referer}
+
+        def post(self, url, **kwargs):
+            self.kwargs = kwargs
+            return FakeResponse(
+                403,
+                {"error": {"code": "challenge_required"}, "email": TARGET},
+                url,
+                headers={"content-type": "text/html; charset=UTF-8", "server": "cloudflare", "cf-ray": "fixture"},
+                text=f"Just a moment {TARGET}",
+            )
+
+    session = DecoratedSession()
+    with pytest.raises(rebind_driver.RebindHttpError) as captured:
+        rebind_driver._protocol_request(
+            session,
+            {"base_url": "https://chatgpt.com"},
+            method="POST",
+            url="/backend-api/accounts/change_email/begin",
+            payload={"email": TARGET},
+        )
+
+    assert session.kwargs["_attach_target_headers"] is False
+    assert captured.value.diagnostic == {
+        "code": "challenge_required",
+        "content_type": "text/html",
+        "edge": "cloudflare",
+        "challenge": True,
+    }
+    assert TARGET not in str(captured.value)
 
 
 def test_builtin_protocol_rebind_rejects_account_too_new(monkeypatch):

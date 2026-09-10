@@ -67,9 +67,16 @@ class RebindHttpError(RebindDriverError):
     request URL, because those values can include mailbox/session material.
     """
 
-    def __init__(self, status: int, *, data: Mapping[str, Any] | None = None):
+    def __init__(
+        self,
+        status: int,
+        *,
+        data: Mapping[str, Any] | None = None,
+        diagnostic: Mapping[str, Any] | None = None,
+    ):
         self.status = int(status or 0)
         self.data = dict(data or {})
+        self.diagnostic = dict(diagnostic or {})
         super().__init__(f"换绑请求被拒绝：HTTP {self.status}")
 
 
@@ -1973,6 +1980,64 @@ def _response_data(response: Any) -> dict:
     return dict(data) if isinstance(data, Mapping) else {}
 
 
+def _rebind_error_code(data: Mapping[str, Any] | None) -> str:
+    """Extract a bounded, log-safe machine error code from a response."""
+    source = dict(data or {})
+    candidates = [source.get("code"), source.get("error_code")]
+    for key in ("error", "detail"):
+        nested = source.get(key)
+        if isinstance(nested, Mapping):
+            candidates.extend((nested.get("code"), nested.get("error_code"), nested.get("type")))
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value:
+            return re.sub(r"[^A-Za-z0-9_.:-]", "_", value)[:80]
+    return "unknown"
+
+
+def _rebind_http_diagnostic(response: Any, status: int, data: Mapping[str, Any] | None) -> dict:
+    """Classify an HTTP rejection without retaining body, cookies, or identifiers."""
+    content_type = _response_header(response, "content-type").split(";", 1)[0].strip().lower()
+    server = _response_header(response, "server").lower()
+    cf_mitigated = _response_header(response, "cf-mitigated").lower()
+    cf_ray = bool(_response_header(response, "cf-ray"))
+    try:
+        body_markers = json.dumps(dict(data or {}), ensure_ascii=False).lower()
+    except Exception:
+        body_markers = ""
+    if int(status or 0) == 403:
+        try:
+            body_markers += " " + str(getattr(response, "text", "") or "")[:8192].lower()
+        except Exception:
+            pass
+    challenge = any(
+        marker in body_markers
+        for marker in ("challenge", "captcha", "turnstile", "cf-chl", "just a moment")
+    ) or cf_mitigated == "challenge"
+    return {
+        "code": _rebind_error_code(data),
+        "content_type": content_type or "unknown",
+        "edge": "cloudflare" if cf_ray or "cloudflare" in server else "origin",
+        "challenge": bool(challenge),
+    }
+
+
+def _log_rebind_http_failure(
+    log: Callable[[str], None] | None,
+    stage: str,
+    exc: RebindHttpError,
+) -> None:
+    diagnostic = dict(getattr(exc, "diagnostic", {}) or {})
+    _safe_log(
+        log,
+        f"{stage}：HTTP {exc.status} "
+        f"code={diagnostic.get('code') or _rebind_error_code(exc.data)} "
+        f"content_type={diagnostic.get('content_type') or 'unknown'} "
+        f"edge={diagnostic.get('edge') or 'unknown'} "
+        f"challenge={'yes' if diagnostic.get('challenge') else 'no'}",
+    )
+
+
 def _rebind_account_too_new(data: Mapping[str, Any] | None) -> bool:
     """Recognize the non-retryable account-age response from either API."""
     try:
@@ -2037,6 +2102,11 @@ def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url
             raise RebindDriverError("协议 Session 不支持 HTTP 请求")
         try:
             kwargs: dict[str, Any] = {"headers": dict(headers), "allow_redirects": False}
+            # The live/reference email-change request bypasses the generic
+            # x-openai-target-* decorator. Keep BrowserSession accounting and
+            # circuit handling while matching that endpoint-specific shape.
+            if callable(getattr(session, "_attach_openai_target_headers_for_url", None)):
+                kwargs["_attach_target_headers"] = False
             if current_method in {"GET", "HEAD"}:
                 if current_payload:
                     kwargs["params"] = current_payload
@@ -2071,7 +2141,11 @@ def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url
         _resolve_rebind_url(spec, response_url, current_url=target_url)
         data = _response_data(response)
         if not 200 <= status < 300:
-            raise RebindHttpError(status, data=data)
+            raise RebindHttpError(
+                status,
+                data=data,
+                diagnostic=_rebind_http_diagnostic(response, status, data),
+            )
         return {"status": status, "url": response_url, "data": data}
     raise RebindDriverError("协议换绑请求重定向次数过多")
 
@@ -2129,11 +2203,19 @@ def _builtin_chatgpt_protocol_action(
         url: str,
         payload: Any = None,
     ) -> dict:
-        """Retry one protocol email-change request with fresh Sentinel proof."""
+        """Try one request plainly, then once with a fresh same-session proof."""
+        base_headers = {
+            key: value
+            for key, value in dict(active_spec.get("headers") or {}).items()
+            if str(key).lower() not in {"openai-sentinel-token", "openai-sentinel-so-token"}
+        }
+        plain_spec = {**dict(active_spec), "headers": base_headers}
+        endpoint = "/".join(str(url).rstrip("/").split("/")[-2:])
+        body_shape = ",".join(sorted(str(key) for key in payload)) if isinstance(payload, Mapping) else "-"
         try:
             return request(
                 active_transport,
-                active_spec,
+                plain_spec,
                 method=method,
                 url=url,
                 payload=payload,
@@ -2141,14 +2223,19 @@ def _builtin_chatgpt_protocol_action(
         except RebindHttpError as exc:
             if exc.status != 403 or request is not _protocol_request:
                 raise
+            plain_error = exc
+            _log_rebind_http_failure(log, f"协议换绑 {endpoint} 普通请求 payload={body_shape}", exc)
 
-        _safe_log(log, "协议换绑请求首次返回 HTTP 403，补齐同会话 Sentinel 证明后重试")
+        _safe_log(log, "协议换绑请求返回 HTTP 403，生成全新同会话 Sentinel 证明后重试")
         # BrowserSession opens a circuit after any 403. This single controlled
         # retry first obtains a fresh proof in the same authenticated session.
-        if hasattr(active_transport, "blocked_until"):
-            active_transport.blocked_until = 0.0
-        if hasattr(active_transport, "blocked_reason"):
-            active_transport.blocked_reason = ""
+        def reset_circuit() -> None:
+            if hasattr(active_transport, "blocked_until"):
+                active_transport.blocked_until = 0.0
+            if hasattr(active_transport, "blocked_reason"):
+                active_transport.blocked_reason = ""
+
+        reset_circuit()
         try:
             from core.openai_auth import build_sentinel_header, request_sentinel_token
 
@@ -2160,23 +2247,31 @@ def _builtin_chatgpt_protocol_action(
             )
         except Exception as exc:
             detail = _browser_error_text(exc) or type(exc).__name__
-            raise RebindDriverError(f"目标邮箱换绑 Sentinel 证明生成失败：{detail}") from exc
+            _safe_log(log, f"目标邮箱换绑 Sentinel 证明生成失败：{detail}")
+            raise plain_error from exc
 
-        headers = dict(active_spec.get("headers") or {})
+        headers = dict(base_headers)
         headers["openai-sentinel-token"] = sentinel_header
         if so_header:
             headers["openai-sentinel-so-token"] = so_header
-        else:
-            headers.pop("openai-sentinel-so-token", None)
-        if isinstance(active_spec, dict):
-            active_spec["headers"] = headers
-        return request(
-            active_transport,
-            active_spec,
-            method=method,
-            url=url,
-            payload=payload,
-        )
+        proof_spec = {**dict(active_spec), "headers": headers}
+        try:
+            return request(
+                active_transport,
+                proof_spec,
+                method=method,
+                url=url,
+                payload=payload,
+            )
+        except RebindHttpError as exc:
+            if exc.status == 403:
+                _log_rebind_http_failure(
+                    log,
+                    f"协议换绑 {endpoint} Sentinel 重试 payload={body_shape}",
+                    exc,
+                )
+                reset_circuit()
+            raise
 
     def _reauthenticate_after_401() -> bool:
         """Refresh the just-authorized transport once after a stale auth gate."""
@@ -2247,6 +2342,8 @@ def _builtin_chatgpt_protocol_action(
                 method="GET",
                 url="/backend-api/accounts/change_email/eligibility",
             )
+        elif exc.status == 403:
+            _safe_log(log, "协议换绑步骤 1/4：资格接口被挑战拦截，改由邮箱变更接口确认")
         elif not _rebind_endpoint_missing(exc):
             raise
         if not eligibility_response:
@@ -2291,6 +2388,8 @@ def _builtin_chatgpt_protocol_action(
                     continue
                 if exc.status == 401 and _reauthenticate_after_401():
                     continue
+                if exc.status == 403:
+                    continue
                 raise
         if begin is not None:
             break
@@ -2301,40 +2400,48 @@ def _builtin_chatgpt_protocol_action(
     _safe_log(log, f"协议换绑步骤 2/4：目标邮箱已提交 HTTP {begin.get('status', 0)}")
 
     _safe_log(log, "协议换绑步骤 3/4：等待目标邮箱验证码")
-    otp_after_ts = time.time()
-    verify_payload = dict(payload)
-    verify_payload["code"] = "{otp}"
+    otp_after_ts = max(0.0, time.time() - 2.0)
+    verify_bodies = [{**body, "code": "{otp}"} for body in begin_bodies]
+    otp_cache: dict[str, str] = {}
     verified: dict | None = None
     verify_error: RebindHttpError | None = None
     for verify_url in (
         "/backend-api/accounts/change_email/verify",
         "/backend-api/accounts/add_email/verify",
     ):
-        try:
-            verified = _request_with_otp_retry(
-                request_with_challenge_retry,
-                transport,
-                spec,
-                method="POST",
-                url=verify_url,
-                payload=verify_payload,
-                variables={"target_email": target_email, "new_email": target_email, "email": target_email},
-                requires_otp=True,
-                target=context.target,
-                otp_getter=otp_getter,
-                log=log,
-                after_ts=otp_after_ts,
-            )
+        for verify_payload in verify_bodies:
+            try:
+                verified = _request_with_otp_retry(
+                    request_with_challenge_retry,
+                    transport,
+                    spec,
+                    method="POST",
+                    url=verify_url,
+                    payload=verify_payload,
+                    variables={"target_email": target_email, "new_email": target_email, "email": target_email},
+                    requires_otp=True,
+                    target=context.target,
+                    otp_getter=otp_getter,
+                    log=log,
+                    after_ts=otp_after_ts,
+                    otp_cache=otp_cache,
+                )
+                break
+            except RebindHttpError as exc:
+                verify_error = exc
+                if _rebind_account_too_new(exc.data):
+                    raise RebindDriverError("当前账号注册时间过短，暂不允许邮箱换绑") from exc
+                if _response_otp_failure(exc.status, exc.data):
+                    raise
+                if _rebind_endpoint_missing(exc):
+                    break
+                if exc.status in {400, 403, 422}:
+                    continue
+                if exc.status == 401 and _reauthenticate_after_401():
+                    continue
+                raise
+        if verified is not None:
             break
-        except RebindHttpError as exc:
-            verify_error = exc
-            if exc.status == 401 and _reauthenticate_after_401():
-                continue
-            if _rebind_account_too_new(exc.data):
-                raise RebindDriverError("当前账号注册时间过短，暂不允许邮箱换绑") from exc
-            if _rebind_endpoint_missing(exc):
-                continue
-            raise
     if verified is None:
         if verify_error is not None:
             raise verify_error
@@ -2416,6 +2523,7 @@ def _request_with_otp_retry(
     otp_getter: Callable[..., str],
     log: Callable[[str], None] | None,
     after_ts: float | None = None,
+    otp_cache: dict[str, str] | None = None,
 ) -> dict:
     """Issue one configured request, refreshing a rejected OTP when needed."""
     attempts = _otp_attempt_count(spec) if requires_otp else 1
@@ -2425,13 +2533,20 @@ def _request_with_otp_retry(
     for attempt in range(attempts):
         rendered = dict(variables)
         if requires_otp:
-            _safe_log(log, f"协议换绑验证码步骤：等待目标邮箱验证码（第 {attempt + 1}/{attempts} 次）")
-            last_code = otp_getter(
-                email=str(target.get("email") or ""),
-                after_ts=started,
-                exclude_codes=excluded,
-                target=dict(target),
-            )
+            cached_code = str((otp_cache or {}).get("code") or "")
+            if cached_code and cached_code not in excluded:
+                last_code = cached_code
+                _safe_log(log, "协议换绑验证码步骤：复用本次目标邮箱验证码尝试兼容接口")
+            else:
+                _safe_log(log, f"协议换绑验证码步骤：等待目标邮箱验证码（第 {attempt + 1}/{attempts} 次）")
+                last_code = otp_getter(
+                    email=str(target.get("email") or ""),
+                    after_ts=started,
+                    exclude_codes=excluded,
+                    target=dict(target),
+                )
+                if otp_cache is not None:
+                    otp_cache["code"] = last_code
             rendered.update({"otp": last_code, "code": last_code})
             _safe_log(log, f"协议换绑验证码步骤：已取得验证码，准备第 {attempt + 1}/{attempts} 次提交")
         rendered_payload = _render(payload, rendered)
@@ -2448,6 +2563,8 @@ def _request_with_otp_retry(
                 raise
             if last_code:
                 excluded.add(last_code)
+                if otp_cache is not None and otp_cache.get("code") == last_code:
+                    otp_cache.pop("code", None)
             resend_url = spec.get("otp_resend_url") or spec.get("resend_url")
             if resend_url:
                 resend_method = str(spec.get("otp_resend_method") or "POST")
