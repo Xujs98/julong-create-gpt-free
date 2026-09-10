@@ -80,6 +80,10 @@ _VIEWER_REFRESH_TIMER: threading.Timer | None = None
 _VIEWER_REFRESH_PENDING = False
 _VIEWER_REFRESH_RUNNING = False
 _VIEWER_REFRESH_DELAY = 1.0
+_ACCOUNT_ROWS_CACHE: list[dict] | None = None
+_ACCOUNT_ROWS_CACHE_SIGNATURE: str | None = None
+_FILTERED_ACCOUNT_ROWS_CACHE: dict[tuple, list[dict]] = {}
+_FILTERED_ACCOUNT_ROWS_CACHE_LIMIT = 16
 
 
 def _now() -> str:
@@ -110,6 +114,24 @@ def _write_json(path: Path, data: Any) -> None:
         encoding="utf-8",
     )
     tmp.replace(path)
+
+
+def _account_storage_signature() -> str:
+    """Read the account-only revision shared by every application worker."""
+    return _sqlite_store().records_revision("registered_accounts")
+
+
+def _cache_account_rows(rows: list[dict]) -> None:
+    global _ACCOUNT_ROWS_CACHE, _ACCOUNT_ROWS_CACHE_SIGNATURE
+    _ACCOUNT_ROWS_CACHE = [dict(row) for row in rows]
+    _ACCOUNT_ROWS_CACHE_SIGNATURE = _account_storage_signature()
+
+
+def _invalidate_account_rows_cache() -> None:
+    global _ACCOUNT_ROWS_CACHE, _ACCOUNT_ROWS_CACHE_SIGNATURE
+    _ACCOUNT_ROWS_CACHE = None
+    _ACCOUNT_ROWS_CACHE_SIGNATURE = None
+    _FILTERED_ACCOUNT_ROWS_CACHE.clear()
 
 
 def _storage_backend() -> str:
@@ -776,6 +798,9 @@ def _load_icloud_emails() -> list[dict]:
     return rows if isinstance(rows, list) else []
 
 
+_ORIGINAL_LOAD_ICLOUD_EMAILS = _load_icloud_emails
+
+
 def _save_icloud_emails(rows: list[dict]) -> None:
     """持久化 iCloud 邮箱池并刷新文本镜像。"""
     for row in rows:
@@ -788,22 +813,32 @@ def _save_icloud_emails(rows: list[dict]) -> None:
 
 def _load_accounts() -> list[dict]:
     if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
+        signature = _account_storage_signature()
+        if _ACCOUNT_ROWS_CACHE is not None and _ACCOUNT_ROWS_CACHE_SIGNATURE == signature:
+            return [dict(row) for row in _ACCOUNT_ROWS_CACHE]
         rows = _sqlite_store().load_records("registered_accounts")
-        return _ensure_account_group_storage(rows)
+        rows = _ensure_account_group_storage(rows)
+        _cache_account_rows(rows)
+        return [dict(row) for row in rows]
     rows = _read_json(_ACCOUNTS_JSON, None)
     if not isinstance(rows, list):
         rows = _read_json(_LEGACY_ACCOUNTS_JSON, [])
     return rows if isinstance(rows, list) else []
 
 
+_ORIGINAL_LOAD_ACCOUNTS = _load_accounts
+
+
 def _save_accounts(rows: list[dict]) -> None:
     for row in rows:
         row["copy_line"] = _account_line(row)
     if _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON):
+        _invalidate_account_rows_cache()
         _sqlite_store().replace_records("registered_accounts", rows)
         _write_json(_ACCOUNTS_JSON, rows)
         _sync_accounts_txt(rows)
         _sync_tokens_txt(rows)
+        _cache_account_rows(rows)
         _schedule_static_viewer_refresh()
         return
     _write_json(_ACCOUNTS_JSON, rows)
@@ -954,6 +989,15 @@ def delete_account_group(group_id: int) -> dict:
         count = sum(1 for row in accounts if str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold() == name_key)
         if count:
             raise ValueError("分组内有账号时不允许删除")
+        active_states = {"pending", "running", "stopping"}
+        active_job = next((
+            row for row in _load_jobs()
+            if str(row.get("job_type") or "registration") in {"registration", "registration_retry"}
+            and str(row.get("status") or "") in active_states
+            and int(row.get("registration_group_id") or 0) == int(group.get("id") or 0)
+        ), None)
+        if active_job is not None:
+            raise ValueError(f"分组正被注册任务 #{active_job.get('id')} 使用，任务结束后再删除")
         groups = [row for row in groups if int(row.get("id") or 0) != int(group.get("id") or 0)]
         _save_group_rows(groups)
         return {"id": int(group.get("id") or 0), "name": group.get("name"), "count": 0}
@@ -987,6 +1031,33 @@ def move_accounts_to_group(account_ids: list[int] | None, group_id: int) -> tupl
             _save_accounts(accounts)
         _save_group_rows(groups)
     return updated, skipped
+
+
+def assign_account_to_registration_group(
+    account_id: int,
+    group_id: int,
+    *,
+    expected_name: str | None = None,
+) -> dict:
+    """Assign a newly registered account using the task's stable group ID."""
+    with _LOCK:
+        accounts = _ensure_account_group_storage()
+        groups = _load_group_rows()
+        group = _find_group(groups, group_id=int(group_id))
+        if group is None:
+            expected = str(expected_name or "").strip()
+            suffix = f"（原名称：{expected}）" if expected else ""
+            raise ValueError(f"注册任务目标分组不存在{suffix}")
+        account = next((row for row in accounts if int(row.get("id") or 0) == int(account_id)), None)
+        if account is None:
+            raise ValueError(f"注册账号 #{account_id} 不存在")
+        target_name = str(group.get("name") or DEFAULT_ACCOUNT_GROUP).strip() or DEFAULT_ACCOUNT_GROUP
+        account["group_name"] = target_name
+        account["updated_at"] = _now()
+        _save_accounts(accounts)
+        result = dict(account)
+        result["registration_group_id"] = int(group.get("id") or 0)
+        return result
 
 
 def _load_jobs() -> list[dict]:
@@ -2493,6 +2564,122 @@ def _account_group_filter_names(value: str | list[str] | None) -> set[str]:
     }
 
 
+def _account_filter_row(row: dict) -> dict:
+    """Normalize legacy derived flags needed by filters without full decoration."""
+    out = dict(row)
+    if "link_completed" not in out:
+        out["link_completed"] = bool(out.get("extract_link_ok")) or out.get("extract_link_status") == "success"
+    else:
+        out["link_completed"] = bool(out.get("link_completed"))
+    if "sms_completed" not in out:
+        out["sms_completed"] = out.get("codex_status") == "success"
+    else:
+        out["sms_completed"] = bool(out.get("sms_completed"))
+    out["payment_completed"] = bool(out.get("payment_completed"))
+    return out
+
+
+def _decorate_account_rows(rows: list[dict]) -> list[dict]:
+    """Decorate only the rows selected for the current response."""
+    sources = {str(row.get("email_source") or "").strip().lower() for row in rows}
+    requested_emails = [str(row.get("email") or "").strip() for row in rows]
+    icloud_by_email = None
+    domain_by_email = None
+    if "icloud" in sources:
+        icloud_rows = (
+            _sqlite_store().load_records_by_emails("icloud_email_pool", requested_emails)
+            if (
+                _uses_sqlite(_ICLOUD_EMAIL_JSON, _DEFAULT_ICLOUD_EMAIL_JSON)
+                and globals().get("_load_icloud_emails") is _ORIGINAL_LOAD_ICLOUD_EMAILS
+            )
+            else _load_icloud_emails()
+        )
+        icloud_by_email = {
+            str(item.get("email") or "").strip().casefold(): item
+            for item in icloud_rows
+            if str(item.get("email") or "").strip()
+        }
+    if "cloudflare_domain" in sources:
+        domain_rows = (
+            _sqlite_store().load_records_by_emails("domain_email_pool", requested_emails)
+            if (
+                _uses_sqlite(_DOMAIN_EMAIL_JSON, _DEFAULT_DOMAIN_EMAIL_JSON)
+                and globals().get("_load_domain_pool") is _ORIGINAL_LOAD_DOMAIN_POOL
+            )
+            else _load_domain_pool()
+        )
+        domain_by_email = {
+            str(item.get("email") or "").strip().casefold(): item
+            for item in domain_rows
+            if str(item.get("email") or "").strip()
+        }
+    return [
+        _decorate_account(row, icloud_by_email=icloud_by_email, domain_by_email=domain_by_email)
+        for row in rows
+    ]
+
+
+def _filtered_account_rows(
+    archived: str | bool | None = False,
+    plan_filter: str | None = None,
+    q: str | None = None,
+    status_filter: str | None = None,
+    group_filter: str | list[str] | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+) -> list[dict]:
+    """Filter and sort raw account rows before expensive per-row decoration."""
+    cache_key = None
+    group_names = _account_group_filter_names(group_filter)
+    if (
+        _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON)
+        and globals().get("_load_accounts") is _ORIGINAL_LOAD_ACCOUNTS
+    ):
+        cache_key = (
+            str(Path(_SQLITE_PATH)),
+            _account_storage_signature(),
+            str(archived).strip().lower(),
+            str(plan_filter or "").strip().lower(),
+            str(q or "").strip().casefold(),
+            str(status_filter or "").strip().lower(),
+            tuple(sorted(group_names)),
+            str(created_from or "").strip()[:10],
+            str(created_to or "").strip()[:10],
+        )
+        cached = _FILTERED_ACCOUNT_ROWS_CACHE.get(cache_key)
+        if cached is not None:
+            _FILTERED_ACCOUNT_ROWS_CACHE.pop(cache_key, None)
+            _FILTERED_ACCOUNT_ROWS_CACHE[cache_key] = cached
+            return [dict(row) for row in cached]
+    rows = [_account_filter_row(row) for row in _load_accounts()]
+    if archived in (True, "1", "true", "yes", "only"):
+        rows = [row for row in rows if bool(row.get("archived"))]
+    elif archived not in ("all", "include"):
+        rows = [row for row in rows if not bool(row.get("archived"))]
+    if group_names:
+        rows = [
+            row for row in rows
+            if str(row.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold() in group_names
+        ]
+    date_from = str(created_from or "").strip()[:10]
+    date_to = str(created_to or "").strip()[:10]
+    if date_from or date_to:
+        rows = [
+            row for row in rows
+            if (not date_from or str(row.get("created_at") or "")[:10] >= date_from)
+            and (not date_to or str(row.get("created_at") or "")[:10] <= date_to)
+        ]
+    rows = [row for row in rows if _account_matches_plan_filter(row, plan_filter)]
+    rows = [row for row in rows if _account_matches_status_filter(row, status_filter)]
+    rows = [row for row in rows if _account_matches_query(row, q)]
+    rows = sorted(rows, key=lambda item: int(item.get("id") or 0), reverse=True)
+    if cache_key is not None:
+        _FILTERED_ACCOUNT_ROWS_CACHE[cache_key] = [dict(row) for row in rows]
+        while len(_FILTERED_ACCOUNT_ROWS_CACHE) > _FILTERED_ACCOUNT_ROWS_CACHE_LIMIT:
+            _FILTERED_ACCOUNT_ROWS_CACHE.pop(next(iter(_FILTERED_ACCOUNT_ROWS_CACHE)))
+    return rows
+
+
 def _filtered_decorated_accounts(
     archived: str | bool | None = False,
     plan_filter: str | None = None,
@@ -2502,54 +2689,58 @@ def _filtered_decorated_accounts(
     created_from: str | None = None,
     created_to: str | None = None,
 ) -> list[dict]:
-    rows = _load_accounts()
+    rows = _filtered_account_rows(
+        archived=archived,
+        plan_filter=plan_filter,
+        q=q,
+        status_filter=status_filter,
+        group_filter=group_filter,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    return _decorate_account_rows(rows)
+
+
+def _fast_sqlite_account_region(
+    *,
+    limit: int,
+    offset: int,
+    archived: str | bool | None,
+    plan_filter: str | None,
+    q: str | None,
+    status_filter: str | None,
+    group_filter: str | list[str] | None,
+    created_from: str | None,
+    created_to: str | None,
+) -> dict | None:
+    """Return an indexed SQLite window when no full-text filtering is required."""
+    if (
+        not _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON)
+        or globals().get("_load_accounts") is not _ORIGINAL_LOAD_ACCOUNTS
+    ):
+        return None
+    if str(plan_filter or "").strip().lower() not in {"", "all", "any"}:
+        return None
+    if str(status_filter or "").strip().lower() not in {"", "all"}:
+        return None
+    if str(q or "").strip() or _account_group_filter_names(group_filter):
+        return None
+    if str(created_from or "").strip() or str(created_to or "").strip():
+        return None
     if archived in (True, "1", "true", "yes", "only"):
-        rows = [r for r in rows if bool(r.get("archived"))]
+        archived_flag: bool | None = True
     elif archived in ("all", "include"):
-        pass
+        archived_flag = None
     else:
-        rows = [r for r in rows if not bool(r.get("archived"))]
-    # Account decoration used to reload the complete iCloud/domain pool once
-    # per account. With hundreds of accounts this turned a 2-second UI poll
-    # into repeated SQLite scans and held the single Gunicorn worker under
-    # load. Build the two small lookup maps once per request instead.
-    sources = {str(row.get("email_source") or "").strip().lower() for row in rows}
-    icloud_by_email = None
-    domain_by_email = None
-    if "icloud" in sources:
-        icloud_by_email = {
-            str(item.get("email") or "").strip().casefold(): item
-            for item in _load_icloud_emails()
-            if str(item.get("email") or "").strip()
-        }
-    if "cloudflare_domain" in sources:
-        domain_by_email = {
-            str(item.get("email") or "").strip().casefold(): item
-            for item in _load_domain_pool()
-            if str(item.get("email") or "").strip()
-        }
-    decorated = [
-        _decorate_account(r, icloud_by_email=icloud_by_email, domain_by_email=domain_by_email)
-        for r in rows
-    ]
-    group_names = _account_group_filter_names(group_filter)
-    if group_names:
-        decorated = [
-            r for r in decorated
-            if str(r.get("group_name") or DEFAULT_ACCOUNT_GROUP).strip().casefold() in group_names
-        ]
-    date_from = str(created_from or '').strip()[:10]
-    date_to = str(created_to or '').strip()[:10]
-    if date_from or date_to:
-        decorated = [
-            r for r in decorated
-            if (not date_from or str(r.get("created_at") or "")[:10] >= date_from)
-            and (not date_to or str(r.get("created_at") or "")[:10] <= date_to)
-        ]
-    decorated = [r for r in decorated if _account_matches_plan_filter(r, plan_filter)]
-    decorated = [r for r in decorated if _account_matches_status_filter(r, status_filter)]
-    decorated = [r for r in decorated if _account_matches_query(r, q)]
-    return sorted(decorated, key=lambda x: int(x.get("id") or 0), reverse=True)
+        archived_flag = False
+    result = _sqlite_store().load_records_page(
+        "registered_accounts",
+        limit=max(1, int(limit)),
+        offset=max(0, int(offset or 0)),
+        archived=archived_flag,
+    )
+    result["items"] = [_account_filter_row(row) for row in result.get("items") or []]
+    return result
 
 
 def list_account_plan_check_statuses(
@@ -2601,7 +2792,11 @@ def list_account_plan_check_statuses(
         "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
     )
     with _LOCK:
-        all_rows = _filtered_decorated_accounts(
+        limit = max(1, int(limit))
+        offset = max(0, int(offset or 0))
+        region = _fast_sqlite_account_region(
+            limit=limit,
+            offset=offset,
             archived=archived,
             plan_filter=plan_filter,
             q=q,
@@ -2610,10 +2805,24 @@ def list_account_plan_check_statuses(
             created_from=created_from,
             created_to=created_to,
         )
-        total = len(all_rows)
-        limit = max(1, int(limit))
-        offset = max(0, int(offset or 0))
-        rows = all_rows[offset: offset + limit]
+        if region is None:
+            all_rows = _filtered_account_rows(
+                archived=archived,
+                plan_filter=plan_filter,
+                q=q,
+                status_filter=status_filter,
+                group_filter=group_filter,
+                created_from=created_from,
+                created_to=created_to,
+            )
+            total = len(all_rows)
+            latest = max((str(row.get("updated_at") or "") for row in all_rows), default="")
+            selected_rows = all_rows[offset: offset + limit]
+        else:
+            total = int(region.get("total") or 0)
+            latest = str(region.get("revision") or "").split(":", 1)[-1]
+            selected_rows = region.get("items") or []
+        rows = _decorate_account_rows(selected_rows)
         items = []
         for row in rows:
             item = {"id": row.get("id"), "email": row.get("email")}
@@ -2632,7 +2841,6 @@ def list_account_plan_check_statuses(
             item["codex_agent_has_token"] = bool(str(row.get("codex_agent_token") or "").strip())
             item["has_access_token"] = bool(str(row.get("access_token") or "").strip())
             items.append(item)
-        latest = max((str(row.get("updated_at") or "") for row in all_rows), default="")
         # updated_at 目前只有秒级精度；一次快速查询可能在同一秒内完成
         # queued -> running -> success/failed，导致 revision 不变，前端跳过合并状态，
         # 页面就会一直停在“查询中”。把轻量状态本身纳入签名，保证状态变化可被轮询发现。
@@ -2715,7 +2923,7 @@ def list_account_plan_check_statuses(
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
                 }
-                for row in all_rows
+                for row in rows
             ],
             ensure_ascii=False,
             sort_keys=True,
@@ -2737,7 +2945,7 @@ def list_accounts(
     created_to: str | None = None,
 ) -> list[dict]:
     with _LOCK:
-        rows = _filtered_decorated_accounts(
+        rows = _filtered_account_rows(
             archived=archived,
             plan_filter=plan_filter,
             q=q,
@@ -2746,7 +2954,8 @@ def list_accounts(
             created_from=created_from,
             created_to=created_to,
         )
-        return rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + max(1, int(limit))]
+        start = max(0, int(offset or 0))
+        return _decorate_account_rows(rows[start: start + max(1, int(limit))])
 
 
 def list_accounts_page(
@@ -2761,7 +2970,23 @@ def list_accounts_page(
     created_to: str | None = None,
 ) -> dict:
     with _LOCK:
-        rows = _filtered_decorated_accounts(
+        limit = max(1, int(limit))
+        offset = max(0, int(offset or 0))
+        region = _fast_sqlite_account_region(
+            limit=limit,
+            offset=offset,
+            archived=archived,
+            plan_filter=plan_filter,
+            q=q,
+            status_filter=status_filter,
+            group_filter=group_filter,
+            created_from=created_from,
+            created_to=created_to,
+        )
+        if region is not None:
+            region["items"] = _decorate_account_rows(region.get("items") or [])
+            return region
+        rows = _filtered_account_rows(
             archived=archived,
             plan_filter=plan_filter,
             q=q,
@@ -2771,9 +2996,7 @@ def list_accounts_page(
             created_to=created_to,
         )
         total = len(rows)
-        limit = max(1, int(limit))
-        offset = max(0, int(offset or 0))
-        items = rows[offset: offset + limit]
+        items = _decorate_account_rows(rows[offset: offset + limit])
         latest = max((str(row.get("updated_at") or "") for row in rows), default="")
         return {"items": items, "total": total, "offset": offset, "limit": limit, "revision": f"{total}:{latest}"}
 
@@ -4673,6 +4896,8 @@ def create_registration_batch(
     workers: int,
     email_source: str,
     task_type: str = "registration",
+    registration_group_id: int | None = None,
+    registration_group_name: str | None = None,
 ) -> dict:
     """创建一次批量任务操作对应的持久化日志。
 
@@ -4703,6 +4928,8 @@ def create_registration_batch(
             "submitted_count": 0,
             "workers": max(1, int(workers or 1)),
             "email_source": str(email_source or ""),
+            "registration_group_id": registration_group_id,
+            "registration_group_name": registration_group_name,
             "job_ids": [],
             "success_count": 0,
             "failed_count": 0,
@@ -4892,6 +5119,8 @@ def _new_job_row(
     email: str | None = None,
     account_id: int | None = None,
     batch_id: int | None = None,
+    registration_group_id: int | None = None,
+    registration_group_name: str | None = None,
 ) -> dict:
     job_uuid = str(uuid.uuid4())
     log_file = str(_LOG_DIR / f"{job_uuid}.log")
@@ -4913,6 +5142,8 @@ def _new_job_row(
         "completed_at": None,
         "account_id": account_id,
         "batch_id": batch_id,
+        "registration_group_id": registration_group_id,
+        "registration_group_name": registration_group_name,
         "registration_traffic_bytes": None,
         "registration_upload_bytes": None,
         "registration_download_bytes": None,
@@ -4927,11 +5158,23 @@ def _new_job_row(
     }
 
 
-def create_job(email_source: str, *, batch_id: int | None = None) -> dict:
+def create_job(
+    email_source: str,
+    *,
+    batch_id: int | None = None,
+    registration_group_id: int | None = None,
+    registration_group_name: str | None = None,
+) -> dict:
     """创建一个首次执行的 pending 注册任务。"""
     with _LOCK:
         rows = _load_jobs()
-        row = _new_job_row(rows, email_source=email_source, batch_id=batch_id)
+        row = _new_job_row(
+            rows,
+            email_source=email_source,
+            batch_id=batch_id,
+            registration_group_id=registration_group_id,
+            registration_group_name=registration_group_name,
+        )
         rows.append(row)
         _save_jobs(rows)
         return dict(row)
@@ -5070,6 +5313,8 @@ def create_retry_job(
             retry_action=("codex" if job_type == "codex_retry" else "registration"),
             email=email,
             account_id=account_id,
+            registration_group_id=source.get("registration_group_id"),
+            registration_group_name=source.get("registration_group_name"),
         )
         rows.append(row)
         _save_jobs(rows)
@@ -5927,6 +6172,9 @@ def _load_domain_pool() -> list[dict]:
         return _sqlite_store().load_records("domain_email_pool")
     rows = _read_json(_DOMAIN_EMAIL_JSON, [])
     return rows if isinstance(rows, list) else []
+
+
+_ORIGINAL_LOAD_DOMAIN_POOL = _load_domain_pool
 
 
 def _save_domain_pool(rows: list[dict]) -> None:

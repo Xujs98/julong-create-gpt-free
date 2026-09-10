@@ -3480,13 +3480,36 @@
     .ui-select-option-v3:disabled { color: #b1b8c4; cursor: not-allowed; background: transparent; }
     .jobs-tb-field .ui-select-v3 { width: 142px; margin-top: 0; }
     .jobs-tb-field .ui-select-trigger-v3 { min-height: 38px; font-size: 12px; }
+    .registration-group-field-v2 .ui-select-v3 { width: 158px; }
+    .accounts-title-v2 { display: flex; align-items: center; gap: 11px; }
+    .accounts-load-indicator-v2 {
+      display: inline-block; width: 10px; height: 10px; flex: 0 0 10px;
+      border-radius: 50%; background: #d2d8e2;
+      transition: background-color .22s ease, box-shadow .22s ease, opacity .22s ease;
+    }
+    .accounts-load-indicator-v2.is-loading {
+      background: #f5b942; box-shadow: 0 0 0 4px rgba(245,185,66,.14);
+      animation: accountsLoadPulseV2 .78s ease-in-out infinite alternate;
+    }
+    .accounts-load-indicator-v2.is-ready {
+      background: #23a36d; box-shadow: 0 0 0 4px rgba(35,163,109,.14), 0 0 12px rgba(35,163,109,.28);
+    }
+    .accounts-load-indicator-v2.is-error {
+      background: #d9534f; box-shadow: 0 0 0 4px rgba(217,83,79,.12);
+    }
+    @keyframes accountsLoadPulseV2 {
+      from { opacity: .42; box-shadow: 0 0 0 3px rgba(245,185,66,.10); }
+      to { opacity: 1; box-shadow: 0 0 0 6px rgba(245,185,66,.22), 0 0 12px rgba(245,185,66,.30); }
+    }
     .config-field-v2-control .ui-select-v3 { margin-top: 0; }
     .outlook-import-field .ui-select-v3,
     .account-rebind-field .ui-select-v3 { margin-top: 8px; }
     .jobs-v2-pager .ui-select-v3 { display: inline-block; width: 108px; margin: 0; vertical-align: middle; }
     .jobs-v2-pager .ui-select-trigger-v3 { min-height: 34px; padding-left: 10px; font-size: 11px; }
     @keyframes uiSelectInV3 { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
-    @media (prefers-reduced-motion: reduce) { .ui-select-menu-v3.is-open { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .ui-select-menu-v3.is-open, .accounts-load-indicator-v2.is-loading { animation: none; }
+    }
     @media (max-width: 700px) {
       :root { --sidebar-width: 64px; }
       .app-sidebar { width: var(--sidebar-width); }
@@ -3743,6 +3766,11 @@ try {
             </button>
           </span>
         </label>
+        <label class="jobs-tb-field registration-group-field-v2">分组
+          <select class="jobs-tb-select" id="regAccountGroupV2" data-searchable="true" data-search-placeholder="搜索账号分组" data-empty-text="没有匹配的分组" aria-label="本次注册账号分组">
+            <option value="">默认分组</option>
+          </select>
+        </label>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnStartV2">开始注册</button>
         <button type="button" class="jobs-tb-btn jobs-tb-btn--log" id="btnRegistrationTaskLogV2" title="查看所有注册与换绑批次记录">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
@@ -3780,7 +3808,7 @@ try {
 
   <!-- ============ 账号 ============ -->
   <div id="tab-accounts" class="hidden">
-    <h1 class="register-title">账号</h1>
+    <h1 class="register-title accounts-title-v2">账号<span id="accountsLoadIndicatorV2" class="accounts-load-indicator-v2 is-loading" role="status" aria-label="账号正在加载" title="账号正在加载"></span></h1>
     <section class="accounts-panel-v2" id="accountsPanelV2" aria-label="账号列表">
       <div class="accounts-filter-v2" id="accountsFilterV2">
         <div class="acc-v2-btn-group acc-v2-search-wrap">
@@ -4444,6 +4472,9 @@ function renderCommercialSelectMenuV3(select) {
   const searchable = select.dataset.searchable === 'true';
   const query = searchable ? String(UI_SELECT_STATE_V3.query || '').trim().toLocaleLowerCase() : '';
   if (searchInput) {
+    const searchLabel = select.dataset.searchPlaceholder || '搜索名称或国家代码';
+    searchInput.placeholder = searchLabel;
+    searchInput.setAttribute('aria-label', searchLabel);
     searchInput.hidden = !searchable;
     searchInput.value = searchable ? UI_SELECT_STATE_V3.query : '';
   }
@@ -4469,7 +4500,7 @@ function renderCommercialSelectMenuV3(select) {
     if (!buttons.length) {
       const empty = document.createElement('div');
       empty.className = 'ui-select-empty-v3';
-      empty.textContent = '没有匹配的国家';
+      empty.textContent = select.dataset.emptyText || '没有匹配的选项';
       options.appendChild(empty);
     }
   }
@@ -4900,7 +4931,7 @@ async function copyText(text, notify=true) {
 const API_INFLIGHT = new Map();
 async function api(url, opts = {}) {
   const method = String(opts.method || 'GET').toUpperCase();
-  const key = method === 'GET' ? String(url) : '';
+  const key = method === 'GET' && !opts.signal ? String(url) : '';
   if (key && API_INFLIGHT.has(key)) return API_INFLIGHT.get(key);
   const run = (async () => {
     const r = await fetch(url, {
@@ -4914,6 +4945,9 @@ async function api(url, opts = {}) {
       error.payload = j;
       error.status = r.status;
       throw error;
+    }
+    if (method !== 'GET' && (/^\/api\/accounts(?:\/|\?|$)/.test(url) || /^\/api\/account-groups(?:\/|\?|$)/.test(url))) {
+      invalidateAccountPageCache();
     }
     return j;
   })();
@@ -5054,6 +5088,7 @@ async function startRegistrationFromInputs(countEl, workersEl, startBtn) {
   const count = parseInt((countEl?.value || '1'), 10);
   const workers = parseInt((workersEl?.value || '3'), 10);
   const emailSource = getRegistrationEmailSource();
+  const registrationGroupId = String($('#regAccountGroupV2')?.value || '').trim();
   const activeCount = Number(JOB_STATUS_COUNTS.active || 0);
   if (activeCount > 0) {
     const ok = await appConfirm(
@@ -5072,6 +5107,7 @@ async function startRegistrationFromInputs(countEl, workersEl, startBtn) {
   try {
     const body = {count, workers};
     if (emailSource) body.email_source = emailSource;
+    if (registrationGroupId) body.group_id = Number(registrationGroupId);
     const r = await api('/api/jobs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
     REGISTRATION_BATCH_WARNING = r.warning || '';
     if (Number(r.proxy_check?.removed || 0) > 0) {
@@ -5194,6 +5230,7 @@ function bindJobsBodyEvents(bodyEl) {
   if (taskLogV2) taskLogV2.addEventListener('click', openRegistrationTaskLogModal);
   const clearSelectedV2 = $('#btnClearSelectedJobsV2');
   if (clearSelectedV2) clearSelectedV2.addEventListener('click', clearSelectedJobsV2);
+  loadAccountGroups(false);
 
   function stepInputNumber(inputId, delta) {
     const el = document.getElementById(inputId);
@@ -5742,6 +5779,98 @@ async function pollLog() {
 let accountsLoading = false;
 let planStatusLoading = false;
 let planStatusRevision = '';
+let accountsLoadGeneration = 0;
+let accountsLoadAbortController = null;
+let accountStatusPollTimer = null;
+let accountStatusPollDueAt = 0;
+const ACCOUNT_PAGE_CACHE = new Map();
+const ACCOUNT_PAGE_CACHE_TTL_MS = 120000;
+const ACCOUNT_PAGE_CACHE_LIMIT = 12;
+function accountPageCacheKey(page = PAGERS.accounts.page) {
+  return JSON.stringify({
+    page: Number(page || 1),
+    size: Number(PAGERS.accounts.size || 20),
+    archived: ACCOUNT_ARCHIVE_FILTER,
+    plus: SHOW_PLUS_ACCOUNTS_ONLY,
+    status: ACCOUNT_STATUS_FILTER,
+    group: accountGroupQueryValue(),
+    from: ACCOUNT_DATE_FROM,
+    to: ACCOUNT_DATE_TO,
+    q: getAccountsQuery(),
+  });
+}
+function invalidateAccountPageCache() {
+  ACCOUNT_PAGE_CACHE.clear();
+}
+function storeAccountPageCache(key, rows, total, revision = '') {
+  ACCOUNT_PAGE_CACHE.delete(key);
+  ACCOUNT_PAGE_CACHE.set(key, {
+    rows: (rows || []).map(row => ({...row})),
+    total: Number(total || 0),
+    revision: String(revision || ''),
+    storedAt: Date.now(),
+  });
+  while (ACCOUNT_PAGE_CACHE.size > ACCOUNT_PAGE_CACHE_LIMIT) {
+    ACCOUNT_PAGE_CACHE.delete(ACCOUNT_PAGE_CACHE.keys().next().value);
+  }
+}
+function restoreAccountPageCache(key) {
+  const cached = ACCOUNT_PAGE_CACHE.get(key);
+  if (!cached) return false;
+  if (Date.now() - Number(cached.storedAt || 0) > ACCOUNT_PAGE_CACHE_TTL_MS) {
+    ACCOUNT_PAGE_CACHE.delete(key);
+    return false;
+  }
+  ACCOUNT_PAGE_CACHE.delete(key);
+  ACCOUNT_PAGE_CACHE.set(key, cached);
+  ACCOUNTS = cached.rows.map(row => ({...row}));
+  ACCOUNTS_TOTAL = cached.total;
+  planStatusRevision = cached.revision;
+  accountsLoading = false;
+  renderAccounts();
+  setAccountsLoadIndicatorV2('ready');
+  scheduleAccountStatusPoll(accountHasActiveOperations() ? 2000 : 10000);
+  return true;
+}
+function accountHasActiveOperations() {
+  const active = (value, pending = false) => {
+    const statuses = pending ? ['queued', 'running', 'pending'] : ['queued', 'running'];
+    return statuses.includes(String(value || '').toLowerCase());
+  };
+  return ACCOUNTS.some(account => (
+    active(account.plan_check_status)
+    || active(account.extract_link_status)
+    || active(account.codex_agent_status)
+    || active(account.live_check_status)
+    || active(account.twofa_status, true)
+    || active(account.country_qualification_status, true)
+    || active(account.oaics_check_status, true)
+    || String(account.codex_status || '').toLowerCase() === 'retrying'
+  ));
+}
+function scheduleAccountStatusPoll(delayMs = null) {
+  const delay = Math.max(250, Number(delayMs ?? (accountHasActiveOperations() ? 2000 : 10000)) || 10000);
+  const dueAt = Date.now() + delay;
+  if (accountStatusPollTimer && accountStatusPollDueAt <= dueAt) return;
+  if (accountStatusPollTimer) clearTimeout(accountStatusPollTimer);
+  accountStatusPollDueAt = dueAt;
+  accountStatusPollTimer = window.setTimeout(async () => {
+    accountStatusPollTimer = null;
+    accountStatusPollDueAt = 0;
+    if (!$('#tab-accounts').classList.contains('hidden')) await pollAccountPlanStatuses();
+    scheduleAccountStatusPoll();
+  }, delay);
+}
+function setAccountsLoadIndicatorV2(state, label) {
+  const indicator = $('#accountsLoadIndicatorV2');
+  if (!indicator) return;
+  const next = ['loading', 'ready', 'error'].includes(state) ? state : 'loading';
+  const text = label || (next === 'ready' ? '账号加载完成' : next === 'error' ? '账号加载失败' : '账号正在加载');
+  indicator.classList.remove('is-loading', 'is-ready', 'is-error');
+  indicator.classList.add(`is-${next}`);
+  indicator.setAttribute('aria-label', text);
+  indicator.title = text;
+}
 function getAccountsQuery() {
   const el = document.getElementById('qAccountsV2');
   return (el ? el.value : '').trim();
@@ -5752,6 +5881,24 @@ function getCodexBulkWorkers() {
 }
 function accountGroupById(id) {
   return ACCOUNT_GROUPS.find(group => String(group.id) === String(id));
+}
+function renderRegistrationGroupSelector() {
+  const select = $('#regAccountGroupV2');
+  if (!select) return;
+  const currentId = String(select.value || '');
+  const groups = (ACCOUNT_GROUPS || []).filter(group => !group.is_all);
+  const options = groups.map(group => {
+    const option = document.createElement('option');
+    option.value = String(group.id);
+    option.textContent = String(group.name || '默认分组');
+    return option;
+  });
+  select.replaceChildren(...options);
+  const selected = groups.find(group => String(group.id) === currentId)
+    || groups.find(group => group.is_default)
+    || groups[0];
+  select.value = selected ? String(selected.id) : '';
+  syncCommercialSelectV3(select);
 }
 function accountGroupLabel() {
   if (!ACCOUNT_GROUP_FILTER.length) return '查看分组';
@@ -5806,6 +5953,7 @@ async function loadAccountGroups(openModal = false, mode = 'view') {
     const res = await api('/api/account-groups');
     ACCOUNT_GROUPS = res.groups || [];
     restoreAccountGroupFilter(ACCOUNT_GROUPS);
+    renderRegistrationGroupSelector();
     const viewBtn = $('#btnViewAccountGroupsV2');
     if (viewBtn) viewBtn.textContent = accountGroupLabel();
     if (openModal) {
@@ -5895,45 +6043,152 @@ async function moveSelectedAccountsToGroup(group) {
     showToast(`移动完成：成功 ${res.updated_count || 0} 个，跳过 ${(res.skipped || []).length || 0} 个`);
   } catch (e) { showToast('移动分组失败: ' + e.message); }
 }
-async function loadAccounts() {
-  if (accountsLoading) return;
+function accountRegionRequestUrl(path, offset, limit, paged = false) {
+  const p = PAGERS.accounts;
+  const params = new URLSearchParams({
+    page: String(p.page),
+    page_size: String(p.size),
+    offset: String(Math.max(0, Number(offset) || 0)),
+    limit: String(Math.max(1, Number(limit) || 1)),
+    archived: ACCOUNT_ARCHIVE_FILTER === 'archived' ? 'only' : ACCOUNT_ARCHIVE_FILTER === 'all' ? 'all' : '0',
+    plan: SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '',
+    status: ACCOUNT_STATUS_FILTER,
+    group: accountGroupQueryValue(),
+    created_from: ACCOUNT_DATE_FROM,
+    created_to: ACCOUNT_DATE_TO,
+    q: getAccountsQuery(),
+  });
+  if (paged) params.set('paged', '1');
+  return `${path}?${params.toString()}`;
+}
+function visibleAccountRegionSize() {
+  syncV2TableViewportHeights();
+  const p = PAGERS.accounts;
+  const wrap = document.querySelector('.accounts-table-v2-wrap');
+  const head = document.querySelector('.accounts-table-v2 thead');
+  const existingRow = document.querySelector('#accountsBodyV2 tr');
+  const measuredHeight = Number(existingRow?.getBoundingClientRect().height || 0);
+  const rowHeight = measuredHeight >= 44 ? Math.min(180, measuredHeight) : 112;
+  const wrapHeight = Math.max(0, Number(wrap?.clientHeight || 0) - Number(head?.getBoundingClientRect().height || 0));
+  const bodyTop = Number(head?.getBoundingClientRect().bottom || wrap?.getBoundingClientRect().top || 0);
+  const viewportHeight = Math.max(0, window.innerHeight - bodyTop - 12);
+  const available = wrapHeight > 0 && viewportHeight > 0
+    ? Math.min(wrapHeight, viewportHeight)
+    : Math.max(wrapHeight, viewportHeight, rowHeight);
+  return Math.max(1, Math.min(p.size, Math.floor(available / rowHeight) || 1));
+}
+function waitForAccountRegionIdle() {
+  return new Promise(resolve => {
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(() => resolve(), {timeout: 180});
+    } else {
+      window.setTimeout(resolve, 32);
+    }
+  });
+}
+function appendAccountRegion(items) {
+  const seen = new Set(ACCOUNTS.map(row => Number(row.id)));
+  (items || []).forEach(row => {
+    const id = Number(row.id);
+    if (!seen.has(id)) {
+      ACCOUNTS.push(row);
+      seen.add(id);
+    }
+  });
+}
+async function prefetchNextAccountPage(generation) {
+  const p = PAGERS.accounts;
+  const nextPage = p.page + 1;
+  if (nextPage > Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size))) return;
+  const cacheKey = accountPageCacheKey(nextPage);
+  const cached = ACCOUNT_PAGE_CACHE.get(cacheKey);
+  if (cached && Date.now() - Number(cached.storedAt || 0) <= ACCOUNT_PAGE_CACHE_TTL_MS) return;
+  await waitForAccountRegionIdle();
+  if (generation !== accountsLoadGeneration || p.page + 1 !== nextPage) return;
+  try {
+    const offset = (nextPage - 1) * p.size;
+    const response = await api(accountRegionRequestUrl('/api/accounts', offset, p.size, true));
+    if (generation !== accountsLoadGeneration || p.page + 1 !== nextPage) return;
+    storeAccountPageCache(cacheKey, response.items || [], response.total, '');
+  } catch (_) {}
+}
+async function loadAccounts(options = {}) {
+  const force = options === true || Boolean(options?.force);
+  const generation = ++accountsLoadGeneration;
+  if (accountsLoadAbortController) accountsLoadAbortController.abort();
+  accountsLoadAbortController = null;
+  const cacheKey = accountPageCacheKey();
+  if (!force && restoreAccountPageCache(cacheKey)) return;
+  const controller = new AbortController();
+  accountsLoadAbortController = controller;
   accountsLoading = true;
+  let completed = false;
+  setAccountsLoadIndicatorV2('loading');
   try {
     if (!ACCOUNT_GROUPS.length) await loadAccountGroups(false);
-    const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
-    const status = ACCOUNT_STATUS_FILTER;
-    const group = accountGroupQueryValue();
-    const q = getAccountsQuery();
-    const archivedQuery = ACCOUNT_ARCHIVE_FILTER === 'archived' ? 'only' : ACCOUNT_ARCHIVE_FILTER === 'all' ? 'all' : '0';
+    if (generation !== accountsLoadGeneration) return;
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archivedQuery)}&plan=${encodeURIComponent(plan)}&status=${encodeURIComponent(status)}&group=${encodeURIComponent(group)}&created_from=${encodeURIComponent(ACCOUNT_DATE_FROM)}&created_to=${encodeURIComponent(ACCOUNT_DATE_TO)}&q=${encodeURIComponent(q)}`);
+    const baseOffset = (p.page - 1) * p.size;
+    const initialLimit = visibleAccountRegionSize();
+    const res = await api(accountRegionRequestUrl('/api/accounts', baseOffset, initialLimit, true), {signal: controller.signal});
+    if (generation !== accountsLoadGeneration) return;
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
-    if (p.page > totalPages) { p.page = totalPages; accountsLoading = false; return loadAccounts(); }
+    if (p.page > totalPages) { p.page = totalPages; return loadAccounts(); }
     renderAccounts();
-  } catch(e) { showToast('加载账号失败: ' + e.message); }
-  finally { accountsLoading = false; }
+    let targetCount = Math.max(0, Math.min(p.size, ACCOUNTS_TOTAL - baseOffset));
+    const chunkSize = Math.min(20, Math.max(8, initialLimit * 2));
+    while (ACCOUNTS.length < targetCount) {
+      await waitForAccountRegionIdle();
+      if (generation !== accountsLoadGeneration) return;
+      const nextOffset = baseOffset + ACCOUNTS.length;
+      const nextLimit = Math.min(chunkSize, targetCount - ACCOUNTS.length);
+      const chunk = await api(accountRegionRequestUrl('/api/accounts', nextOffset, nextLimit, true), {signal: controller.signal});
+      if (generation !== accountsLoadGeneration) return;
+      const before = ACCOUNTS.length;
+      appendAccountRegion(chunk.items || []);
+      ACCOUNTS_TOTAL = Number(chunk.total ?? ACCOUNTS_TOTAL);
+      targetCount = Math.max(0, Math.min(p.size, ACCOUNTS_TOTAL - baseOffset));
+      renderAccounts({appendFrom: before});
+      if (ACCOUNTS.length === before) break;
+    }
+    planStatusRevision = '';
+    storeAccountPageCache(cacheKey, ACCOUNTS, ACCOUNTS_TOTAL, planStatusRevision);
+    completed = true;
+    void prefetchNextAccountPage(generation);
+  } catch(e) {
+    if (generation === accountsLoadGeneration && e?.name !== 'AbortError') {
+      setAccountsLoadIndicatorV2('error');
+      showToast('加载账号失败: ' + e.message);
+    }
+  } finally {
+    if (generation === accountsLoadGeneration) {
+      accountsLoading = false;
+      updateAccountSelectionUi(ACCOUNTS);
+      if (completed) setAccountsLoadIndicatorV2('ready');
+      scheduleAccountStatusPoll(accountHasActiveOperations() ? 2000 : 10000);
+    }
+    if (accountsLoadAbortController === controller) accountsLoadAbortController = null;
+  }
 }
 async function pollAccountPlanStatuses() {
   if (planStatusLoading || accountsLoading) return;
+  if (!ACCOUNTS.length) return;
+  const generation = accountsLoadGeneration;
   planStatusLoading = true;
   try {
-    const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
-    const status = ACCOUNT_STATUS_FILTER;
-    const group = accountGroupQueryValue();
-    const q = getAccountsQuery();
-    const archivedQuery = ACCOUNT_ARCHIVE_FILTER === 'archived' ? 'only' : ACCOUNT_ARCHIVE_FILTER === 'all' ? 'all' : '0';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archivedQuery)}&plan=${encodeURIComponent(plan)}&status=${encodeURIComponent(status)}&group=${encodeURIComponent(group)}&created_from=${encodeURIComponent(ACCOUNT_DATE_FROM)}&created_to=${encodeURIComponent(ACCOUNT_DATE_TO)}&q=${encodeURIComponent(q)}`);
+    const offset = (p.page - 1) * p.size;
+    const snapshot = await api(accountRegionRequestUrl('/api/accounts/plan-check-status', offset, ACCOUNTS.length));
+    if (generation !== accountsLoadGeneration || accountsLoading) return;
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
     if (hasUnknown || items.length !== ACCOUNTS.length || Number(snapshot.total || 0) !== ACCOUNTS_TOTAL) {
       planStatusRevision = snapshot.revision || '';
-      await loadAccounts();
+      invalidateAccountPageCache();
+      await loadAccounts({force: true});
       return;
     }
     if ((snapshot.revision || '') !== planStatusRevision) {
@@ -5958,8 +6213,13 @@ async function pollAccountPlanStatuses() {
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
-      if (needsFullReload) await loadAccounts();
-      else renderAccounts();
+      if (needsFullReload) {
+        invalidateAccountPageCache();
+        await loadAccounts({force: true});
+      } else {
+        renderAccounts();
+        storeAccountPageCache(accountPageCacheKey(), ACCOUNTS, ACCOUNTS_TOTAL, planStatusRevision);
+      }
     }
   } catch(e) {}
   finally { planStatusLoading = false; }
@@ -6711,7 +6971,8 @@ function _accountCreatedAtCell(value, trafficBytes, uploadBytes, downloadBytes, 
     : '<span class="acc-v2-created-traffic is-muted">流量未记录</span>';
   return `<div class="acc-v2-created-at" title="${esc(raw)}"><div class="acc-v2-created-date">${esc(dateText)}</div><div class="acc-v2-created-meta">${labelHtml}<span class="acc-v2-created-time">${esc(timeText)}</span></div><div class="acc-v2-created-traffic-row">${trafficHtml}</div></div>`;
 }
-function renderAccounts() {
+function renderAccounts(options = {}) {
+  const appendFrom = Math.max(0, Number(options?.appendFrom || 0));
   const total = ACCOUNTS_TOTAL;
   const rows = ACCOUNTS;
   const accountIcons = accountV2Icons();
@@ -6748,10 +7009,15 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="16" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    const canAppend = appendFrom > 0 && bodyV2.children.length === appendFrom;
+    if (canAppend) {
+      bodyV2.insertAdjacentHTML('beforeend', rows.slice(appendFrom).map(rowHtmlV2).join(''));
+    } else {
+      bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="16" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    }
   }
   updateAccountSelectionUi(rows);
-  _renderPager('accounts', total);
+  if (!appendFrom) _renderPager('accounts', total);
 }
 
 function updateAccountSelectionUi(pageRows = null) {
@@ -6795,7 +7061,7 @@ function updateAccountSelectionUi(pageRows = null) {
   if (cbAll) {
     cbAll.checked = pageIds.length > 0 && checkedCount === pageIds.length;
     cbAll.indeterminate = checkedCount > 0 && checkedCount < pageIds.length;
-    cbAll.disabled = pageIds.length === 0;
+    cbAll.disabled = accountsLoading || pageIds.length === 0;
   }
 }
 
@@ -7606,6 +7872,22 @@ async function applyAccountStatusFilter(value) {
   planStatusRevision = '';
   await loadAccounts();
   await pollAccountPlanStatuses();
+}
+async function refreshAccountsList(button) {
+  const original = button?.textContent || '刷新账号';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '刷新中…';
+  }
+  invalidateAccountPageCache();
+  try {
+    await loadAccounts({force: true});
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
 }
 (function bindAccountsFilterV2() {
   const qV2 = $('#qAccountsV2');
@@ -11422,7 +11704,7 @@ activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false)
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 3000);
 durationTimer = setInterval(updateVisibleTaskDurations, 1000);
 setInterval(loadSummary, 5000);
-setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 2000);
+scheduleAccountStatusPoll(2000);
 </script>
 <div id="react-dashboard-root" hidden aria-hidden="true"></div>
 <script src="/static/vendor/react.production.min.js"></script>

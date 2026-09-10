@@ -394,6 +394,7 @@ def _compact_job_for_list(row: dict) -> dict:
         "registration_traffic_confidence", "registration_traffic_measurement",
         "registration_traffic_request_count", "registration_traffic_response_count",
         "registration_traffic_measurement_errors",
+        "registration_group_id", "registration_group_name",
         "display_status", "retryable", "retry_action", "retry_label",
         "manual_otp_required", "job_type", "rebind_status", "rebind_source_account_id",
         "rebind_source_email", "rebind_target_email", "rebind_target_source",
@@ -755,15 +756,16 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.get("/api/accounts")
     def api_accounts():
-        limit = request.args.get("limit", default=500, type=int)
+        limit_arg = request.args.get("limit", default=None, type=int)
+        limit = max(1, min(500, int(limit_arg or 500)))
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         status_filter = str(request.args.get("status", default="") or "").lower()
         group_filter = str(request.args.get("group", default="") or "").strip()
         created_from = str(request.args.get("created_from", default="") or "").strip()[:10]
         created_to = str(request.args.get("created_to", default="") or "").strip()[:10]
-        if status_filter not in {"", "all", "link", "sms"}:
-            return jsonify({"ok": False, "error": "status 仅支持 all / link / sms"}), 400
+        if status_filter not in {"", "all", "link", "payment", "sms"}:
+            return jsonify({"ok": False, "error": "status 仅支持 all / link / payment / sms"}), 400
         q = str(request.args.get("q", default="") or "").strip()
         # 新分页接口：传 page/page_size 或 paged=1 时返回 {items,total,page,page_size,...}
         paged = str(request.args.get("paged", default="") or "").lower() in {"1", "true", "yes"}
@@ -772,9 +774,11 @@ def create_app(auth_code: str | None = None) -> Flask:
         if paged or page_arg is not None or page_size_arg is not None:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
-            offset = (page - 1) * page_size
+            offset_arg = request.args.get("offset", default=None, type=int)
+            offset = max(0, int(offset_arg)) if offset_arg is not None else (page - 1) * page_size
+            fetch_limit = max(1, min(500, int(limit_arg))) if limit_arg is not None else page_size
             result = db.list_accounts_page(
-                limit=page_size,
+                limit=fetch_limit,
                 offset=offset,
                 archived=archived,
                 plan_filter=plan_filter,
@@ -785,7 +789,14 @@ def create_app(auth_code: str | None = None) -> Flask:
                 created_to=created_to,
             )
             result["items"] = [_compact_account_for_list(r) for r in (result.get("items") or [])]
-            result.update({"ok": True, "page": page, "page_size": page_size, "compact": True})
+            result.update({
+                "ok": True,
+                "page": page,
+                "page_size": page_size,
+                "offset": offset,
+                "limit": fetch_limit,
+                "compact": True,
+            })
             return jsonify(result)
         return jsonify(db.list_accounts(
             limit=limit,
@@ -799,24 +810,27 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/accounts/plan-check-status")
     def api_account_plan_check_status():
         """套餐查询轻量状态，不返回 Token、邮箱密码等敏感字段。"""
-        limit = request.args.get("limit", default=5000, type=int)
+        limit_arg = request.args.get("limit", default=None, type=int)
+        limit = max(1, min(5000, int(limit_arg or 5000)))
         archived = str(request.args.get("archived", default="0") or "0").lower()
         plan_filter = str(request.args.get("plan", default="") or "").lower()
         status_filter = str(request.args.get("status", default="") or "").lower()
         group_filter = str(request.args.get("group", default="") or "").strip()
         created_from = str(request.args.get("created_from", default="") or "").strip()[:10]
         created_to = str(request.args.get("created_to", default="") or "").strip()[:10]
-        if status_filter not in {"", "all", "link", "sms"}:
-            return jsonify({"ok": False, "error": "status 仅支持 all / link / sms"}), 400
+        if status_filter not in {"", "all", "link", "payment", "sms"}:
+            return jsonify({"ok": False, "error": "status 仅支持 all / link / payment / sms"}), 400
         q = str(request.args.get("q", default="") or "").strip()
         page_arg = request.args.get("page", default=None, type=int)
         page_size_arg = request.args.get("page_size", default=None, type=int)
         if page_arg is not None or page_size_arg is not None:
             page = max(1, int(page_arg or 1))
             page_size = max(1, min(500, int(page_size_arg or limit or 50)))
-            offset = (page - 1) * page_size
+            offset_arg = request.args.get("offset", default=None, type=int)
+            offset = max(0, int(offset_arg)) if offset_arg is not None else (page - 1) * page_size
+            fetch_limit = max(1, min(500, int(limit_arg))) if limit_arg is not None else page_size
             snapshot = db.list_account_plan_check_statuses(
-                limit=page_size,
+                limit=fetch_limit,
                 offset=offset,
                 archived=archived,
                 plan_filter=plan_filter,
@@ -826,7 +840,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 created_from=created_from,
                 created_to=created_to,
             )
-            snapshot.update({"page": page, "page_size": page_size})
+            snapshot.update({"page": page, "page_size": page_size, "offset": offset, "limit": fetch_limit})
         else:
             snapshot = db.list_account_plan_check_statuses(
                 limit=max(1, min(5000, limit)),
@@ -3302,7 +3316,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/jobs")
     def api_jobs_create():
-        """启动批量注册：body {count, workers, email_source?}。"""
+        """启动批量注册：body {count, workers, email_source?, group_id?}。"""
         data = request.get_json(silent=True) or {}
         try:
             count = int(data.get("count", 1))
@@ -3316,6 +3330,17 @@ def create_app(auth_code: str | None = None) -> Flask:
             workers = max(1, min(16, int(data.get("workers", 3))))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "workers 非法"}), 400
+
+        registration_group = None
+        raw_group_id = data.get("group_id")
+        if raw_group_id not in (None, ""):
+            try:
+                group_id = int(raw_group_id)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "group_id 必须是有效分组 ID"}), 400
+            registration_group = db.get_account_group(group_id=group_id)
+            if registration_group is None:
+                return jsonify({"ok": False, "error": "注册账号分组不存在"}), 400
 
         # 开关开启时先检查代理池全部出口：失败项自动从配置中删除，至少
         # 保留一个可用代理才继续创建批次、领取邮箱并提交线程池。
@@ -3398,13 +3423,17 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "手动模式建议每次只跑 1 个任务（同一 REGISTER_EMAIL）。请把数量设为 1。",
                 }), 400
-            jobs = svc.submit_registration(count=count, workers=workers)
+            submit_kwargs = {"count": count, "workers": workers}
+            if registration_group is not None:
+                submit_kwargs["group_id"] = int(registration_group["id"])
+            jobs = svc.submit_registration(**submit_kwargs)
             return jsonify({
                 "ok": True,
                 "submitted": len(jobs),
                 "jobs": jobs,
                 "warning": f"手动 OTP 模式：将使用 {reg_email}；验证码请在任务页提交",
                 "workers": workers,
+                "registration_group": registration_group,
                 "batch": _registration_batch_for_jobs(jobs),
                 "proxy_check": proxy_check,
             })
@@ -3498,6 +3527,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         submit_kwargs = {"count": count, "workers": workers}
         if source_override:
             submit_kwargs["email_source"] = effective_source
+        if registration_group is not None:
+            submit_kwargs["group_id"] = int(registration_group["id"])
         jobs = svc.submit_registration(**submit_kwargs)
         return jsonify({
             "ok": True,
@@ -3506,6 +3537,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             "warning": warning,
             "workers": workers,
             "email_source": effective_source,
+            "registration_group": registration_group,
             "batch": _registration_batch_for_jobs(jobs),
             "proxy_check": proxy_check,
         })

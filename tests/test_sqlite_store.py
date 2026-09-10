@@ -38,6 +38,35 @@ def test_replace_records_rolls_back_when_payload_is_not_serializable(tmp_path):
     assert store.load_records("accounts") == original
 
 
+def test_sqlite_store_loads_only_requested_active_page_and_email_rows(tmp_path):
+    store = SQLiteStore(tmp_path / "state.sqlite3")
+    rows = [
+        {
+            "id": value,
+            "email": f"user{value}@example.test",
+            "archived": value in {2, 5},
+            "updated_at": f"2026-09-10T12:00:0{value}",
+            "payload": "x" * 1000,
+        }
+        for value in range(1, 7)
+    ]
+    store.replace_records("accounts", rows)
+
+    page = store.load_records_page("accounts", archived=False, offset=1, limit=2)
+
+    assert page["total"] == 4
+    assert [row["id"] for row in page["items"]] == [4, 3]
+    assert page["revision"].startswith("4:2026-09-10T12:00:06")
+    matched = store.load_records_by_emails(
+        "accounts",
+        ["USER1@EXAMPLE.TEST", "user6@example.test"],
+    )
+    assert {row["id"] for row in matched} == {1, 6}
+    revision = store.records_revision("accounts")
+    store.replace_records("accounts", rows)
+    assert int(store.records_revision("accounts")) == int(revision) + 1
+
+
 def test_replace_all_is_atomic_and_preserves_documents(tmp_path):
     store = SQLiteStore(tmp_path / "state.sqlite3")
     collections = {
@@ -99,6 +128,9 @@ def _sqlite_db_patch(root: Path):
         "_VIEWER_HTML": root / "viewer.html",
         "_SQLITE_READY_PATH": None,
         "_SQLITE_STORE_INSTANCE": None,
+        "_ACCOUNT_ROWS_CACHE": None,
+        "_ACCOUNT_ROWS_CACHE_SIGNATURE": None,
+        "_FILTERED_ACCOUNT_ROWS_CACHE": {},
     }
     return patch.multiple(db, **paths)
 
@@ -127,6 +159,21 @@ def test_db_bootstraps_sqlite_once_and_keeps_json_mirror(tmp_path, monkeypatch):
         mirrored = json.loads((tmp_path / "accounts.json").read_text(encoding="utf-8"))
         assert mirrored[0]["note"] == "SQLite 更新"
         assert db.storage_paths()["backend"] == "sqlite"
+
+        store = db._sqlite_store()
+        with patch.object(store, "load_records", wraps=store.load_records) as load_records:
+            assert db._load_accounts()[0]["note"] == "SQLite 更新"
+            assert db._load_accounts()[0]["note"] == "SQLite 更新"
+            load_records.assert_not_called()
+
+            external = [{**updated[0], "note": "其他 worker 更新"}]
+            store.replace_records("registered_accounts", external)
+            assert db._load_accounts()[0]["note"] == "其他 worker 更新"
+            account_loads = [
+                call for call in load_records.call_args_list
+                if call.args == ("registered_accounts",)
+            ]
+            assert len(account_loads) == 1
 
 
 def test_concurrent_icloud_claims_do_not_return_same_record(tmp_path, monkeypatch):

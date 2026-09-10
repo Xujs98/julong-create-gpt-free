@@ -33,7 +33,9 @@ def test_status_segment_forwards_server_side_filter_to_list_and_polling():
     assert 'data-account-status-filter="payment"' in source
     assert 'data-account-status-filter="sms"' in source
     assert "let ACCOUNT_STATUS_FILTER = '';" in source
-    assert source.count("status=${encodeURIComponent(status)}") == 2
+    assert "status: ACCOUNT_STATUS_FILTER," in source
+    assert "accountRegionRequestUrl('/api/accounts'," in source
+    assert "accountRegionRequestUrl('/api/accounts/plan-check-status'," in source
     assert "applyAccountStatusFilter" in source
 
 

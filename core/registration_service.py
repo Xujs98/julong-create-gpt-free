@@ -760,6 +760,17 @@ def _run_one_job(job_id: int, log_file: str) -> None:
 
             if result is None:
                 raise RuntimeError("注册流程未返回结果")
+            if isinstance(result, dict) and result.get("account_id") and current.get("registration_group_id"):
+                grouped = db.assign_account_to_registration_group(
+                    int(result["account_id"]),
+                    int(current["registration_group_id"]),
+                    expected_name=current.get("registration_group_name"),
+                )
+                log_logger.info(
+                    "[Job %s] 账号已进入分组：%s",
+                    job_id,
+                    grouped.get("group_name") or current.get("registration_group_name"),
+                )
             traffic_fields = _job_traffic_fields(result)
             if isinstance(result, dict) and result.get("account_id") and traffic_fields:
                 # The successful attempt persisted its own bytes while it was
@@ -844,6 +855,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         db.update_job(
             job_id,
             status="failed",
+            account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
             **_job_traffic_fields(result),
@@ -915,7 +927,12 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
 # 公共接口
 # ============================================================
 
-def submit_registration(count: int = 1, email_source: str | None = None, workers: int | None = None) -> list[dict]:
+def submit_registration(
+    count: int = 1,
+    email_source: str | None = None,
+    workers: int | None = None,
+    group_id: int | None = None,
+) -> list[dict]:
     """
     创建 N 个注册任务并提交到线程池。
     email_source 会固化到每个任务，并在工作线程领取邮箱时生效。
@@ -926,6 +943,13 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     if email_source is None:
         from config import email as _email_cfg
         email_source = _email_cfg.EMAIL_SOURCE
+    group = db.get_account_group(group_id=group_id) if group_id is not None else db.get_account_group(
+        name=db.DEFAULT_ACCOUNT_GROUP
+    )
+    if group is None:
+        raise ValueError("注册账号分组不存在")
+    resolved_group_id = int(group.get("id") or 0)
+    resolved_group_name = str(group.get("name") or db.DEFAULT_ACCOUNT_GROUP)
 
     # 创建/切换线程池和提交本批任务必须整体串行化：否则另一请求在本批提交中途
     # 切换 workers 并 shutdown 旧池，会导致后续 submit 报 cannot schedule new futures after shutdown。
@@ -936,11 +960,18 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
             requested_count=count,
             workers=effective_workers,
             email_source=str(email_source or ""),
+            registration_group_id=resolved_group_id,
+            registration_group_name=resolved_group_name,
         )
         jobs = []
         try:
             for _ in range(count):
-                job = db.create_job(email_source=email_source, batch_id=int(batch["id"]))
+                job = db.create_job(
+                    email_source=email_source,
+                    batch_id=int(batch["id"]),
+                    registration_group_id=resolved_group_id,
+                    registration_group_name=resolved_group_name,
+                )
                 try:
                     executor.submit(_run_one_job, job["id"], job["log_file"])
                 except Exception as exc:
@@ -958,7 +989,14 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
             # Worker 可能在批次封口前已快速结束；封口后再触发一次，保证
             # 全终态批次能够立即固化统计并按保留数收敛。
             schedule_registration_job_retention()
-    logger.info(f"[Service] 已提交 {count} 个注册任务，源={email_source}，workers={effective_workers}")
+    logger.info(
+        "[Service] 已提交 %s 个注册任务，源=%s，workers=%s，分组=%s(#%s)",
+        count,
+        email_source,
+        effective_workers,
+        resolved_group_name,
+        resolved_group_id,
+    )
     return jobs
 
 
