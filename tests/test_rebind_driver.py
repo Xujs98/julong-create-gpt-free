@@ -34,7 +34,7 @@ def _target(**extra):
 
 def test_rebind_uses_proxy_pool_instead_of_account_saved_route(monkeypatch):
     captured = []
-    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "socks5h://pool.example:4000")
+    monkeypatch.setattr("config.proxy.PROXY_POOL", ["socks5h://pool.example:4000"])
 
     def login_protocol(account, proxy, context, **_kwargs):
         captured.append(proxy)
@@ -62,7 +62,7 @@ def test_rebind_uses_proxy_pool_instead_of_account_saved_route(monkeypatch):
 
 def test_explicit_empty_rebind_proxy_still_uses_proxy_pool(monkeypatch):
     captured = []
-    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "socks5h://pool.example:4000")
+    monkeypatch.setattr("config.proxy.PROXY_POOL", ["socks5h://pool.example:4000"])
 
     def login_protocol(account, proxy, context, **_kwargs):
         captured.append(proxy)
@@ -91,7 +91,10 @@ def test_explicit_empty_rebind_proxy_still_uses_proxy_pool(monkeypatch):
 
 def test_explicit_rebind_proxy_overrides_pool(monkeypatch):
     captured = []
-    monkeypatch.setattr("config.proxy.pick_proxy", lambda: "socks5h://pool.example:4000")
+    monkeypatch.setattr(
+        "config.proxy.PROXY_POOL",
+        ["socks5h://pool.example:4000", "socks5h://custom.example:5000"],
+    )
 
     def login_protocol(account, proxy, context, **_kwargs):
         captured.append(proxy)
@@ -115,6 +118,32 @@ def test_explicit_rebind_proxy_overrides_pool(monkeypatch):
     assert captured == ["socks5h://custom.example:5000"]
 
 
+def test_explicit_rebind_proxy_outside_pool_is_rejected(monkeypatch):
+    monkeypatch.setattr("config.proxy.PROXY_POOL", ["socks5h://pool.example:4000"])
+
+    with pytest.raises(rebind_driver.RebindDriverError, match="不属于当前 PROXY_POOL"):
+        rebind_driver.rebind_account(
+            _account(),
+            _target(),
+            driver="protocol",
+            proxy="socks5h://outside.example:5000",
+            hooks={
+                "login_protocol": lambda **_kwargs: None,
+                "submit_protocol": lambda **_kwargs: {"ok": True},
+            },
+        )
+
+
+def test_rebind_pool_selection_does_not_use_proxy_api_mode(monkeypatch):
+    monkeypatch.setattr("config.proxy.PROXY_POOL", ["socks5h://pool.example:4000"])
+    monkeypatch.setattr(
+        "config.proxy.pick_proxy",
+        lambda: (_ for _ in ()).throw(AssertionError("pick_proxy must not be called")),
+    )
+
+    assert rebind_driver._pick_rebind_pool_proxy() == "socks5h://pool.example:4000"
+
+
 def test_rebind_requires_non_empty_proxy_pool(monkeypatch):
     monkeypatch.setattr("config.proxy.pick_proxy", lambda: "")
     monkeypatch.setattr("config.proxy.PROXY_POOL", [])
@@ -136,6 +165,8 @@ def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monk
     driver = object()
     closer = lambda: None
     info = {"user": {"email": OLD}, "loginConfirmed": True, "loginConfirmation": "browser_ui"}
+    dead_proxy = "socks5h://user:pass@dead.example:3000"
+    monkeypatch.setattr("config.proxy.PROXY_POOL", [dead_proxy, "POOL"])
 
     def browser_login(account, *, driver_name, proxy, **_kwargs):
         calls.append(proxy)
@@ -152,7 +183,7 @@ def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monk
         _account(),
         _target(),
         driver="roxy",
-        proxy="socks5h://user:pass@dead.example:3000",
+        proxy=dead_proxy,
         hooks={
             "submit_browser": lambda **_kwargs: {"ok": True},
             "verify": lambda target_email, **_kwargs: {
@@ -162,7 +193,7 @@ def test_browser_login_retries_with_fallback_after_proxy_connection_failure(monk
     )
 
     assert result["verified_email"] == TARGET
-    assert calls == ["socks5h://user:pass@dead.example:3000", "POOL"]
+    assert calls == [dead_proxy, "POOL"]
 
 
 def test_browser_rebind_forces_fresh_full_login_and_ignores_factory_session(monkeypatch):

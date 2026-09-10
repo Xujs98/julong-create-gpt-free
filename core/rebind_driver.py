@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -195,36 +196,44 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 
 
 def _pick_rebind_pool_proxy(failed_proxy: str | None = None) -> str:
-    """Pick one rebind route from PROXY_POOL, preferring a different entry."""
+    """Pick one rebind route strictly from PROXY_POOL."""
     from config import proxy as proxy_cfg
 
     failed = str(failed_proxy or "").strip()
-    selected = str(proxy_cfg.pick_proxy() or "").strip()
-    if selected and selected != failed:
-        return selected
     candidates: list[str] = []
     for raw in list(getattr(proxy_cfg, "PROXY_POOL", []) or []):
         value = str(raw or "").strip()
         if value and value not in candidates:
             candidates.append(value)
-    for candidate in candidates:
-        if candidate != failed:
-            return candidate
+    available = [candidate for candidate in candidates if candidate != failed]
+    if available:
+        return random.choice(available)
     # 单出口代理池仍允许同一入口再试一次；其上游可能会自动轮换真实出口 IP。
-    return selected or (candidates[0] if candidates else "")
+    return candidates[0] if candidates else ""
 
 
 def _resolve_rebind_proxy(account: Mapping[str, Any], explicit_proxy: str | None) -> str:
-    """Use an explicit task proxy or select a fresh PROXY_POOL route.
+    """Select a rebind route exclusively from the current PROXY_POOL.
 
     Account-level ``live_check_proxy_used``/``proxy_used`` values intentionally
     do not participate: rebind always starts from the current proxy pool rather
     than inheriting an old account route.
     """
-    selected = str(explicit_proxy or "").strip() or _pick_rebind_pool_proxy()
-    if not selected:
+    from config import proxy as proxy_cfg
+
+    pool = [
+        str(raw or "").strip()
+        for raw in list(getattr(proxy_cfg, "PROXY_POOL", []) or [])
+        if str(raw or "").strip()
+    ]
+    if not pool:
         raise RebindDriverError("换绑需要代理池出口，但当前 PROXY_POOL 为空")
-    return selected
+    requested = str(explicit_proxy or "").strip()
+    if requested:
+        if requested not in pool:
+            raise RebindDriverError("换绑指定代理不属于当前 PROXY_POOL")
+        return requested
+    return _pick_rebind_pool_proxy()
 
 
 def _browser_error_text(exc: BaseException | None) -> str:
@@ -2903,8 +2912,7 @@ def rebind_account(
     effective_proxy = _resolve_rebind_proxy(account, proxy)
     _safe_log(
         log,
-        "换绑网络出口："
-        f"使用{'指定代理' if str(proxy or '').strip() else '代理池出口'}",
+        "换绑网络出口：使用代理池出口（模式=proxy_pool，禁止直连）",
     )
     context = RebindContext(
         account=account,
