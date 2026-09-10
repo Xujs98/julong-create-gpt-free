@@ -291,9 +291,14 @@ def all_registration_driver_preflights() -> list[dict]:
     return [registration_driver_preflight(driver) for driver in DRIVER_LABELS]
 
 
-def require_registration_driver_ready(value: str | None = None) -> dict:
+def require_registration_driver_ready(value: str | None = None, *, runtime: bool = False) -> dict:
     """所选注册方式未就绪时抛出带具体配置项的错误。"""
-    result = registration_driver_preflight(value)
+    driver = normalize_registration_driver(value)
+    result = (
+        registration_driver_runtime_preflight(value)
+        if runtime and driver == "roxy"
+        else registration_driver_preflight(value)
+    )
     if not result["ok"]:
         raise RuntimeError(f"{result['label']} 未就绪：" + "；".join(result["errors"]))
     return result

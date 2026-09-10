@@ -9,6 +9,7 @@ from core.registration_driver_health import (
     normalize_registration_driver,
     registration_driver_preflight,
     registration_driver_runtime_preflight,
+    require_registration_driver_ready,
     roxy_api_runtime_check,
 )
 from core.roxybrowser_client import _proxy_url_to_roxy_info
@@ -129,6 +130,21 @@ class RegistrationDriverHealthTests(unittest.TestCase):
             result = registration_driver_preflight("roxy")
         self.assertNotIn("ROXY_API_BASE 不是有效 HTTP 地址", result["errors"])
         self.assertEqual(result["details"]["api_base"], "http://127.0.0.1:50003")
+
+    @patch("core.registration_driver_health.registration_driver_runtime_preflight")
+    def test_require_roxy_driver_uses_runtime_preflight(self, runtime):
+        runtime.return_value = {
+            "driver": "roxy",
+            "label": "RoxyBrowser",
+            "ok": True,
+            "errors": [],
+            "details": {},
+        }
+
+        result = require_registration_driver_ready("roxy", runtime=True)
+
+        self.assertTrue(result["ok"])
+        runtime.assert_called_once_with("roxy")
 
     @patch(
         "core.registration_driver_health.socket.create_connection",

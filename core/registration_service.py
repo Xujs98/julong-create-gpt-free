@@ -655,7 +655,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             stage = "driver_preflight"
             log_logger.info(f"[Job {job_id}] 阶段={stage}")
             from core.registration_driver_health import require_registration_driver_ready
-            require_registration_driver_ready()
+            require_registration_driver_ready(runtime=True)
             # 先确认健康出口，再领取邮箱；健康代理不足时不消耗邮箱池素材。
             stage = "proxy_selection"
             log_logger.info(f"[Job {job_id}] 阶段={stage}")
