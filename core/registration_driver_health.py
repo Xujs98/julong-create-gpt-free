@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import socket
+import time
 from urllib.parse import urlsplit
+
+import requests
 
 
 DRIVER_LABELS = {
@@ -41,12 +44,37 @@ def _valid_url(value: str, schemes: set[str]) -> bool:
         return False
 
 
-def roxy_api_runtime_check(value: str | None = None, *, timeout: float = 0.8) -> dict:
+def _canonical_roxy_base(value: str | None) -> str | None:
+    from core.roxy_selenium import canonicalize_roxy_api_base
+    return canonicalize_roxy_api_base(value)
+
+
+def _roxy_http_error_kind(exc: Exception) -> str:
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return "HTTP connect timeout"
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return "HTTP read timeout"
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "HTTP timeout"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "HTTP connection error"
+    if isinstance(exc, requests.exceptions.InvalidURL):
+        return "HTTP invalid URL"
+    if isinstance(exc, requests.exceptions.RequestException):
+        return f"HTTP {type(exc).__name__}"
+    return type(exc).__name__
+
+
+def roxy_api_runtime_check(
+    value: str | None = None,
+    *,
+    timeout: float = 0.8,
+    probe_http: bool = False,
+) -> dict:
     """探测 RoxyBrowser API 端点是否有服务监听。
 
-    这里只建立一个很短的 TCP 连接，不发送任何 API 请求，因此不会创建环境、
-    消耗浏览器资源或触发服务端业务。返回值包含 ``reachable`` 和 ``error``，
-    供补跑任务在真正调用 ``/browser/create`` 前选择降级驱动。
+    默认只建立一个很短的 TCP 连接。运行时预检会额外执行只读的工作区 GET，
+    用来区分“端口监听”与“API 请求可返回”。返回值同时保留 TCP/HTTP 分层结果。
     """
     if value is None:
         from config import roxybrowser as cfg
@@ -62,6 +90,13 @@ def roxy_api_runtime_check(value: str | None = None, *, timeout: float = 0.8) ->
         raw = configured
     result = {
         "reachable": False,
+        "tcp_reachable": False,
+        "http_checked": False,
+        "http_reachable": None,
+        "http_status": None,
+        "http_elapsed_ms": None,
+        "http_error": None,
+        "http_probe_path": None,
         "host": "",
         "port": None,
         "error": None,
@@ -82,11 +117,57 @@ def roxy_api_runtime_check(value: str | None = None, *, timeout: float = 0.8) ->
         result["port"] = port
         with socket.create_connection((host, port), timeout=max(0.1, float(timeout))):
             pass
+        result["tcp_reachable"] = True
         result["reachable"] = True
+        if probe_http:
+            from config import roxybrowser as cfg
+
+            path = str(getattr(cfg, "ROXY_WORKSPACE_LIST_PATH", "/browser/workspace") or "/browser/workspace").strip()
+            if not path.startswith("/"):
+                path = f"/{path}"
+            result["http_checked"] = True
+            result["http_probe_path"] = path
+            endpoint = f"{raw.rstrip('/')}{path}"
+            headers = {"Accept": "application/json"}
+            token = str(getattr(cfg, "ROXY_API_TOKEN", "") or "").strip()
+            if token:
+                headers.update({"token": token, "Authorization": f"Bearer {token}"})
+            started = time.monotonic()
+            try:
+                response = requests.get(
+                    endpoint,
+                    headers=headers,
+                    timeout=max(0.1, float(timeout)),
+                )
+                result["http_elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
+                result["http_status"] = int(response.status_code)
+                result["http_reachable"] = bool(response.ok)
+                if not response.ok:
+                    result["http_error"] = f"HTTP status {response.status_code}"
+                else:
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        payload = None
+                    if isinstance(payload, dict):
+                        code = payload.get("code")
+                        ok = payload.get("ok")
+                        success = payload.get("success")
+                        if code not in (None, 0, 200, "0", "200") and ok is not True and success is not True:
+                            result["http_error"] = f"Roxy API 返回失败 code={code}: {str(payload.get('msg') or payload.get('message') or '')[:240]}"
+                            result["http_reachable"] = False
+                if result["http_error"]:
+                    result["error"] = result["http_error"]
+            except Exception as exc:
+                result["http_elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
+                result["http_reachable"] = False
+                result["http_error"] = f"{_roxy_http_error_kind(exc)}: {exc}"
+                result["error"] = result["http_error"]
+            result["reachable"] = bool(result["tcp_reachable"] and result["http_reachable"])
     except ValueError as exc:
         result["error"] = f"Roxy API 地址解析失败: {exc}"
     except OSError as exc:
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        result["error"] = f"TCP {type(exc).__name__}: {exc}"
     except Exception as exc:  # pragma: no cover - 防止探测影响主流程
         result["error"] = f"{type(exc).__name__}: {exc}"
     return result
@@ -103,18 +184,28 @@ def registration_driver_runtime_preflight(value: str | None = None, *, timeout: 
         result["details"]["runtime_checked"] = False
         return result
 
-    probe = roxy_api_runtime_check(result["details"].get("api_base"), timeout=timeout)
+    probe = roxy_api_runtime_check(result["details"].get("api_base"), timeout=timeout, probe_http=True)
+    api_reachable = bool(probe.get("reachable")) and (
+        not probe.get("http_checked") or bool(probe.get("http_reachable"))
+    )
     result["details"].update({
         "runtime_checked": True,
-        "reachable": probe.get("reachable", False),
+        "reachable": api_reachable,
         "host": probe.get("host", ""),
         "port": probe.get("port"),
         "error": probe.get("error"),
         "configured_api_base": probe.get("configured_api_base", ""),
         "api_base": probe.get("api_base", ""),
         "runtime_rewritten": bool(probe.get("runtime_rewritten")),
+        "tcp_reachable": bool(probe.get("tcp_reachable")),
+        "http_checked": bool(probe.get("http_checked")),
+        "http_reachable": probe.get("http_reachable"),
+        "http_status": probe.get("http_status"),
+        "http_elapsed_ms": probe.get("http_elapsed_ms"),
+        "http_error": probe.get("http_error"),
+        "http_probe_path": probe.get("http_probe_path"),
     })
-    if not probe.get("reachable"):
+    if not api_reachable:
         error = str(probe.get("error") or "未知连接错误")
         result["errors"].append(f"Roxy API 不可达: {error}")
         result["ok"] = False
@@ -142,7 +233,8 @@ def registration_driver_preflight(value: str | None = None) -> dict:
                 errors.append(f"代理格式错误: {exc}")
     elif driver == "roxy":
         from config import roxybrowser as cfg
-        if not _valid_url(getattr(cfg, "ROXY_API_BASE", ""), {"http", "https"}):
+        configured_base = str(getattr(cfg, "ROXY_API_BASE", "") or "")
+        if not _canonical_roxy_base(configured_base):
             errors.append("ROXY_API_BASE 不是有效 HTTP 地址")
         if not str(getattr(cfg, "ROXY_API_TOKEN", "") or "").strip():
             errors.append("ROXY_API_TOKEN 为空")
@@ -151,7 +243,8 @@ def registration_driver_preflight(value: str | None = None) -> dict:
             errors.append("创建 Roxy 环境需要 ROXY_WORKSPACE_ID")
         if importlib.util.find_spec("selenium") is None:
             errors.append("缺少 selenium 依赖")
-        details["api_base"] = str(getattr(cfg, "ROXY_API_BASE", "") or "")
+        details["configured_api_base"] = configured_base
+        details["api_base"] = _canonical_roxy_base(configured_base) or configured_base
     elif driver == "cloak":
         if importlib.util.find_spec("cloakbrowser") is None:
             errors.append("缺少 cloakbrowser 依赖")

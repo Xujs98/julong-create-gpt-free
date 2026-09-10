@@ -2,6 +2,8 @@
 import unittest
 from unittest.mock import patch
 
+import requests
+
 from config import browser_use, roxybrowser, skyvern
 from core.registration_driver_health import (
     normalize_registration_driver,
@@ -75,6 +77,58 @@ class RegistrationDriverHealthTests(unittest.TestCase):
         self.assertEqual(result["host"], "192.168.65.254")
         normalize.assert_called_once_with("http://127.0.0.1:50003")
         create_connection.assert_called_once_with(("192.168.65.254", 50003), timeout=0.8)
+
+    @patch("core.registration_driver_health.requests.get")
+    @patch("core.registration_driver_health.socket.create_connection")
+    def test_roxy_runtime_check_probes_read_only_workspace_api(self, create_connection, get):
+        create_connection.return_value.__enter__.return_value = object()
+        response = get.return_value
+        response.status_code = 200
+        response.ok = True
+        response.json.return_value = {"code": 0, "data": {"rows": []}}
+
+        result = roxy_api_runtime_check("127.0.0.1:50003", probe_http=True)
+
+        self.assertTrue(result["reachable"], result)
+        self.assertTrue(result["tcp_reachable"])
+        self.assertTrue(result["http_checked"])
+        self.assertTrue(result["http_reachable"])
+        self.assertEqual(result["http_status"], 200)
+        get.assert_called_once()
+        self.assertEqual(get.call_args.args[0], "http://127.0.0.1:50003/browser/workspace")
+
+    @patch("core.registration_driver_health.requests.get", side_effect=requests.exceptions.ReadTimeout("slow Roxy"))
+    @patch("core.registration_driver_health.socket.create_connection")
+    def test_roxy_runtime_check_distinguishes_http_read_timeout(self, create_connection, _get):
+        create_connection.return_value.__enter__.return_value = object()
+
+        result = roxy_api_runtime_check("http://127.0.0.1:50003", probe_http=True)
+
+        self.assertTrue(result["tcp_reachable"], result)
+        self.assertFalse(result["http_reachable"], result)
+        self.assertIn("HTTP read timeout", result["error"])
+
+    @patch("core.registration_driver_health.requests.get")
+    @patch("core.registration_driver_health.socket.create_connection")
+    def test_roxy_runtime_check_rejects_http_error_status(self, create_connection, get):
+        create_connection.return_value.__enter__.return_value = object()
+        get.return_value.status_code = 401
+        get.return_value.ok = False
+
+        result = roxy_api_runtime_check("http://127.0.0.1:50003", probe_http=True)
+
+        self.assertTrue(result["tcp_reachable"], result)
+        self.assertFalse(result["reachable"], result)
+        self.assertFalse(result["http_reachable"], result)
+        self.assertEqual(result["http_error"], "HTTP status 401")
+
+    def test_roxy_static_preflight_canonicalizes_bare_api_base(self):
+        with patch.object(roxybrowser, "ROXY_API_BASE", "127.0.0.1:50003"), patch.object(
+            roxybrowser, "ROXY_API_TOKEN", "key"
+        ):
+            result = registration_driver_preflight("roxy")
+        self.assertNotIn("ROXY_API_BASE 不是有效 HTTP 地址", result["errors"])
+        self.assertEqual(result["details"]["api_base"], "http://127.0.0.1:50003")
 
     @patch(
         "core.registration_driver_health.socket.create_connection",

@@ -451,7 +451,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "ROXY_API_BASE", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
-        "label": "Roxy API 地址", "help": "默认 http://127.0.0.1:50000；需在 Roxy 应用 API 配置中开启",
+        "label": "Roxy API 地址", "help": "支持 127.0.0.1:50003、http://127.0.0.1:50003、IPv6；会自动补协议、修复多余斜杠；需在 Roxy 应用 API 配置中开启",
     },
     {
         "key": "ROXY_API_TOKEN", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
@@ -1266,6 +1266,9 @@ def get_config() -> list[dict]:
 
         if field["type"] in ("str", "list_str_multiline"):
             value = _normalize_config_value(value, field["type"])
+        if key == "ROXY_API_BASE" and value:
+            from core.roxy_selenium import canonicalize_roxy_api_base
+            value = canonicalize_roxy_api_base(value) or value
         item = dict(field)
         item["storage"] = "env"
         item["value"] = value
@@ -1451,6 +1454,12 @@ def _format_env_value(value, vtype: str) -> str:
 
 def _validate_config_value(key: str, value, field: dict) -> object:
     """校验带范围约束的配置值，避免 WebUI 写入不可用的运行时配置。"""
+    if key == "ROXY_API_BASE":
+        from core.roxy_selenium import canonicalize_roxy_api_base
+        canonical = canonicalize_roxy_api_base(value)
+        if not canonical:
+            raise ValueError("ROXY_API_BASE 不是有效 HTTP 地址")
+        return canonical
     vtype = field.get("type")
     if vtype != "int":
         return value

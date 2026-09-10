@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 
+import pytest
+
 from core import roxy_selenium
 
 
@@ -48,6 +50,26 @@ def test_container_rewrites_loopback_api_base_to_host_gateway(monkeypatch):
     monkeypatch.setattr(roxy_selenium, "_resolve_host", lambda host: "192.168.65.254")
 
     assert roxy_selenium.normalize_api_base("http://127.0.0.1:50100") == "http://192.168.65.254:50100"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("127.0.0.1:50003", "http://127.0.0.1:50003"),
+        ("http://127.0.0.1:50003", "http://127.0.0.1:50003"),
+        ("http:///127.0.0.1:50003///", "http://127.0.0.1:50003"),
+        ("192.168.31.123:50003", "http://192.168.31.123:50003"),
+        ("[::1]:50003", "http://[::1]:50003"),
+        ("http://[2001:db8::1]:50003/", "http://[2001:db8::1]:50003"),
+    ],
+)
+def test_canonicalize_roxy_api_base_accepts_common_user_inputs(raw, expected):
+    assert roxy_selenium.canonicalize_roxy_api_base(raw) == expected
+
+
+def test_canonicalize_roxy_api_base_rejects_missing_host_and_bad_port():
+    assert roxy_selenium.canonicalize_roxy_api_base("http://") is None
+    assert roxy_selenium.canonicalize_roxy_api_base("http://127.0.0.1:not-a-port") is None
 
 
 def test_resolve_chromedriver_reuses_matching_returned_driver(tmp_path, monkeypatch):

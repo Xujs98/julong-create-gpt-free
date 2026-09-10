@@ -15,7 +15,13 @@ import requests
 
 from config import roxybrowser as _cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
-from core.roxy_selenium import _running_in_container, normalize_api_base, normalize_debugger_address, normalize_webdriver_url
+from core.roxy_selenium import (
+    _running_in_container,
+    canonicalize_roxy_api_base,
+    normalize_api_base,
+    normalize_debugger_address,
+    normalize_webdriver_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,11 +159,20 @@ def _random_roxy_profile_name() -> str:
 
 class RoxyBrowserClient:
     def __init__(self, api_base: str | None = None, token: str | None = None):
-        configured_api_base = (api_base or _cfg.ROXY_API_BASE).strip()
+        configured_api_base = str(api_base or _cfg.ROXY_API_BASE or "").strip()
         # A shared .env often contains the native default 127.0.0.1.  When the
         # app runs in Docker, point that loopback API at the host gateway too;
         # native runs keep the original URL unchanged.
-        self.api_base = normalize_api_base(configured_api_base) or configured_api_base
+        self.configured_api_base = configured_api_base
+        canonical_api_base = canonicalize_roxy_api_base(configured_api_base) or configured_api_base
+        self.api_base = normalize_api_base(canonical_api_base) or canonical_api_base
+        logger.info(
+            "[Roxy] API 地址：configured=%s canonical=%s effective=%s runtime_rewritten=%s",
+            self.configured_api_base,
+            canonical_api_base,
+            self.api_base,
+            self.api_base != self.configured_api_base,
+        )
         self.token = (token if token is not None else _cfg.ROXY_API_TOKEN).strip()
         # 记录本次创建环境实际写入的代理，供注册完成后的账号 GeoIP 落库使用。
         self.last_proxy_url: str | None = None
@@ -217,6 +232,21 @@ class RoxyBrowserClient:
         return max(5, value)
 
     @staticmethod
+    def _request_error_kind(exc: Exception) -> str:
+        """Classify requests failures so task logs identify the failing layer."""
+        if isinstance(exc, requests.exceptions.ConnectTimeout):
+            return "connect_timeout"
+        if isinstance(exc, requests.exceptions.ReadTimeout):
+            return "read_timeout"
+        if isinstance(exc, requests.exceptions.Timeout):
+            return "timeout"
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            return "connection_error"
+        if isinstance(exc, requests.exceptions.InvalidURL):
+            return "invalid_url"
+        return type(exc).__name__
+
+    @staticmethod
     def _docker_webdriver_available(url: str) -> bool:
         """Probe the host-side bridge before switching Docker to remote mode."""
         base = str(url or "").strip().rstrip("/")
@@ -259,6 +289,7 @@ class RoxyBrowserClient:
         # “正在创建中”状态时抢先发起第二个 create。
         with (_ROXY_CREATE_LOCK if is_create else nullcontext()):
             for attempt in range(1, max_attempts + 1):
+                started = time.monotonic()
                 try:
                     logger.debug(
                         "[Roxy] %s %s params=%s body=%s attempt=%s/%s",
@@ -292,6 +323,18 @@ class RoxyBrowserClient:
                     last_exc = exc
                     retryable = self._is_create_busy_error(exc) if is_create else self._is_retryable_error(exc)
                     if attempt >= max_attempts or not retryable:
+                        logger.error(
+                            "[Roxy] API 阶段失败：method=%s path=%s effective_api=%s "
+                            "attempt=%s/%s elapsed=%.1fs error_type=%s error=%s",
+                            method_u,
+                            path,
+                            self.api_base,
+                            attempt,
+                            max_attempts,
+                            time.monotonic() - started,
+                            self._request_error_kind(exc),
+                            str(exc)[:500],
+                        )
                         raise
                     delay = base_delay * attempt
                     logger.warning(
@@ -583,6 +626,15 @@ class RoxyBrowserClient:
         # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
         params["headless"] = bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False)) if headless is None else bool(headless)
         logger.info("[Roxy] open 参数：profile=%s headless=%s keep_open=%s", pid, params.get("headless"), getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
+        open_started = time.monotonic()
+        logger.info(
+            "[Roxy] open 开始：effective_api=%s method=%s path=%s profile=%s timeout=%ss",
+            self.api_base,
+            _cfg.ROXY_OPEN_METHOD,
+            path,
+            pid,
+            self._request_timeout(path),
+        )
         try:
             result = self.request(
                 _cfg.ROXY_OPEN_METHOD,
@@ -648,7 +700,15 @@ class RoxyBrowserClient:
                 created_by_run=created_by_run,
                 docker_bridge=use_docker_bridge,
             )
-        except Exception:
+        except Exception as exc:
+            logger.error(
+                "[Roxy] open 失败：effective_api=%s profile=%s elapsed=%.1fs error_type=%s error=%s",
+                self.api_base,
+                pid,
+                time.monotonic() - open_started,
+                self._request_error_kind(exc),
+                str(exc)[:500],
+            )
             # 创建成功但启动、响应解析或调试地址校验失败时立即强制回收临时环境，
             # 即使开启了保留现场配置，也不能留下失败任务的孤儿 Profile。
             if created_by_run:

@@ -127,3 +127,34 @@ def test_job_log_context_allows_info_when_root_logger_is_warning():
         assert root.level == logging.WARNING
     finally:
         root.setLevel(previous_level)
+
+
+def test_early_registration_failure_is_written_to_job_log(tmp_path: Path):
+    log_path = tmp_path / "job-156.log"
+    job = {
+        "id": 156,
+        "status": "pending",
+        "log_file": str(log_path),
+        "email_source": "outlook",
+        "email": None,
+    }
+    with patch.object(registration_service.db, "get_job", return_value=job), patch.object(
+        registration_service.db, "update_job"
+    ) as update_job, patch.object(
+        registration_service, "_activate_job"
+    ), patch.object(registration_service, "_deactivate_job"), patch.object(
+        registration_service, "schedule_registration_job_retention"
+    ), patch(
+        "core.registration_driver_health.require_registration_driver_ready",
+        side_effect=RuntimeError("Roxy API 地址解析失败"),
+    ), patch.object(registration_service, "_release_unconsumed_job_email"), patch.object(
+        registration_service, "_should_disable_failed_registration_email", return_value=False
+    ):
+        registration_service._run_one_job(156, str(log_path))
+
+    content = log_path.read_text(encoding="utf-8")
+    assert "[Job 156] 开始注册任务" in content
+    assert "异常阶段=driver_preflight" in content
+    assert "RuntimeError: Roxy API 地址解析失败" in content
+    assert "Traceback (most recent call last)" in content
+    assert any(call.kwargs.get("status") == "failed" for call in update_job.call_args_list)

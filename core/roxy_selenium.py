@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import logging
 import os
 import platform
@@ -14,7 +15,7 @@ import subprocess
 import threading
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlsplit, urlparse, urlunparse
 
 import requests
 
@@ -137,12 +138,78 @@ def normalize_webdriver_url(url: str | None) -> str | None:
     return urlunparse((parsed.scheme or "http", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
 
+def canonicalize_roxy_api_base(base: str | None) -> str | None:
+    """Return one valid, stable HTTP form for a user-supplied Roxy API base.
+
+    The WebUI historically accepted values such as ``127.0.0.1:50003`` and
+    ``http:///127.0.0.1:50003``.  Passing those strings directly to
+    ``urljoin`` produces an URL without a host.  Canonicalization is kept
+    separate from Docker host rewriting so every caller can report both the
+    configured and effective addresses.
+    """
+    raw = str(base or "").strip()
+    if not raw:
+        return None
+
+    # Repair an accidental extra slash after the scheme (http:///host).
+    text = re.sub(r"^(https?):/*", r"\1://", raw, flags=re.IGNORECASE)
+    has_scheme = bool(re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", text))
+    if not has_scheme:
+        # Bare IPv6 needs brackets before urlsplit can parse its port.
+        if text.startswith("["):
+            text = f"http://{text}"
+        elif text.count(":") >= 2:
+            # A bare IPv6 literal has no unambiguous port separator. Treat a
+            # valid literal as the host; callers that need a port use brackets.
+            try:
+                ipaddress.ip_address(text.split("/", 1)[0])
+            except ValueError:
+                host, separator, port = text.rpartition(":")
+                if separator and port.isdigit() and host:
+                    text = f"http://[{host}]:{port}"
+                else:
+                    text = f"http://{text.lstrip('/')}"
+            else:
+                text = "http://[" + text.lstrip("/").rstrip("/") + "]"
+        else:
+            text = f"http://{text.lstrip('/')}"
+
+    try:
+        parsed = urlsplit(text)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return None
+        # Accessing .port validates malformed values and gives callers a
+        # deterministic None instead of deferring the error to requests.
+        port = parsed.port
+    except ValueError:
+        return None
+
+    host = parsed.hostname
+    netloc = _format_host(host)
+    if parsed.username or parsed.password:
+        # API credentials are not expected, but preserve them for backwards
+        # compatibility while keeping the host canonical.
+        auth = parsed.username or ""
+        if parsed.password is not None:
+            auth += f":{parsed.password}"
+        netloc = f"{auth}@{netloc}"
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    path = parsed.path.rstrip("/")
+    return urlunparse((parsed.scheme.lower(), netloc, path, "", parsed.query, ""))
+
+
 def normalize_api_base(base: str | None) -> str | None:
-    """Make a loopback Roxy API URL reachable from Docker when needed."""
+    """Canonicalize a Roxy API URL and rewrite loopback for Docker."""
     if not base:
         return None
-    text = str(base).strip()
-    parsed = urlparse(text if "://" in text else f"http://{text}")
+    configured = str(base).strip()
+    text = canonicalize_roxy_api_base(configured)
+    if not text:
+        # Keep the original value for preflight diagnostics; requests will not
+        # be called because static validation rejects it first.
+        return configured
+    parsed = urlsplit(text)
     host = parsed.hostname or ""
     if not _running_in_container() or host.lower() not in _LOOPBACK_HOSTS:
         return text
@@ -154,9 +221,9 @@ def normalize_api_base(base: str | None) -> str | None:
     netloc = _format_host(_resolve_host(override_host))
     if port:
         netloc = f"{netloc}:{port}"
-    normalized = urlunparse((parsed.scheme or "http", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
-    if normalized != text:
-        logger.info("[Roxy] 已按运行环境重写 API 地址：%s -> %s", text, normalized)
+    normalized = urlunparse((parsed.scheme or "http", netloc, parsed.path, "", parsed.query, ""))
+    if normalized != configured:
+        logger.info("[Roxy] 已规范化/按运行环境重写 API 地址：%s -> %s", configured, normalized)
     return normalized
 
 

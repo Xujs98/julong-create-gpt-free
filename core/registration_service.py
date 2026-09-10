@@ -12,6 +12,7 @@
 import logging
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -122,16 +123,25 @@ def check_stop_requested() -> None:
         raise StopRequested(f"任务 #{job_id} 已被用户手动停止")
 
 
-def _append_job_log(job_id: int, message: str) -> None:
+def _append_job_log(
+    job_id: int,
+    message: str,
+    *,
+    level: str = "WARNING",
+    source: str = "manual-stop",
+    log_file: str | None = None,
+) -> None:
     try:
-        job = db.get_job(job_id)
-        log_file = job.get("log_file") if job else None
+        if not log_file:
+            job = db.get_job(job_id)
+            log_file = job.get("log_file") if job else None
         if not log_file:
             return
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%H:%M:%S")
         with Path(log_file).open("a", encoding="utf-8") as f:
-            f.write(f"{ts} [WARNING] [manual-stop] {message}\n")
+            for line in str(message).splitlines() or [""]:
+                f.write(f"{ts} [{level.upper()}] [{source}] {line}\n")
     except Exception:
         pass
 
@@ -620,11 +630,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     # 因为 Future 已经 submit 进线程池无法撤回，只能在真正执行前自检一下，跳过 cancelled 的。
     current = db.get_job(job_id)
     if not current:
+        _append_job_log(job_id, f"任务记录已删除，跳过执行", level="INFO", source="job", log_file=log_file)
         log_logger.info(f"[Job {job_id}] 任务记录已删除，跳过执行")
         _deactivate_job(job_id)
         schedule_registration_job_retention()
         return
     if current.get("status") == "cancelled":
+        _append_job_log(job_id, f"任务已被用户取消，跳过执行", level="INFO", source="job", log_file=log_file)
         log_logger.info(f"[Job {job_id}] 已被用户取消，跳过执行")
         _deactivate_job(job_id)
         schedule_registration_job_retention()
@@ -634,19 +646,26 @@ def _run_one_job(job_id: int, log_file: str) -> None:
 
     email: str | None = None
     result: Any = None
+    stage = "startup"
     try:
         with _JobLogContext(log_file):
             from main import run_registration
             log_logger.info(f"[Job {job_id}] 开始注册任务")
             # 配置或依赖缺失时在领取邮箱前终止，避免无效任务占用邮箱池。
+            stage = "driver_preflight"
+            log_logger.info(f"[Job {job_id}] 阶段={stage}")
             from core.registration_driver_health import require_registration_driver_ready
             require_registration_driver_ready()
             # 先确认健康出口，再领取邮箱；健康代理不足时不消耗邮箱池素材。
+            stage = "proxy_selection"
+            log_logger.info(f"[Job {job_id}] 阶段={stage}")
             excluded_proxies: set[str] = set()
             registration_proxy = _select_registration_proxy(
                 job_id, log_logger, excluded_proxies=excluded_proxies
             )
             # 每个任务使用入队时固化的来源，避免执行期间被全局配置或其它批次串改。
+            stage = "email_acquisition"
+            log_logger.info(f"[Job {job_id}] 阶段={stage}")
             email, name, birthday = _prepare_registration_args(str(current.get("email_source") or "") or None)
             db.update_job(job_id, email=email)
             check_stop_requested()
@@ -660,6 +679,14 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                         job_id, log_logger, excluded_proxies=excluded_proxies
                     )
                 try:
+                    stage = "registration"
+                    log_logger.info(
+                        "[Job %s] 阶段=%s attempt=%s/%s",
+                        job_id,
+                        stage,
+                        registration_attempt + 1,
+                        retry_limit + 1,
+                    )
                     registration_kwargs = {
                         "email": email,
                         "name": name,
@@ -780,6 +807,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     _release_unconsumed_job_email(email_to_handle, str(err))
                 log_logger.error(f"[Job {job_id}] 失败: {err}")
     except StopRequested as exc:
+        _append_job_log(job_id, f"任务停止：{exc}", level="WARNING")
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
         db.update_job(
@@ -791,6 +819,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         )
     except Exception as exc:
         err_text = f"{type(exc).__name__}: {exc}"
+        _append_job_log(
+            job_id,
+            f"异常阶段={stage} {err_text}\n{traceback.format_exc()}",
+            level="ERROR",
+            source="job-exception",
+            log_file=log_file,
+        )
         if _should_disable_failed_registration_email(err_text):
             _disable_job_email(email, err_text)
         else:
@@ -856,6 +891,13 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
                 completed_at=now_iso,
             )
     except Exception as exc:
+        _append_job_log(
+            job_id,
+            f"Codex 补跑异常：{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+            level="ERROR",
+            source="job-exception",
+            log_file=log_file,
+        )
         db.update_job(
             job_id,
             status="failed",
