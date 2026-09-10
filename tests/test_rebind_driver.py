@@ -856,3 +856,211 @@ def test_browser_settings_reopens_after_totp_returns_to_logged_in_shell():
 
     assert result["submitted_email"] == TARGET
     assert [call.args[1] for call in type_otp.call_args_list] == ["123456", "654321"]
+
+
+def test_protocol_login_accepts_legacy_password_and_totp_fields(monkeypatch):
+    calls = []
+    fake_session = FakeTransport()
+
+    monkeypatch.setattr(
+        rebind_driver,
+        "_protocol_preflight_with_fallback",
+        lambda email, proxy, log=None: (fake_session, "https://auth.example.test/authorize"),
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.follow_authorize",
+        lambda *_args, **_kwargs: "https://auth.openai.com/log-in/password",
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.verify_login_password",
+        lambda _session, password: calls.append(("password", password))
+        or {"mfa_factors": [{"id": "factor", "factor_type": "totp"}]},
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.issue_mfa_challenge",
+        lambda *_args, **_kwargs: {"mfa_request_id": "challenge"},
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.verify_mfa_code",
+        lambda _session, _factor, code: calls.append(("totp", code))
+        or {"continue_url": "https://auth.openai.com/authorize/continue"},
+    )
+    monkeypatch.setattr("core.account_export.follow_oauth_callback", lambda *_args, **_kwargs: "https://chatgpt.com/")
+    monkeypatch.setattr(
+        rebind_driver,
+        "_fetch_protocol_session",
+        lambda _session: {"user": {"email": OLD}, "accessToken": "login-token"},
+    )
+
+    session, info = rebind_driver._protocol_login_builtin(
+        {
+            "email": OLD,
+            "password": "legacy-chatgpt-password",
+            "twofa": "JBSWY3DPEHPK3PXP",
+        },
+        proxy="POOL",
+        otp_getter=lambda **_kwargs: "654321",
+        log=None,
+        hooks={},
+    )
+
+    assert session is fake_session
+    assert info["user"]["email"] == OLD
+    assert calls[0] == ("password", "legacy-chatgpt-password")
+    assert calls[1][0] == "totp"
+
+
+def test_protocol_login_falls_back_to_source_email_otp_when_password_page_is_first(monkeypatch):
+    calls = []
+    fake_session = FakeTransport()
+
+    monkeypatch.setattr(
+        rebind_driver,
+        "_protocol_preflight_with_fallback",
+        lambda email, proxy, log=None: (fake_session, "https://auth.example.test/authorize"),
+    )
+    monkeypatch.setattr(
+        "core.openai_auth.follow_authorize",
+        lambda *_args, **_kwargs: "https://auth.openai.com/email-verification",
+    )
+
+    def verify_password(_session, _password):
+        calls.append("password")
+        raise RuntimeError("auth step is email verification")
+
+    monkeypatch.setattr("core.openai_auth.verify_login_password", verify_password)
+    monkeypatch.setattr("core.openai_auth.send_email_otp", lambda *_args, **_kwargs: calls.append("send_otp"))
+    monkeypatch.setattr(
+        "core.openai_auth.validate_email_otp",
+        lambda _session, code: calls.append(("validate_otp", code))
+        or {"continue_url": "https://auth.openai.com/authorize/continue"},
+    )
+    monkeypatch.setattr("core.account_export.follow_oauth_callback", lambda *_args, **_kwargs: "https://chatgpt.com/")
+    monkeypatch.setattr(
+        rebind_driver,
+        "_fetch_protocol_session",
+        lambda _session: {"user": {"email": OLD}, "accessToken": "login-token"},
+    )
+
+    session, _info = rebind_driver._protocol_login_builtin(
+        {"email": OLD, "registration_password": "pw"},
+        proxy="POOL",
+        otp_getter=lambda **_kwargs: "123456",
+        log=None,
+        hooks={},
+    )
+
+    assert session is fake_session
+    assert calls == ["password", "send_otp", ("validate_otp", "123456")]
+
+
+def test_builtin_protocol_rebind_falls_back_to_add_email_routes(monkeypatch):
+    transport = FakeBuiltinEmailChangeSession()
+    calls = []
+
+    def request(_transport, _spec, *, method, url, payload=None):
+        calls.append((method, url, payload))
+        if url.endswith("/eligibility"):
+            raise rebind_driver.RebindHttpError(404, data={"error": "missing"})
+        if url.endswith("change_email/begin") or url.endswith("change_email/verify"):
+            raise rebind_driver.RebindHttpError(404, data={"error": "missing"})
+        if url.endswith("add_email/begin"):
+            return {"status": 200, "data": {"ok": True}}
+        return {"status": 200, "data": {"verified": True}}
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=transport,
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+    result = rebind_driver._builtin_chatgpt_protocol_action(
+        context,
+        otp_getter=lambda **_kwargs: "654321",
+        log=None,
+    )
+
+    assert result["ok"] is True
+    assert [url for _, url, _ in calls if url.endswith("/begin")] == [
+        "/backend-api/accounts/change_email/begin",
+        "/backend-api/accounts/add_email/begin",
+    ]
+    assert any(url.endswith("/add_email/verify") for _, url, _ in calls)
+
+
+def test_builtin_protocol_rebind_rejects_account_too_new(monkeypatch):
+    def request(_transport, _spec, *, method, url, payload=None):
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True}}
+        raise rebind_driver.RebindHttpError(
+            400,
+            data={"error": {"code": "email_change_account_too_new"}},
+        )
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=FakeTransport(),
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+    with pytest.raises(rebind_driver.RebindDriverError, match="注册时间过短"):
+        rebind_driver._builtin_chatgpt_protocol_action(
+            context,
+            otp_getter=lambda **_kwargs: "654321",
+            log=None,
+        )
+
+
+def test_builtin_protocol_reauth_attaches_new_session_token(monkeypatch):
+    old_session = FakeTransport()
+    new_session = FakeTransport()
+    requests = []
+    login_calls = []
+
+    def request(transport, _spec, *, method, url, payload=None):
+        requests.append((transport, method, url, dict(getattr(transport, "_rebind_session_info", {}))))
+        if url.endswith("/eligibility") and transport is old_session:
+            raise rebind_driver.RebindHttpError(401, data={"error": "reauth_required"})
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True}}
+        if url.endswith("/begin"):
+            return {"status": 200, "data": {"ok": True}}
+        return {"status": 200, "data": {"verified": True}}
+
+    def login(account, **_kwargs):
+        login_calls.append(account["email"])
+        return new_session, {"user": {"email": OLD}, "accessToken": "refreshed-token"}
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    monkeypatch.setattr(rebind_driver, "_protocol_login_builtin", login)
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=old_session,
+        proxy="POOL",
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+    old_session._rebind_session_info = dict(context.session_info)
+
+    result = rebind_driver._builtin_chatgpt_protocol_action(
+        context,
+        otp_getter=lambda **_kwargs: "654321",
+        log=None,
+    )
+
+    assert result["ok"] is True
+    assert login_calls == [OLD]
+    assert requests[0][0] is old_session
+    assert requests[1][0] is new_session
+    assert requests[1][3]["accessToken"] == "refreshed-token"

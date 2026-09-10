@@ -374,6 +374,70 @@ def _extract_email(value: Any) -> str:
     return ""
 
 
+def _account_secret(account: Mapping[str, Any], *keys: str) -> str:
+    """Read a login secret from current and legacy account field names.
+
+    Older rebind exports used ``password``/``twofa`` while the application
+    stores ChatGPT credentials as ``registration_password``/``totp_secret``.
+    Keep the compatibility mapping local to the protocol driver and avoid
+    treating an Outlook mailbox password as a ChatGPT password when the row
+    clearly carries mailbox credentials.
+    """
+    row = dict(account or {})
+    extra: dict[str, Any] = {}
+    raw_extra = row.get("extra_json")
+    if isinstance(raw_extra, Mapping):
+        extra = dict(raw_extra)
+    elif isinstance(raw_extra, str) and raw_extra.strip():
+        try:
+            parsed = json.loads(raw_extra)
+            if isinstance(parsed, Mapping):
+                extra = dict(parsed)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            extra = {}
+
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+        value = extra.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _account_login_password(account: Mapping[str, Any]) -> str:
+    password = _account_secret(
+        account,
+        "registration_password",
+        "chatgpt_password",
+        "openai_password",
+        "account_password",
+    )
+    if password:
+        return password
+    # ``password`` is a legacy ChatGPT field in imported rebind lists.  Rows
+    # that also contain Outlook client/refresh material use that field for the
+    # mailbox and must not feed it into OpenAI login.
+    if not (
+        str(account.get("email_source") or "").strip().lower() == "outlook"
+        and (account.get("client_id") or account.get("refresh_token"))
+    ):
+        return _account_secret(account, "password")
+    return ""
+
+
+def _account_totp_secret(account: Mapping[str, Any]) -> str:
+    return _account_secret(
+        account,
+        "totp_secret",
+        "twofa",
+        "totp",
+        "2FA",
+        "mfa_secret",
+    ).replace(" ", "").strip()
+
+
 def _session_info(value: Any) -> dict:
     if not isinstance(value, Mapping):
         return {}
@@ -639,7 +703,8 @@ def _protocol_login_builtin(
     import pyotp
 
     email = _email(account.get("email"), "原账号邮箱")
-    login_password = str(account.get("registration_password") or "").strip()
+    login_password = _account_login_password(account)
+    session: Any = None
     try:
         _safe_log(log, "协议登录步骤 1/7：创建全新协议会话，不复用旧 Session/Cookie")
         session, authorize_url = _protocol_preflight_with_fallback(email, proxy, log=log)
@@ -648,36 +713,89 @@ def _protocol_login_builtin(
 
         if login_password:
             _safe_log(log, "协议登录步骤 3/7：原账号保存了密码，进入邮箱和密码验证")
-            if _is_email_verification_state(final_url):
-                raise RebindDriverError("保存密码账号进入邮箱验证码页，登录状态不一致")
-            if "/log-in/password" not in final_url.lower():
+            email_otp_state = _is_email_verification_state(final_url)
+            if not email_otp_state and "/log-in/password" not in final_url.lower():
                 payload = continue_authorize_with_email(session, email)
-                if _is_email_verification_state(payload=payload):
-                    raise RebindDriverError("密码登录推进返回邮箱验证码页")
+                email_otp_state = _is_email_verification_state(payload=payload)
                 next_url = _auth_payload_value(payload, "continue_url", "external_url", "redirect_url", "url")
-                if next_url and "password" in next_url.lower():
-                    final_url = _navigate_auth_step(session, next_url, final_url)
+                if next_url:
+                    if _is_email_verification_state(next_url):
+                        email_otp_state = True
+                    elif "password" in next_url.lower():
+                        final_url = _navigate_auth_step(session, next_url, final_url)
+
+            # A few auth deployments show the email-OTP screen first even for
+            # password accounts.  The reference implementation tries the
+            # password endpoint in that same auth session before falling back
+            # to a freshly sent mailbox code; this preserves the password +
+            # TOTP fast path while keeping protocol mode usable on both flows.
             _safe_log(log, "协议登录步骤 4/7：提交账号密码")
-            auth_result = verify_login_password(session, login_password)
-            if _is_email_verification_state(payload=auth_result):
-                raise RebindDriverError("密码校验返回邮箱验证码页")
-            factor = extract_totp_factor(auth_result)
-            if factor:
-                secret = str(account.get("totp_secret") or "").replace(" ", "").strip()
-                if not secret:
-                    raise RebindDriverError("账号要求 TOTP，但未保存 TOTP secret")
-                _safe_log(log, "协议登录步骤 5/7：检测到 2FA，生成并提交动态验证码")
-                challenge = issue_mfa_challenge(session, factor)
-                challenge_id = _auth_payload_value(challenge, "mfa_request_id")
-                verify_factor = dict(factor)
-                if challenge_id:
-                    verify_factor["metadata"] = {**(factor.get("metadata") or {}), "mfa_request_id": challenge_id}
-                auth_result = verify_mfa_code(session, verify_factor, pyotp.TOTP(secret).now())
-                _safe_log(log, "协议登录步骤 5/7：2FA 验证已通过")
-            continue_url = _auth_payload_value(auth_result, "continue_url", "external_url", "redirect_url", "url", "location")
-            if not continue_url:
-                raise RebindDriverError("密码登录未返回 OAuth continue_url")
-            follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/log-in/password")
+            auth_result: dict | None = None
+            try:
+                candidate = verify_login_password(session, login_password)
+                auth_result = candidate if isinstance(candidate, Mapping) else {}
+            except Exception:
+                if not email_otp_state:
+                    raise
+                _safe_log(log, "协议登录步骤 4/7：密码页未接受当前步骤，回退原邮箱验证码登录")
+            if auth_result is not None:
+                auth_url = _auth_payload_value(
+                    auth_result,
+                    "continue_url",
+                    "external_url",
+                    "redirect_url",
+                    "url",
+                    "location",
+                )
+                candidate_email_otp_state = _is_email_verification_state(payload=auth_result) or _is_email_verification_state(auth_url)
+                # A successful password response is authoritative even when
+                # the preceding navigation briefly displayed email-OTP.
+                email_otp_state = candidate_email_otp_state
+
+            if email_otp_state:
+                _safe_log(log, "协议登录步骤 5/7：发送原邮箱验证码并完成登录")
+                otp_after_ts = time.time()
+                send_email_otp(session)
+                code = otp_getter(email=email, after_ts=otp_after_ts, target={"email": email})
+                validate_result = validate_email_otp(session, code)
+                continue_url = _auth_payload_value(
+                    validate_result,
+                    "continue_url",
+                    "external_url",
+                    "redirect_url",
+                    "url",
+                    "location",
+                )
+                if not continue_url:
+                    raise RebindDriverError("原邮箱 OTP 登录未返回 OAuth continue_url")
+                follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/email-verification")
+            else:
+                if auth_result is None:
+                    raise RebindDriverError("密码登录未返回认证结果")
+                factor = extract_totp_factor(auth_result)
+                if factor:
+                    secret = _account_totp_secret(account)
+                    if not secret:
+                        raise RebindDriverError("账号要求 TOTP，但未保存 TOTP secret")
+                    _safe_log(log, "协议登录步骤 5/7：检测到 2FA，生成并提交动态验证码")
+                    challenge = issue_mfa_challenge(session, factor)
+                    challenge_id = _auth_payload_value(challenge, "mfa_request_id")
+                    verify_factor = dict(factor)
+                    if challenge_id:
+                        verify_factor["metadata"] = {**(factor.get("metadata") or {}), "mfa_request_id": challenge_id}
+                    auth_result = verify_mfa_code(session, verify_factor, pyotp.TOTP(secret).now())
+                    _safe_log(log, "协议登录步骤 5/7：2FA 验证已通过")
+                continue_url = _auth_payload_value(
+                    auth_result,
+                    "continue_url",
+                    "external_url",
+                    "redirect_url",
+                    "url",
+                    "location",
+                )
+                if not continue_url:
+                    raise RebindDriverError("密码登录未返回 OAuth continue_url")
+                follow_oauth_callback(session, continue_url, referer="https://auth.openai.com/log-in/password")
         else:
             _safe_log(log, "协议登录步骤 3/7：账号未保存密码，切换原邮箱验证码登录")
             # Capture the boundary before sending the message so fast mailboxes
@@ -1410,7 +1528,7 @@ def _browser_ui_action(
             # expose the MFA semantics through the live DOM/body text.  Reuse
             # the liveness detector instead of relying on a snapshot alone.
             try:
-                return bool(_is_totp_page(driver, expect_totp=bool(context.account.get("totp_secret"))))
+                return bool(_is_totp_page(driver, expect_totp=bool(_account_totp_secret(context.account))))
             except Exception:
                 return False
         if any(marker in text for marker in (
@@ -1458,7 +1576,7 @@ def _browser_ui_action(
     )
     if any(str(entry.get("type") or "").lower() == "password" for entry in password_state.get("inputs") or []):
         _safe_log(log, "浏览器换绑步骤 4/8：检测到当前密码验证页")
-        password = str(context.account.get("registration_password") or context.account.get("password") or "").strip()
+        password = _account_login_password(context.account)
         if not password:
             raise RebindDriverError("邮箱变更需要当前密码，请先在账号资料中保存登录密码")
         email_state = password_state
@@ -1478,7 +1596,7 @@ def _browser_ui_action(
                 timeout=30,
             )
             if _has_totp_challenge(email_state):
-                totp_secret = str(context.account.get("totp_secret") or "").replace(" ", "").strip()
+                totp_secret = _account_totp_secret(context.account)
                 if not totp_secret:
                     raise RebindDriverError("当前密码验证要求认证器验证码，但账号没有保存 2FA secret")
                 email_state = _submit_current_password_totp(totp_secret)
@@ -1846,6 +1964,20 @@ def _response_data(response: Any) -> dict:
     return dict(data) if isinstance(data, Mapping) else {}
 
 
+def _rebind_account_too_new(data: Mapping[str, Any] | None) -> bool:
+    """Recognize the non-retryable account-age response from either API."""
+    try:
+        text = json.dumps(dict(data or {}), ensure_ascii=False).lower()
+    except Exception:
+        text = str(data or "").lower()
+    return "email_change_account_too_new" in text or "account_too_new" in text
+
+
+def _rebind_endpoint_missing(exc: RebindHttpError) -> bool:
+    """Return true only for an endpoint-shape mismatch worth trying again."""
+    return int(getattr(exc, "status", 0) or 0) in {404, 405}
+
+
 def _verified_session_snapshot(value: Mapping[str, Any], observed: str, token: str) -> dict:
     """Choose a verified snapshot that carries the same email and token."""
     candidate = _session_info(value)
@@ -1888,12 +2020,12 @@ def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url
     token = _extract_token(getattr(session, "_rebind_session_info", {}))
     if token:
         headers.setdefault("authorization", f"Bearer {token}")
-    request = getattr(session, str(method or "GET").lower(), None)
-    if not callable(request):
-        raise RebindDriverError("协议 Session 不支持 HTTP 请求")
     current_method = str(method or "GET").upper()
     current_payload = payload
     for hop in range(_MAX_REBIND_REDIRECTS + 1):
+        request = getattr(session, current_method.lower(), None)
+        if not callable(request):
+            raise RebindDriverError("协议 Session 不支持 HTTP 请求")
         try:
             kwargs: dict[str, Any] = {"headers": dict(headers), "allow_redirects": False}
             if current_method in {"GET", "HEAD"}:
@@ -1946,13 +2078,12 @@ def _builtin_chatgpt_protocol_action(
         "base_url": "https://chatgpt.com",
         "otp_attempts": _DEFAULT_OTP_ATTEMPTS,
     }
+    source_email = _email(context.account.get("email"), "原账号邮箱")
     if context.hybrid and context.driver is not None:
         # Keep the authenticated browser's network stack/proxy, but use direct
         # HTTP endpoints instead of loading Settings.  The pre-change session
         # is read only as an in-memory bearer credential and is never persisted.
         from core.account_export import _browser_device_id, _browser_session_info
-
-        source_email = _email(context.account.get("email"), "原账号邮箱")
 
         def refresh_browser_headers() -> None:
             auth_info = _browser_session_info(context.driver)
@@ -1979,16 +2110,83 @@ def _builtin_chatgpt_protocol_action(
             raise RebindDriverError("协议换绑缺少登录态")
         request = _protocol_request
         transport = context.session
+    reauth_attempted = False
+
+    def _reauthenticate_after_401() -> bool:
+        """Refresh the just-authorized transport once after a stale auth gate."""
+        nonlocal request, transport, reauth_attempted
+        if reauth_attempted:
+            return False
+        reauth_attempted = True
+        if context.hybrid and context.driver is not None:
+            from core.browser_liveness import _browser_login
+
+            _safe_log(log, "协议换绑：近期密码授权已过期，复用完整登录流程重新验证一次")
+            _browser_login(
+                context.driver,
+                context.account,
+                source_email,
+                headless=False,
+                restore_saved_session=False,
+                progress=lambda message: _safe_log(log, f"混合重认证 {message}"),
+                require_session=False,
+            )
+            refresh_browser_headers()
+            return True
+        if context.session is None:
+            return False
+        old_session = context.session
+        _safe_log(log, "协议换绑：近期密码授权已过期，重新建立纯协议登录态")
+        new_session, new_info = _protocol_login_builtin(
+            context.account,
+            proxy=context.proxy,
+            otp_getter=otp_getter,
+            log=lambda message: _safe_log(log, f"纯协议重认证 {message}"),
+            hooks={},
+        )
+        context.session = new_session
+        context.session_info = dict(new_info or {})
+        # ``_protocol_request`` reads the token from this in-memory hint.  The
+        # normal login path installs it in ``rebind_account`` before the first
+        # action; a 401 recovery replaces the transport after that point, so
+        # install the refreshed proof here as well.
+        try:
+            new_session._rebind_session_info = dict(new_info or {})
+        except Exception:
+            pass
+        context.add_closer(lambda session=new_session: _close_resource(session))
+        transport = new_session
+        request = _protocol_request
+        _close_resource(old_session)
+        return True
+
     target_email = _email(context.target.get("email"), "目标邮箱")
     _safe_log(log, "协议换绑步骤 1/4：检查当前账号邮箱换绑资格")
-    eligibility_response = request(
-        transport,
-        spec,
-        method="GET",
-        url="/backend-api/accounts/change_email/eligibility",
-    )
+    eligibility_response: dict = {}
+    try:
+        eligibility_response = request(
+            transport,
+            spec,
+            method="GET",
+            url="/backend-api/accounts/change_email/eligibility",
+        )
+    except RebindHttpError as exc:
+        # Older deployments did not expose the eligibility route.  The
+        # begin endpoint remains authoritative, so only a missing route is
+        # tolerated; auth/rate/business failures still stop the task.
+        if exc.status == 401 and _reauthenticate_after_401():
+            eligibility_response = request(
+                transport,
+                spec,
+                method="GET",
+                url="/backend-api/accounts/change_email/eligibility",
+            )
+        elif not _rebind_endpoint_missing(exc):
+            raise
+        if not eligibility_response:
+            _safe_log(log, "协议换绑步骤 1/4：资格接口不存在，改由邮箱变更接口确认")
     eligibility = eligibility_response.get("data") if isinstance(eligibility_response.get("data"), Mapping) else {}
-    if not _as_bool(eligibility.get("eligible"), False):
+    if "eligible" in eligibility and not _as_bool(eligibility.get("eligible"), False):
         raise RebindDriverError("当前账号未通过邮箱换绑资格检查")
     eligibility_type = str(eligibility.get("eligibility_type") or "").strip().lower()
     social_user = eligibility_type in {"social", "social_password"}
@@ -1996,62 +2194,79 @@ def _builtin_chatgpt_protocol_action(
     payload: dict[str, Any] = {"email": target_email}
     if social_user:
         payload["remove_social_subs"] = True
-    otp_after_ts = time.time()
     _safe_log(log, "协议换绑步骤 2/4：提交目标邮箱并发送验证码")
-    try:
-        begin = request(
-            transport,
-            spec,
-            method="POST",
-            url="/backend-api/accounts/change_email/begin",
-            payload=payload,
-        )
-    except RebindHttpError as exc:
-        if exc.status != 401 or not (context.hybrid and context.driver is not None):
-            raise
-        # The email endpoint requires pwd_auth_time within five minutes of the
-        # change request.  A long-running task can therefore outlive an
-        # otherwise valid login; repeat the existing full login flow once and
-        # immediately retry the protocol request.
-        from core.browser_liveness import _browser_login
-
-        _safe_log(log, "协议换绑：近期密码授权已过期，复用完整登录流程重新验证一次")
-        _browser_login(
-            context.driver,
-            context.account,
-            source_email,
-            headless=False,
-            restore_saved_session=False,
-            progress=lambda message: _safe_log(log, f"混合重认证 {message}"),
-            require_session=False,
-        )
-        refresh_browser_headers()
-        begin = request(
-            transport,
-            spec,
-            method="POST",
-            url="/backend-api/accounts/change_email/begin",
-            payload=payload,
-        )
+    begin: dict | None = None
+    begin_error: RebindHttpError | None = None
+    begin_routes = (
+        "/backend-api/accounts/change_email/begin",
+        "/backend-api/accounts/add_email/begin",
+    )
+    begin_bodies = [dict(payload)]
+    if not social_user:
+        begin_bodies.append({"email": target_email, "remove_social_subs": False})
+    for begin_url in begin_routes:
+        for body in begin_bodies:
+            try:
+                begin = request(transport, spec, method="POST", url=begin_url, payload=body)
+                break
+            except RebindHttpError as exc:
+                begin_error = exc
+                if _rebind_account_too_new(exc.data):
+                    raise RebindDriverError("当前账号注册时间过短，暂不允许邮箱换绑") from exc
+                if _rebind_endpoint_missing(exc):
+                    break
+                if exc.status in {400, 422}:
+                    continue
+                if exc.status == 401 and _reauthenticate_after_401():
+                    continue
+                raise
+        if begin is not None:
+            break
+    if begin is None:
+        if begin_error is not None:
+            raise begin_error
+        raise RebindDriverError("邮箱变更接口不可用")
     _safe_log(log, f"协议换绑步骤 2/4：目标邮箱已提交 HTTP {begin.get('status', 0)}")
 
     _safe_log(log, "协议换绑步骤 3/4：等待目标邮箱验证码")
+    otp_after_ts = time.time()
     verify_payload = dict(payload)
     verify_payload["code"] = "{otp}"
-    verified = _request_with_otp_retry(
-        request,
-        transport,
-        spec,
-        method="POST",
-        url="/backend-api/accounts/change_email/verify",
-        payload=verify_payload,
-        variables={"target_email": target_email, "new_email": target_email, "email": target_email},
-        requires_otp=True,
-        target=context.target,
-        otp_getter=otp_getter,
-        log=log,
-        after_ts=otp_after_ts,
-    )
+    verified: dict | None = None
+    verify_error: RebindHttpError | None = None
+    for verify_url in (
+        "/backend-api/accounts/change_email/verify",
+        "/backend-api/accounts/add_email/verify",
+    ):
+        try:
+            verified = _request_with_otp_retry(
+                request,
+                transport,
+                spec,
+                method="POST",
+                url=verify_url,
+                payload=verify_payload,
+                variables={"target_email": target_email, "new_email": target_email, "email": target_email},
+                requires_otp=True,
+                target=context.target,
+                otp_getter=otp_getter,
+                log=log,
+                after_ts=otp_after_ts,
+            )
+            break
+        except RebindHttpError as exc:
+            verify_error = exc
+            if exc.status == 401 and _reauthenticate_after_401():
+                continue
+            if _rebind_account_too_new(exc.data):
+                raise RebindDriverError("当前账号注册时间过短，暂不允许邮箱换绑") from exc
+            if _rebind_endpoint_missing(exc):
+                continue
+            raise
+    if verified is None:
+        if verify_error is not None:
+            raise verify_error
+        raise RebindDriverError("邮箱验证码验证接口不可用")
     _safe_log(log, f"协议换绑步骤 3/4：目标邮箱验证码已通过 HTTP {verified.get('status', 0)}")
     _safe_log(log, "协议换绑步骤 4/4：邮箱变更已提交，刷新最终 Session")
     data = verified.get("data") if isinstance(verified.get("data"), Mapping) else {}
