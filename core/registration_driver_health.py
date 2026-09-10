@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import socket
 import time
 from urllib.parse import urlsplit
 
 import requests
+
+
+logger = logging.getLogger(__name__)
 
 
 DRIVER_LABELS = {
@@ -95,6 +99,9 @@ def roxy_api_runtime_check(
         "http_reachable": None,
         "http_status": None,
         "http_elapsed_ms": None,
+        "http_attempts": 0,
+        "http_timeout": None,
+        "http_recovered_after_retry": False,
         "http_error": None,
         "http_probe_path": None,
         "host": "",
@@ -132,37 +139,66 @@ def roxy_api_runtime_check(
             token = str(getattr(cfg, "ROXY_API_TOKEN", "") or "").strip()
             if token:
                 headers.update({"token": token, "Authorization": f"Bearer {token}"})
-            started = time.monotonic()
+            tcp_timeout = max(0.1, float(timeout))
             try:
-                response = requests.get(
-                    endpoint,
-                    headers=headers,
-                    timeout=max(0.1, float(timeout)),
-                )
-                result["http_elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
-                result["http_status"] = int(response.status_code)
-                result["http_reachable"] = bool(response.ok)
-                if not response.ok:
-                    result["http_error"] = f"HTTP status {response.status_code}"
-                else:
-                    try:
-                        payload = response.json()
-                    except ValueError:
-                        payload = None
-                    if isinstance(payload, dict):
-                        code = payload.get("code")
-                        ok = payload.get("ok")
-                        success = payload.get("success")
-                        if code not in (None, 0, 200, "0", "200") and ok is not True and success is not True:
-                            result["http_error"] = f"Roxy API 返回失败 code={code}: {str(payload.get('msg') or payload.get('message') or '')[:240]}"
-                            result["http_reachable"] = False
-                if result["http_error"]:
+                configured_timeout = float(getattr(cfg, "ROXY_API_TIMEOUT", 30) or 30)
+            except (TypeError, ValueError):
+                configured_timeout = 30.0
+            # Roxy 的工作区接口在 Docker 桥接、首次唤醒或磁盘繁忙时经常超过
+            # 0.8 秒。TCP 仍快速失败，HTTP 则给出独立且有上限的响应窗口，
+            # 避免预检比真正的 API 客户端（默认 30 秒）更苛刻而误判离线。
+            http_timeout = max(tcp_timeout, min(5.0, max(2.0, configured_timeout)))
+            try:
+                configured_retries = int(getattr(cfg, "ROXY_API_RETRIES", 2) or 2)
+            except (TypeError, ValueError):
+                configured_retries = 2
+            max_attempts = min(2, max(1, configured_retries))
+            result["http_timeout"] = http_timeout
+            started = time.monotonic()
+            for attempt in range(1, max_attempts + 1):
+                result["http_attempts"] = attempt
+                result["http_status"] = None
+                result["http_error"] = None
+                result["error"] = None
+                retryable = False
+                try:
+                    response = requests.get(
+                        endpoint,
+                        headers=headers,
+                        timeout=(tcp_timeout, http_timeout),
+                    )
+                    result["http_status"] = int(response.status_code)
+                    result["http_reachable"] = bool(response.ok)
+                    if not response.ok:
+                        result["http_error"] = f"HTTP status {response.status_code}"
+                        retryable = response.status_code in {408, 425, 429} or response.status_code >= 500
+                    else:
+                        try:
+                            payload = response.json()
+                        except ValueError:
+                            payload = None
+                        if isinstance(payload, dict):
+                            code = payload.get("code")
+                            ok = payload.get("ok")
+                            success = payload.get("success")
+                            if code not in (None, 0, 200, "0", "200") and ok is not True and success is not True:
+                                result["http_error"] = f"Roxy API 返回失败 code={code}: {str(payload.get('msg') or payload.get('message') or '')[:240]}"
+                                result["http_reachable"] = False
+                    if result["http_error"]:
+                        result["error"] = result["http_error"]
+                except Exception as exc:
+                    result["http_reachable"] = False
+                    result["http_error"] = f"{_roxy_http_error_kind(exc)}: {exc}"
                     result["error"] = result["http_error"]
-            except Exception as exc:
-                result["http_elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
-                result["http_reachable"] = False
-                result["http_error"] = f"{_roxy_http_error_kind(exc)}: {exc}"
-                result["error"] = result["http_error"]
+                    retryable = isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+                if result["http_reachable"]:
+                    result["http_recovered_after_retry"] = attempt > 1
+                    break
+                if attempt < max_attempts and retryable:
+                    time.sleep(0.2)
+                    continue
+                break
+            result["http_elapsed_ms"] = round((time.monotonic() - started) * 1000, 1)
             result["reachable"] = bool(result["tcp_reachable"] and result["http_reachable"])
     except ValueError as exc:
         result["error"] = f"Roxy API 地址解析失败: {exc}"
@@ -202,6 +238,9 @@ def registration_driver_runtime_preflight(value: str | None = None, *, timeout: 
         "http_reachable": probe.get("http_reachable"),
         "http_status": probe.get("http_status"),
         "http_elapsed_ms": probe.get("http_elapsed_ms"),
+        "http_attempts": probe.get("http_attempts"),
+        "http_timeout": probe.get("http_timeout"),
+        "http_recovered_after_retry": bool(probe.get("http_recovered_after_retry")),
         "http_error": probe.get("http_error"),
         "http_probe_path": probe.get("http_probe_path"),
     })
@@ -209,6 +248,15 @@ def registration_driver_runtime_preflight(value: str | None = None, *, timeout: 
         error = str(probe.get("error") or "未知连接错误")
         result["errors"].append(f"Roxy API 不可达: {error}")
         result["ok"] = False
+    else:
+        logger.info(
+            "[Roxy] API 预检通过：endpoint=%s status=%s elapsed_ms=%s attempts=%s%s",
+            probe.get("api_base") or result["details"].get("api_base"),
+            probe.get("http_status"),
+            probe.get("http_elapsed_ms"),
+            probe.get("http_attempts"),
+            "（首次响应超时后重试恢复）" if probe.get("http_recovered_after_retry") else "",
+        )
     return result
 
 

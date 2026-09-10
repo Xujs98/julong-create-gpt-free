@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import requests
 
@@ -107,7 +107,31 @@ class RegistrationDriverHealthTests(unittest.TestCase):
 
         self.assertTrue(result["tcp_reachable"], result)
         self.assertFalse(result["http_reachable"], result)
+        self.assertEqual(result["http_attempts"], 2)
         self.assertIn("HTTP read timeout", result["error"])
+
+    @patch("core.registration_driver_health.time.sleep")
+    @patch("core.registration_driver_health.requests.get")
+    @patch("core.registration_driver_health.socket.create_connection")
+    def test_roxy_runtime_check_recovers_from_cold_http_probe(self, create_connection, get, sleep):
+        create_connection.return_value.__enter__.return_value = object()
+        response = Mock(status_code=200, ok=True)
+        response.json.return_value = {"code": 0, "data": {"rows": []}}
+        get.side_effect = [requests.exceptions.ReadTimeout("cold Roxy"), response]
+
+        with patch.object(roxybrowser, "ROXY_API_TIMEOUT", 30), patch.object(
+            roxybrowser, "ROXY_API_RETRIES", 3
+        ):
+            result = roxy_api_runtime_check("http://127.0.0.1:50003", probe_http=True)
+
+        self.assertTrue(result["reachable"], result)
+        self.assertEqual(result["http_attempts"], 2)
+        self.assertEqual(result["http_timeout"], 5.0)
+        self.assertTrue(result["http_recovered_after_retry"])
+        self.assertIsNone(result["error"])
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_args.kwargs["timeout"], (0.8, 5.0))
+        sleep.assert_called_once_with(0.2)
 
     @patch("core.registration_driver_health.requests.get")
     @patch("core.registration_driver_health.socket.create_connection")
