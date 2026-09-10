@@ -404,6 +404,33 @@ def test_protocol_preflight_rotates_failed_proxy_within_pool(monkeypatch):
     assert any("轮换代理池出口" in line for line in logs)
 
 
+@pytest.mark.parametrize("message", [
+    "HTTP Error 403: ",
+    "HTTP Error 429: Too Many Requests",
+    "HTTP Error 503: Service Unavailable",
+])
+def test_protocol_preflight_rotates_challenged_proxy_within_pool(monkeypatch, message):
+    calls = []
+
+    def preflight(_email, proxy, **_kwargs):
+        calls.append(proxy)
+        if proxy == "CHALLENGED":
+            raise RuntimeError(message)
+        return "live-session", "authorize-url"
+
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda _failed: ["POOL"])
+    monkeypatch.setattr("core.account_liveness._network_preflight_with_retry", preflight)
+
+    result = rebind_driver._protocol_preflight_with_fallback(
+        OLD,
+        "CHALLENGED",
+        log=None,
+    )
+
+    assert result == ("live-session", "authorize-url")
+    assert calls == ["CHALLENGED", "POOL"]
+
+
 def test_browser_submission_without_endpoint_uses_account_settings_fallback(monkeypatch):
     calls = []
 

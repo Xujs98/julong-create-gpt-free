@@ -244,6 +244,9 @@ def _browser_error_text(exc: BaseException | None) -> str:
 def _is_browser_network_error(exc: BaseException | None) -> bool:
     text = f"{type(exc).__name__} {_browser_error_text(exc)}".lower()
     return any(marker in text for marker in (
+        "http error 403", "http 403", "status 403",
+        "http error 429", "http 429", "status 429",
+        "http error 502", "http error 503", "http error 504",
         "err_socks_connection_failed", "err_proxy_connection_failed", "proxy",
         "net::err_", "connection refused", "connection reset", "timed out",
         "network is unreachable", "name_not_resolved",
