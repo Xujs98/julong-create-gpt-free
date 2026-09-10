@@ -2036,7 +2036,7 @@ def _log_rebind_http_failure(
         f"{stage}：HTTP {exc.status} "
         f"code={diagnostic.get('code') or _rebind_error_code(exc.data)} "
         f"content_type={diagnostic.get('content_type') or 'unknown'} "
-        f"edge={diagnostic.get('edge') or 'unknown'} "
+        f"api_edge={diagnostic.get('edge') or 'unknown'} "
         f"challenge={'yes' if diagnostic.get('challenge') else 'no'}",
     )
 
@@ -2076,6 +2076,7 @@ def _verified_session_snapshot(value: Mapping[str, Any], observed: str, token: s
 
 def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url: str, payload: Any = None) -> dict:
     target_url = _resolve_rebind_url(spec, url)
+    reference_shape = _as_bool(spec.get("reference_request_shape"), False)
     headers: dict[str, Any] = {}
     header_factory = getattr(session, "get_chatgpt_headers", None)
     if callable(header_factory) and str(urlparse(target_url).hostname or "").lower() in {
@@ -2090,8 +2091,26 @@ def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url
             logger.debug("协议换绑生成 ChatGPT 请求头失败", exc_info=True)
     if isinstance(spec.get("headers"), Mapping):
         headers.update(dict(spec.get("headers") or {}))
-    headers.setdefault("accept", "application/json")
-    headers.setdefault("content-type", "application/json")
+    if reference_shape:
+        headers = {
+            key: value
+            for key, value in headers.items()
+            if str(key).lower() not in {
+                "oai-session-id",
+                "priority",
+                "traceparent",
+                "tracestate",
+                "x-datadog-origin",
+                "x-datadog-parent-id",
+                "x-datadog-sampling-priority",
+                "x-datadog-trace-id",
+            }
+        }
+        headers["accept"] = "application/json"
+        headers["content-type"] = "application/json"
+    else:
+        headers.setdefault("accept", "application/json")
+        headers.setdefault("content-type", "application/json")
     headers.setdefault("origin", "https://chatgpt.com")
     headers.setdefault("referer", "https://chatgpt.com/")
     token = _extract_token(getattr(session, "_rebind_session_info", {}))
@@ -2108,13 +2127,17 @@ def _protocol_request(session: Any, spec: Mapping[str, Any], *, method: str, url
             # The live/reference email-change request bypasses the generic
             # x-openai-target-* decorator. Keep BrowserSession accounting and
             # circuit handling while matching that endpoint-specific shape.
-            if callable(getattr(session, "_attach_openai_target_headers_for_url", None)):
+            if reference_shape and callable(getattr(session, "_attach_openai_target_headers_for_url", None)):
                 kwargs["_attach_target_headers"] = False
             if current_method in {"GET", "HEAD"}:
                 if current_payload:
                     kwargs["params"] = current_payload
             else:
-                kwargs["data"] = json.dumps(current_payload or {}, ensure_ascii=False)
+                kwargs["data"] = json.dumps(
+                    current_payload or {},
+                    ensure_ascii=False,
+                    separators=(",", ":") if reference_shape else None,
+                )
             response = request(target_url, **kwargs)
         except RebindDriverError:
             raise
@@ -2163,6 +2186,7 @@ def _builtin_chatgpt_protocol_action(
     spec = {
         "base_url": "https://chatgpt.com",
         "otp_attempts": _DEFAULT_OTP_ATTEMPTS,
+        "reference_request_shape": True,
     }
     source_email = _email(context.account.get("email"), "原账号邮箱")
     if context.hybrid and context.driver is not None:
@@ -2255,7 +2279,7 @@ def _builtin_chatgpt_protocol_action(
 
         headers = dict(base_headers)
         headers["openai-sentinel-token"] = sentinel_header
-        if so_header:
+        if so_header and not _as_bool(active_spec.get("reference_request_shape"), False):
             headers["openai-sentinel-so-token"] = so_header
         proof_spec = {**dict(active_spec), "headers": headers}
         try:

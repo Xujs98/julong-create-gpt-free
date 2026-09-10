@@ -1330,7 +1330,13 @@ def test_protocol_request_omits_target_headers_and_classifies_403():
             raise AssertionError("email-change request must skip target headers")
 
         def get_chatgpt_headers(self, referer):
-            return {"referer": referer}
+            return {
+                "referer": referer,
+                "accept": "*/*",
+                "oai-session-id": "session-id",
+                "priority": "u=1, i",
+                "x-datadog-trace-id": "trace-id",
+            }
 
         def post(self, url, **kwargs):
             self.kwargs = kwargs
@@ -1346,13 +1352,19 @@ def test_protocol_request_omits_target_headers_and_classifies_403():
     with pytest.raises(rebind_driver.RebindHttpError) as captured:
         rebind_driver._protocol_request(
             session,
-            {"base_url": "https://chatgpt.com"},
+            {"base_url": "https://chatgpt.com", "reference_request_shape": True},
             method="POST",
             url="/backend-api/accounts/change_email/begin",
             payload={"email": TARGET},
         )
 
     assert session.kwargs["_attach_target_headers"] is False
+    request_headers = {str(key).lower(): value for key, value in session.kwargs["headers"].items()}
+    assert request_headers["accept"] == "application/json"
+    assert "oai-session-id" not in request_headers
+    assert "priority" not in request_headers
+    assert "x-datadog-trace-id" not in request_headers
+    assert session.kwargs["data"] == '{"email":"target@example.test"}'
     assert captured.value.diagnostic == {
         "code": "challenge_required",
         "content_type": "text/html",
@@ -1360,6 +1372,36 @@ def test_protocol_request_omits_target_headers_and_classifies_403():
         "challenge": True,
     }
     assert TARGET not in str(captured.value)
+
+
+def test_configured_protocol_request_keeps_standard_target_header_decorator():
+    class StandardSession(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self._rebind_session_info = {}
+            self.kwargs = {}
+
+        def _attach_openai_target_headers_for_url(self, url, headers):
+            return headers
+
+        def get_chatgpt_headers(self, referer):
+            return {"referer": referer}
+
+        def post(self, url, **kwargs):
+            self.kwargs = kwargs
+            return FakeResponse(200, {"ok": True}, url)
+
+    session = StandardSession()
+    result = rebind_driver._protocol_request(
+        session,
+        {"base_url": "https://chatgpt.com"},
+        method="POST",
+        url="/custom/change",
+        payload={"email": TARGET},
+    )
+
+    assert result["status"] == 200
+    assert "_attach_target_headers" not in session.kwargs
 
 
 def test_builtin_protocol_rebind_rejects_account_too_new(monkeypatch):
