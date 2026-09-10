@@ -1068,6 +1068,100 @@ def test_builtin_protocol_rebind_falls_back_to_add_email_routes(monkeypatch):
     assert any(url.endswith("/add_email/verify") for _, url, _ in calls)
 
 
+def test_builtin_protocol_rebind_retries_target_email_send_with_sentinel(monkeypatch):
+    transport = FakeBuiltinEmailChangeSession()
+    transport.blocked_until = 0.0
+    transport.blocked_reason = ""
+    requests = []
+    otp_emails = []
+
+    def request(_transport, spec, *, method, url, payload=None):
+        has_sentinel = bool((spec.get("headers") or {}).get("openai-sentinel-token"))
+        requests.append((method, url, dict(payload or {}), has_sentinel))
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True, "eligibility_type": "password"}}
+        if url.endswith("/begin") and not has_sentinel:
+            transport.blocked_until = 9999999999.0
+            transport.blocked_reason = "HTTP 403"
+            raise rebind_driver.RebindHttpError(403, data={"error": {"code": "challenge_required"}})
+        return {"status": 200, "data": {"ok": True}}
+
+    def sentinel(active_transport, _flow):
+        assert active_transport.blocked_until == 0.0
+        assert active_transport.blocked_reason == ""
+        return {"token": "challenge"}
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    monkeypatch.setattr("core.openai_auth.request_sentinel_token", sentinel)
+    monkeypatch.setattr(
+        "core.openai_auth.build_sentinel_header",
+        lambda *_args: ("sentinel-proof", "sentinel-so-proof"),
+    )
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=transport,
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+
+    result = rebind_driver._builtin_chatgpt_protocol_action(
+        context,
+        otp_getter=lambda email, **_kwargs: otp_emails.append(email) or "654321",
+        log=None,
+    )
+
+    begin_requests = [item for item in requests if item[1].endswith("/begin")]
+    assert result["ok"] is True
+    assert len(begin_requests) == 2
+    assert begin_requests[0][2] == begin_requests[1][2] == {"email": TARGET}
+    assert [item[3] for item in begin_requests] == [False, True]
+    assert otp_emails == [TARGET]
+
+
+def test_builtin_protocol_rebind_retries_target_code_without_fetching_a_new_code(monkeypatch):
+    transport = FakeBuiltinEmailChangeSession()
+    requests = []
+    otp_emails = []
+
+    def request(_transport, spec, *, method, url, payload=None):
+        has_sentinel = bool((spec.get("headers") or {}).get("openai-sentinel-token"))
+        requests.append((method, url, dict(payload or {}), has_sentinel))
+        if url.endswith("/eligibility"):
+            return {"status": 200, "data": {"eligible": True, "eligibility_type": "password"}}
+        if url.endswith("/verify") and not has_sentinel:
+            raise rebind_driver.RebindHttpError(403, data={"error": {"code": "challenge_required"}})
+        return {"status": 200, "data": {"ok": True}}
+
+    monkeypatch.setattr(rebind_driver, "_protocol_request", request)
+    monkeypatch.setattr("core.openai_auth.request_sentinel_token", lambda *_args: {"token": "challenge"})
+    monkeypatch.setattr("core.openai_auth.build_sentinel_header", lambda *_args: ("sentinel-proof", None))
+    context = rebind_driver.RebindContext(
+        account=_account(),
+        target=_target(),
+        login_driver="protocol",
+        action_driver="protocol",
+        hybrid=False,
+        session=transport,
+        session_info={"user": {"email": OLD}, "accessToken": "old-token"},
+    )
+
+    result = rebind_driver._builtin_chatgpt_protocol_action(
+        context,
+        otp_getter=lambda email, **_kwargs: otp_emails.append(email) or "654321",
+        log=None,
+    )
+
+    verify_requests = [item for item in requests if item[1].endswith("/verify")]
+    assert result["ok"] is True
+    assert len(verify_requests) == 2
+    assert verify_requests[0][2] == verify_requests[1][2] == {"email": TARGET, "code": "654321"}
+    assert [item[3] for item in verify_requests] == [False, True]
+    assert otp_emails == [TARGET]
+
+
 def test_builtin_protocol_rebind_rejects_account_too_new(monkeypatch):
     def request(_transport, _spec, *, method, url, payload=None):
         if url.endswith("/eligibility"):

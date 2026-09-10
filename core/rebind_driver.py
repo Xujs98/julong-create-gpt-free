@@ -2121,6 +2121,63 @@ def _builtin_chatgpt_protocol_action(
         transport = context.session
     reauth_attempted = False
 
+    def request_with_challenge_retry(
+        active_transport: Any,
+        active_spec: Mapping[str, Any],
+        *,
+        method: str,
+        url: str,
+        payload: Any = None,
+    ) -> dict:
+        """Retry one protocol email-change request with fresh Sentinel proof."""
+        try:
+            return request(
+                active_transport,
+                active_spec,
+                method=method,
+                url=url,
+                payload=payload,
+            )
+        except RebindHttpError as exc:
+            if exc.status != 403 or request is not _protocol_request:
+                raise
+
+        _safe_log(log, "协议换绑请求首次返回 HTTP 403，补齐同会话 Sentinel 证明后重试")
+        # BrowserSession opens a circuit after any 403. This single controlled
+        # retry first obtains a fresh proof in the same authenticated session.
+        if hasattr(active_transport, "blocked_until"):
+            active_transport.blocked_until = 0.0
+        if hasattr(active_transport, "blocked_reason"):
+            active_transport.blocked_reason = ""
+        try:
+            from core.openai_auth import build_sentinel_header, request_sentinel_token
+
+            challenge = request_sentinel_token(active_transport, "authorize_continue")
+            sentinel_header, so_header = build_sentinel_header(
+                active_transport,
+                challenge,
+                "authorize_continue",
+            )
+        except Exception as exc:
+            detail = _browser_error_text(exc) or type(exc).__name__
+            raise RebindDriverError(f"目标邮箱换绑 Sentinel 证明生成失败：{detail}") from exc
+
+        headers = dict(active_spec.get("headers") or {})
+        headers["openai-sentinel-token"] = sentinel_header
+        if so_header:
+            headers["openai-sentinel-so-token"] = so_header
+        else:
+            headers.pop("openai-sentinel-so-token", None)
+        if isinstance(active_spec, dict):
+            active_spec["headers"] = headers
+        return request(
+            active_transport,
+            active_spec,
+            method=method,
+            url=url,
+            payload=payload,
+        )
+
     def _reauthenticate_after_401() -> bool:
         """Refresh the just-authorized transport once after a stale auth gate."""
         nonlocal request, transport, reauth_attempted
@@ -2173,7 +2230,7 @@ def _builtin_chatgpt_protocol_action(
     _safe_log(log, "协议换绑步骤 1/4：检查当前账号邮箱换绑资格")
     eligibility_response: dict = {}
     try:
-        eligibility_response = request(
+        eligibility_response = request_with_challenge_retry(
             transport,
             spec,
             method="GET",
@@ -2184,7 +2241,7 @@ def _builtin_chatgpt_protocol_action(
         # begin endpoint remains authoritative, so only a missing route is
         # tolerated; auth/rate/business failures still stop the task.
         if exc.status == 401 and _reauthenticate_after_401():
-            eligibility_response = request(
+            eligibility_response = request_with_challenge_retry(
                 transport,
                 spec,
                 method="GET",
@@ -2216,7 +2273,13 @@ def _builtin_chatgpt_protocol_action(
     for begin_url in begin_routes:
         for body in begin_bodies:
             try:
-                begin = request(transport, spec, method="POST", url=begin_url, payload=body)
+                begin = request_with_challenge_retry(
+                    transport,
+                    spec,
+                    method="POST",
+                    url=begin_url,
+                    payload=body,
+                )
                 break
             except RebindHttpError as exc:
                 begin_error = exc
@@ -2249,7 +2312,7 @@ def _builtin_chatgpt_protocol_action(
     ):
         try:
             verified = _request_with_otp_retry(
-                request,
+                request_with_challenge_retry,
                 transport,
                 spec,
                 method="POST",
@@ -2880,6 +2943,8 @@ def rebind_account(
     finally:
         if completed:
             _safe_log(log, "资源清理：换绑流程已结束，关闭本次协议会话和指纹浏览器环境")
+        elif context.driver is None:
+            _safe_log(log, "资源清理：换绑失败，强制关闭本次协议会话")
         else:
             _safe_log(log, "资源清理：换绑失败，强制关闭并删除本次临时指纹浏览器环境")
         context.close(failed=not completed)
