@@ -6369,3 +6369,239 @@ def delete_domain_email(email: str) -> bool:
             return False
         _save_domain_pool(new_rows)
         return True
+
+
+# ============================================================
+# Portable account transfer
+# ============================================================
+
+_ACCOUNT_TRANSFER_POOL_SOURCES = (
+    "outlook",
+    "generic_api",
+    "icloud",
+    "cloudflare_domain",
+)
+
+
+def _account_transfer_pool_state() -> dict[str, list[dict]]:
+    return {
+        "outlook": _load_outlook(),
+        "generic_api": _load_generic_api_emails(),
+        "icloud": _load_icloud_emails(),
+        "cloudflare_domain": _load_domain_pool(),
+    }
+
+
+def _account_transfer_source(value: Any) -> str:
+    source = str(value or "").strip().lower()
+    aliases = {
+        "generic": "generic_api",
+        "api": "generic_api",
+        "domain": "cloudflare_domain",
+        "cloudflare": "cloudflare_domain",
+    }
+    return aliases.get(source, source)
+
+
+def export_account_transfer_bundles(account_ids: list[int] | None) -> tuple[list[dict], list[dict]]:
+    """Return raw account and associated pool records for a portable export."""
+    ordered_ids: list[int] = []
+    skipped: list[dict] = []
+    seen: set[int] = set()
+    for raw in account_ids or []:
+        try:
+            account_id = int(raw)
+        except (TypeError, ValueError):
+            skipped.append({"id": raw, "reason": "ID 非法"})
+            continue
+        if account_id not in seen:
+            ordered_ids.append(account_id)
+            seen.add(account_id)
+
+    with _LOCK:
+        accounts = {int(row.get("id") or 0): row for row in _load_accounts()}
+        pool_state = _account_transfer_pool_state()
+        bundles: list[dict] = []
+        for account_id in ordered_ids:
+            account = accounts.get(account_id)
+            if account is None:
+                skipped.append({"id": account_id, "reason": "账号不存在"})
+                continue
+            email_key = str(account.get("email") or "").strip().casefold()
+            preferred = _account_transfer_source(account.get("email_source"))
+            source_order = [preferred] if preferred in pool_state else []
+            source_order.extend(source for source in _ACCOUNT_TRANSFER_POOL_SOURCES if source not in source_order)
+            pool_entry = None
+            for source in source_order:
+                match = next((
+                    row for row in pool_state[source]
+                    if str(row.get("email") or "").strip().casefold() == email_key
+                ), None)
+                if match is not None:
+                    pool_entry = {"source": source, "record": dict(match)}
+                    break
+            bundles.append({
+                "transfer_id": f"account-{len(bundles) + 1}",
+                "account": dict(account),
+                "email_pool": pool_entry,
+            })
+        return bundles, skipped
+
+
+def _next_transfer_pool_id(rows: list[dict], requested: Any) -> int:
+    used_ids = {int(row.get("id") or 0) for row in rows}
+    try:
+        candidate = int(requested or 0)
+    except (TypeError, ValueError):
+        candidate = 0
+    return candidate if candidate > 0 and candidate not in used_ids else _next_id(rows)
+
+
+def _save_account_transfer_state(accounts: list[dict], pool_state: dict[str, list[dict]]) -> None:
+    """Persist account-transfer collections atomically when SQLite is authoritative."""
+    for row in accounts:
+        row["copy_line"] = _account_line(row)
+    for row in pool_state["generic_api"]:
+        row["copy_line"] = _generic_api_email_line(row)
+    for row in pool_state["icloud"]:
+        row["copy_line"] = _icloud_email_line(row)
+    for row in pool_state["cloudflare_domain"]:
+        row["copy_line"] = _domain_email_line(row)
+    sqlite_mode = all((
+        _uses_sqlite(_ACCOUNTS_JSON, _DEFAULT_ACCOUNTS_JSON),
+        _uses_sqlite(_OUTLOOK_JSON, _DEFAULT_OUTLOOK_JSON),
+        _uses_sqlite(_GENERIC_API_EMAIL_JSON, _DEFAULT_GENERIC_API_EMAIL_JSON),
+        _uses_sqlite(_ICLOUD_EMAIL_JSON, _DEFAULT_ICLOUD_EMAIL_JSON),
+        _uses_sqlite(_DOMAIN_EMAIL_JSON, _DEFAULT_DOMAIN_EMAIL_JSON),
+    ))
+    if sqlite_mode:
+        _invalidate_account_rows_cache()
+        _sqlite_store().replace_all({
+            "registered_accounts": accounts,
+            "outlook_pool": pool_state["outlook"],
+            "generic_api_email_pool": pool_state["generic_api"],
+            "icloud_email_pool": pool_state["icloud"],
+            "domain_email_pool": pool_state["cloudflare_domain"],
+        })
+        _cache_account_rows(accounts)
+        try:
+            _write_json(_ACCOUNTS_JSON, accounts)
+            _write_json(_OUTLOOK_JSON, pool_state["outlook"])
+            _write_json(_GENERIC_API_EMAIL_JSON, pool_state["generic_api"])
+            _write_json(_ICLOUD_EMAIL_JSON, pool_state["icloud"])
+            _write_json(_DOMAIN_EMAIL_JSON, pool_state["cloudflare_domain"])
+            _sync_accounts_txt(accounts)
+            _sync_tokens_txt(accounts)
+            _sync_outlook_txt(pool_state["outlook"])
+            _sync_generic_api_email_txt(pool_state["generic_api"])
+            _sync_icloud_email_txt(pool_state["icloud"])
+            _schedule_static_viewer_refresh()
+        except Exception as exc:
+            # SQLite already committed the authoritative transaction. Mirror
+            # refresh failure must not roll back attachment files referenced by it.
+            logger.warning("账号迁移已写入 SQLite，但兼容镜像刷新失败: %s: %s", type(exc).__name__, str(exc)[:180])
+        return
+    _save_accounts(accounts)
+    _save_outlook(pool_state["outlook"])
+    _save_generic_api_emails(pool_state["generic_api"])
+    _save_icloud_emails(pool_state["icloud"])
+    _save_domain_pool(pool_state["cloudflare_domain"])
+
+
+def import_account_transfer_bundles(
+    bundles: list[dict],
+    group_id: int,
+    *,
+    attachment_paths: dict[str, dict[str, str]] | None = None,
+) -> dict:
+    """Import validated bundles into one existing group without replacing accounts."""
+    attachment_paths = attachment_paths or {}
+    with _LOCK:
+        accounts = _ensure_account_group_storage()
+        groups = _load_group_rows()
+        group = _find_group(groups, group_id=int(group_id))
+        if group is None:
+            raise ValueError("目标分组不存在")
+        target_group = str(group.get("name") or DEFAULT_ACCOUNT_GROUP).strip() or DEFAULT_ACCOUNT_GROUP
+        existing_emails = {
+            str(row.get("email") or "").strip().casefold()
+            for row in accounts
+            if str(row.get("email") or "").strip()
+        }
+        pool_state = _account_transfer_pool_state()
+        next_account_id = _next_id(accounts)
+        imported: list[dict] = []
+        skipped: list[dict] = []
+
+        for bundle in bundles:
+            transfer_id = str(bundle.get("transfer_id") or "").strip()
+            raw_account = bundle.get("account")
+            if not transfer_id or not isinstance(raw_account, dict):
+                skipped.append({"transfer_id": transfer_id, "reason": "账号记录格式错误"})
+                continue
+            email = str(raw_account.get("email") or "").strip()
+            email_key = email.casefold()
+            if not email_key:
+                skipped.append({"transfer_id": transfer_id, "reason": "账号邮箱为空"})
+                continue
+            if email_key in existing_emails:
+                skipped.append({"transfer_id": transfer_id, "email": email, "reason": "同邮箱账号已存在"})
+                continue
+
+            account = dict(raw_account)
+            account["id"] = next_account_id
+            account["group_name"] = target_group
+            for field, path in (attachment_paths.get(transfer_id) or {}).items():
+                if field in {"codex_agent_auth_path", "codex_agent_sub2api_path"} and path:
+                    account[field] = path
+            accounts.append(account)
+            existing_emails.add(email_key)
+
+            pool_entry = bundle.get("email_pool")
+            if isinstance(pool_entry, dict):
+                source = _account_transfer_source(pool_entry.get("source"))
+                record = pool_entry.get("record")
+                if source in pool_state and isinstance(record, dict):
+                    pool_email = str(record.get("email") or "").strip()
+                    if pool_email.casefold() == email_key:
+                        rows = pool_state[source]
+                        existing_index = next((
+                            index for index, row in enumerate(rows)
+                            if str(row.get("email") or "").strip().casefold() == email_key
+                        ), None)
+                        restored = dict(record)
+                        restored["registered_account_id"] = next_account_id
+                        if existing_index is None:
+                            restored["id"] = _next_transfer_pool_id(rows, restored.get("id"))
+                            rows.append(restored)
+                        else:
+                            restored["id"] = rows[existing_index].get("id") or _next_transfer_pool_id(rows, restored.get("id"))
+                            rows[existing_index] = restored
+
+            imported.append({
+                "transfer_id": transfer_id,
+                "id": next_account_id,
+                "email": email,
+                "group_name": target_group,
+            })
+            next_account_id += 1
+
+        if imported:
+            _save_account_transfer_state(accounts, pool_state)
+        return {
+            "imported": imported,
+            "imported_count": len(imported),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "group_id": int(group_id),
+            "group_name": target_group,
+        }
+
+
+def account_transfer_attachment_dirs() -> dict[str, Path]:
+    """Return destination directories used by portable account attachments."""
+    return {
+        "codex_credential": _CODEX_DIR,
+        "codex_agent_auth": _PROJECT_ROOT / "codex_agent_accounts",
+        "codex_agent_sub2api": _PROJECT_ROOT / "codex_agent_accounts",
+    }

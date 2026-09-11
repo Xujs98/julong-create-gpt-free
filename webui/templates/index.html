@@ -1705,6 +1705,12 @@
     .accounts-filter-v2 .el-input-number__decrease svg {
       width: 11px; height: 11px;
     }
+    .accounts-filter-v2 .account-transfer-actions-v2 { margin-left: auto; flex-wrap: nowrap; }
+    .account-transfer-actions-v2 .jobs-tb-btn { gap: 6px; }
+    .account-transfer-actions-v2 .jobs-tb-btn svg {
+      width: 15px; height: 15px; fill: none; stroke: currentColor;
+      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+    }
     #accountsToolbarV2 { padding-top: 12px; }
 
     /* ---- Codex 授权 ---- */
@@ -2366,6 +2372,68 @@
     .account-export-foot button:hover { border-color: #b8c2d1; background: #f5f7fa; }
     .account-export-foot button.primary { border-color: #377dff; background: #377dff; color: #fff; }
     .account-export-foot button.primary:hover { border-color: #2869df; background: #2869df; }
+    /* ---- 完整账号 ZIP 导入 ---- */
+    #accountTransferImportModal:not(.hidden) {
+      position: fixed; inset: 0; z-index: 1200;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px; box-sizing: border-box; background: rgba(15, 23, 42, .45);
+    }
+    .account-transfer-dialog {
+      width: 520px; max-height: calc(100vh - 48px); display: flex; flex-direction: column;
+      background: #fff; border: 1px solid #ebeef5; border-radius: 8px;
+      box-shadow: 0 24px 70px rgba(15,23,42,.28); overflow: hidden;
+    }
+    .account-transfer-head {
+      display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px;
+      border-bottom: 1px solid #ebeef5;
+    }
+    .account-transfer-head-main { min-width: 0; flex: 1; }
+    .account-transfer-head h3 { margin: 0; color: #303133; font-size: 18px; line-height: 1.3; }
+    .account-transfer-head p { margin: 7px 0 0; color: #909399; font-size: 12px; line-height: 1.5; }
+    .account-transfer-close {
+      width: 30px; height: 30px; flex: 0 0 30px; padding: 0; border: 0; border-radius: 6px;
+      background: transparent; color: #909399; font-size: 20px; line-height: 1; cursor: pointer;
+    }
+    .account-transfer-close:hover { color: #606266; background: #f5f7fa; }
+    .account-transfer-body { padding: 18px 20px; overflow: auto; display: grid; gap: 16px; }
+    .account-transfer-dropzone {
+      min-height: 152px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 8px; border: 1px dashed #b8c2d1;
+      border-radius: 8px; background: #fafbfc; color: #606266; text-align: center; cursor: pointer;
+      transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+    }
+    .account-transfer-dropzone:hover, .account-transfer-dropzone.is-dragover {
+      border-color: #377DFF; background: #f3f7ff; box-shadow: 0 0 0 3px rgba(55,125,255,.08);
+    }
+    .account-transfer-dropzone svg {
+      width: 34px; height: 34px; fill: none; stroke: #377DFF; stroke-width: 1.6;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+    .account-transfer-dropzone strong { font-size: 14px; color: #303133; }
+    .account-transfer-dropzone span { font-size: 12px; color: #909399; }
+    .account-transfer-file { font-size: 12px; color: #377DFF; overflow-wrap: anywhere; }
+    .account-transfer-field { display: grid; gap: 7px; color: #606266; font-size: 13px; font-weight: 600; }
+    .account-transfer-field select {
+      width: 100%; height: 38px; padding: 0 10px; box-sizing: border-box; border: 1px solid #dcdfe6;
+      border-radius: 6px; background: #fff; color: #606266; font: inherit; font-size: 13px;
+    }
+    .account-transfer-field select:focus { outline: none; border-color: #377DFF; box-shadow: 0 0 0 3px rgba(55,125,255,.12); }
+    .account-transfer-result { padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.5; }
+    .account-transfer-result:empty { display: none; }
+    .account-transfer-result.is-error { color: #b42318; background: #fff2f0; border: 1px solid #ffccc7; }
+    .account-transfer-result.is-success { color: #176b50; background: #edf9f4; border: 1px solid #b7e5d3; }
+    .account-transfer-foot {
+      display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px 18px;
+      border-top: 1px solid #ebeef5; background: #fafbfc;
+    }
+    .account-transfer-foot button {
+      min-height: 38px; padding: 0 18px; border: 1px solid #dcdfe6; border-radius: 6px;
+      background: #fff; color: #606266; font: inherit; font-size: 14px; cursor: pointer;
+    }
+    .account-transfer-foot button:hover:not(:disabled) { color: #409eff; border-color: #c6e2ff; background: #ecf5ff; }
+    .account-transfer-foot button.primary { color: #fff; background: #377DFF; border-color: #377DFF; }
+    .account-transfer-foot button.primary:hover:not(:disabled) { color: #fff; background: #5a94ff; border-color: #5a94ff; }
+    .account-transfer-foot button:disabled { opacity: .6; cursor: not-allowed; }
     /* ---- 账号换绑弹窗 ---- */
     #accountRebindModal:not(.hidden) {
       position: fixed; inset: 0; z-index: 1200;
@@ -3855,6 +3923,14 @@ try {
           </div>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteDeadAccountsV2" title="删除全部已标记为废号的本地账号/token记录">清理全部废号</button>
         </div>
+        <div class="acc-v2-btn-group account-transfer-actions-v2" aria-label="完整账号迁移">
+          <button type="button" class="jobs-tb-btn" id="btnImportAccountsZipV2" title="从其他部署导出的完整账号 ZIP 导入">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span>导入</span>
+          </button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExportAccountsZipV2" disabled title="将选中账号的完整信息导出为 ZIP">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg><span>导出</span>
+          </button>
+        </div>
       </div>
       <div class="jobs-toolbar-v2" id="accountsToolbarV2">
         <div class="acc-v2-btn-group">
@@ -4257,6 +4333,34 @@ try {
     </div>
   </div>
 </div>
+<div id="accountTransferImportModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="accountTransferImportTitle">
+  <div class="account-transfer-dialog" role="document">
+    <div class="account-transfer-head">
+      <div class="account-transfer-head-main">
+        <h3 id="accountTransferImportTitle">导入完整账号</h3>
+        <p>导入本项目导出的 ZIP，账号、邮箱池关联及本地凭据会一起恢复到所选分组。</p>
+      </div>
+      <button type="button" class="account-transfer-close" id="btnCloseAccountTransferImport" aria-label="关闭">×</button>
+    </div>
+    <div class="account-transfer-body">
+      <input id="accountTransferZipInput" class="hidden" type="file" accept=".zip,application/zip" aria-label="选择账号 ZIP">
+      <div class="account-transfer-dropzone" id="accountTransferDropzone" role="button" tabindex="0" aria-controls="accountTransferZipInput">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>
+        <strong>拖拽 ZIP 到这里，或点击选择</strong>
+        <span>仅支持本项目导出的完整账号迁移包</span>
+        <div class="account-transfer-file" id="accountTransferFileName">尚未选择文件</div>
+      </div>
+      <label class="account-transfer-field">导入到分组
+        <select id="accountTransferGroupSelect" data-searchable="true" data-search-placeholder="搜索账号分组" aria-label="导入目标账号分组"></select>
+      </label>
+      <div class="account-transfer-result" id="accountTransferImportResult" role="status" aria-live="polite"></div>
+    </div>
+    <div class="account-transfer-foot">
+      <button type="button" id="btnCancelAccountTransferImport">取消</button>
+      <button type="button" class="primary" id="btnConfirmAccountTransferImport" disabled>导入</button>
+    </div>
+  </div>
+</div>
 <div id="accountRebindModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="accountRebindTitle">
   <div class="account-rebind-dialog" role="document">
     <div class="account-rebind-head">
@@ -4633,6 +4737,7 @@ let ACCOUNT_STATUS_FILTER = '';
 let ACCOUNT_GROUP_FILTER = [];
 let ACCOUNT_GROUPS = [];
 let ACCOUNT_GROUP_MODAL_MODE = 'view';
+let ACCOUNT_TRANSFER_FILE = null;
 let REBIND_POOL_SUMMARY = {};
 let REBIND_ACCOUNT_IDS = [];
 let REBIND_MODE_INFO = {driver: '', login_driver: '', action_driver: '', hybrid: false, headless: false};
@@ -5369,6 +5474,7 @@ function updateModalScrollLock() {
     || !$('#accountsFilterModal').classList.contains('hidden')
     || !$('#accountGroupsModal').classList.contains('hidden')
     || !$('#accountExportModal').classList.contains('hidden')
+    || !$('#accountTransferImportModal').classList.contains('hidden')
     || !$('#accountRebindModal').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
@@ -7040,6 +7146,7 @@ function updateAccountSelectionUi(pageRows = null) {
     'btnNoteSelectedAccountsV2', 'btnInjectSelectedSessionsV2',
     'btnCopySelectedTokensV2', 'btnCopySelectedLinesV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
+    'btnExportAccountsZipV2',
     'btnRebindSelectedAccountsV2',
   ];
   v2Ids.forEach(id => {
@@ -8088,6 +8195,186 @@ async function downloadSelectedAccountTxt() {
   });
 }
 
+function accountTransferDisplaySize(size) {
+  const bytes = Math.max(0, Number(size || 0));
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function accountTransferDownloadName(disposition) {
+  const utf8 = String(disposition || '').match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8) {
+    try { return decodeURIComponent(utf8[1]); } catch (_) {}
+  }
+  const plain = String(disposition || '').match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : 'accounts-complete.zip';
+}
+
+async function exportSelectedAccountsZip() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  const button = $('#btnExportAccountsZipV2');
+  const oldHtml = button?.innerHTML || '';
+  if (button) { button.disabled = true; button.textContent = '打包中…'; }
+  try {
+    const response = await fetch('/api/accounts/transfer/export', {
+      method: 'POST',
+      headers: {'Accept': 'application/zip, application/json', 'Content-Type': 'application/json'},
+      body: JSON.stringify({account_ids: ids}),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = accountTransferDownloadName(response.headers.get('Content-Disposition'));
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => { URL.revokeObjectURL(url); link.remove(); }, 1000);
+    showToast(`已导出 ${ids.length} 个完整账号`);
+  } catch (error) {
+    showToast('完整账号导出失败: ' + error.message);
+  } finally {
+    if (button) { button.innerHTML = oldHtml; button.disabled = ACCOUNT_SELECTED.size === 0; }
+  }
+}
+
+function populateAccountTransferGroups() {
+  const select = $('#accountTransferGroupSelect');
+  if (!select) return;
+  const previous = String(select.value || '');
+  const groups = (ACCOUNT_GROUPS || []).filter(group => !group.is_all);
+  const options = groups.map(group => {
+    const option = document.createElement('option');
+    option.value = String(group.id);
+    option.textContent = `${group.name} (${Number(group.count || 0)})`;
+    return option;
+  });
+  select.replaceChildren(...options);
+  const selected = groups.find(group => String(group.id) === previous)
+    || groups.find(group => group.is_default)
+    || groups[0];
+  select.value = selected ? String(selected.id) : '';
+  syncCommercialSelectV3(select);
+}
+
+function setAccountTransferFile(file) {
+  const result = $('#accountTransferImportResult');
+  const name = $('#accountTransferFileName');
+  const confirm = $('#btnConfirmAccountTransferImport');
+  if (result) { result.textContent = ''; result.className = 'account-transfer-result'; }
+  if (!file) {
+    ACCOUNT_TRANSFER_FILE = null;
+    if (name) name.textContent = '尚未选择文件';
+    if (confirm) confirm.disabled = true;
+    return;
+  }
+  const zipLike = String(file.name || '').toLowerCase().endsWith('.zip')
+    || ['application/zip', 'application/x-zip-compressed'].includes(String(file.type || '').toLowerCase());
+  if (!zipLike) {
+    setAccountTransferFile(null);
+    if (result) { result.textContent = '请选择 ZIP 格式的账号迁移包'; result.classList.add('is-error'); }
+    return;
+  }
+  if (Number(file.size || 0) > 50 * 1024 * 1024) {
+    setAccountTransferFile(null);
+    if (result) { result.textContent = 'ZIP 文件超过 50 MB'; result.classList.add('is-error'); }
+    return;
+  }
+  ACCOUNT_TRANSFER_FILE = file;
+  if (name) name.textContent = `${file.name} · ${accountTransferDisplaySize(file.size)}`;
+  if (confirm) confirm.disabled = !$('#accountTransferGroupSelect')?.value;
+}
+
+async function openAccountTransferImportModal() {
+  const modal = $('#accountTransferImportModal');
+  if (!modal) return;
+  setAccountTransferFile(null);
+  const input = $('#accountTransferZipInput');
+  if (input) input.value = '';
+  await loadAccountGroups(false);
+  populateAccountTransferGroups();
+  modal.classList.remove('hidden');
+  updateModalScrollLock();
+  requestAnimationFrame(() => $('#accountTransferDropzone')?.focus());
+}
+
+function closeAccountTransferImportModal() {
+  $('#accountTransferImportModal')?.classList.add('hidden');
+  updateModalScrollLock();
+}
+
+async function importAccountsZip() {
+  const file = ACCOUNT_TRANSFER_FILE;
+  const groupId = $('#accountTransferGroupSelect')?.value;
+  const result = $('#accountTransferImportResult');
+  const button = $('#btnConfirmAccountTransferImport');
+  if (!file || !groupId || !button) return;
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = '导入中…';
+  if (result) { result.textContent = '正在校验并导入账号…'; result.className = 'account-transfer-result'; }
+  try {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    form.append('group_id', groupId);
+    const response = await fetch('/api/accounts/transfer/import', {
+      method: 'POST',
+      headers: {'Accept': 'application/json'},
+      body: form,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    invalidateAccountPageCache();
+    ACCOUNT_SELECTED.clear();
+    await loadAccountGroups(false);
+    await loadAccounts({force: true});
+    const message = `导入完成：成功 ${Number(payload.imported_count || 0)} 个，跳过 ${Number(payload.skipped_count || 0)} 个`;
+    if (result) { result.textContent = message; result.className = 'account-transfer-result is-success'; }
+    showToast(message);
+  } catch (error) {
+    if (result) { result.textContent = error.message; result.className = 'account-transfer-result is-error'; }
+  } finally {
+    button.textContent = old;
+    button.disabled = !ACCOUNT_TRANSFER_FILE || !$('#accountTransferGroupSelect')?.value;
+  }
+}
+
+(function bindAccountTransferImportModal() {
+  const modal = $('#accountTransferImportModal');
+  const dropzone = $('#accountTransferDropzone');
+  const input = $('#accountTransferZipInput');
+  if (!modal || !dropzone || !input) return;
+  $('#btnCloseAccountTransferImport')?.addEventListener('click', closeAccountTransferImportModal);
+  $('#btnCancelAccountTransferImport')?.addEventListener('click', closeAccountTransferImportModal);
+  $('#btnConfirmAccountTransferImport')?.addEventListener('click', importAccountsZip);
+  $('#accountTransferGroupSelect')?.addEventListener('change', () => {
+    const confirm = $('#btnConfirmAccountTransferImport');
+    if (confirm) confirm.disabled = !ACCOUNT_TRANSFER_FILE || !$('#accountTransferGroupSelect')?.value;
+  });
+  dropzone.addEventListener('click', () => input.click());
+  dropzone.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); input.click(); }
+  });
+  input.addEventListener('change', () => setAccountTransferFile(input.files?.[0] || null));
+  ['dragenter', 'dragover'].forEach(type => dropzone.addEventListener(type, event => {
+    event.preventDefault();
+    dropzone.classList.add('is-dragover');
+  }));
+  ['dragleave', 'drop'].forEach(type => dropzone.addEventListener(type, event => {
+    event.preventDefault();
+    dropzone.classList.remove('is-dragover');
+  }));
+  dropzone.addEventListener('drop', event => setAccountTransferFile(event.dataTransfer?.files?.[0] || null));
+  modal.addEventListener('click', event => { if (event.target === modal) closeAccountTransferImportModal(); });
+  modal.addEventListener('keydown', event => { if (event.key === 'Escape') closeAccountTransferImportModal(); });
+})();
+
 function toggleCodexExportMenu() {
   const btn = $('#btnDownloadSelectedCpaV2');
   const menu = $('#codexExportMenuV2');
@@ -8902,6 +9189,8 @@ async function copySelectedAccountTokens() {
   bind('btnCopySelectedTokensV2', copySelectedAccountTokens);
   bind('btnCopySelectedLinesV2', copySelectedAccountLines);
   bind('btnDownloadSelectedTxtV2', downloadSelectedAccountTxt);
+  bind('btnImportAccountsZipV2', openAccountTransferImportModal);
+  bind('btnExportAccountsZipV2', exportSelectedAccountsZip);
   bind('btnArchiveSelectedAccountsV2', archiveSelectedAccounts);
   bind('btnDeleteSelectedAccountsV2', deleteSelectedAccounts);
   bind('btnDeleteDeadAccountsV2', deleteAllDeadAccounts);

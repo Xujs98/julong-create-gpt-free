@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import requests
 from flask import Flask, Response, jsonify, render_template, request
 
-from core import account_log_service, codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
+from core import account_log_service, account_transfer, codex_retry_service, db, plan_check_service, extract_link_service, extract_link_registry, codex_agent_service, live_check_service, twofa_setup_service, rebind_service
 from config import webui as webui_config
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
@@ -1148,6 +1148,55 @@ def create_app(auth_code: str | None = None) -> Flask:
             "count": len(rows),
             "skipped": skipped,
         })
+
+    @app.post("/api/accounts/transfer/export")
+    def api_accounts_transfer_export():
+        """Export selected complete account records and local attachments as ZIP."""
+        from config.build_info import APP_VERSION
+
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        try:
+            content, filename, summary = account_transfer.build_account_archive(
+                ids,
+                app_version=APP_VERSION,
+            )
+        except account_transfer.AccountTransferError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("导出完整账号迁移包失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        return Response(
+            content,
+            mimetype="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(content)),
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+                "X-Account-Count": str(summary["account_count"]),
+            },
+        )
+
+    @app.post("/api/accounts/transfer/import")
+    def api_accounts_transfer_import():
+        """Import a complete account ZIP into one existing local group."""
+        upload = request.files.get("file")
+        if upload is None or not str(upload.filename or "").strip():
+            return jsonify({"ok": False, "error": "请选择要导入的 ZIP 文件"}), 400
+        try:
+            group_id = int(request.form.get("group_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "请选择目标分组"}), 400
+        try:
+            result = account_transfer.import_account_archive(upload.stream, group_id=group_id)
+        except (account_transfer.AccountTransferError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("导入完整账号迁移包失败")
+            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
+        return jsonify(result)
 
     @app.post("/api/accounts/<int:acc_id>/archive")
     def api_account_archive(acc_id: int):
