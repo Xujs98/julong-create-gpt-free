@@ -5,6 +5,7 @@ from config.env_loader import apply_env_overrides
 # 通用提链：MoMo 公益提链。
 EXTRACT_LINK_MODE: str = "momo"
 EXTRACT_LINK_PROVIDER: str = "momo-public"
+EXTRACT_LINK_ONLY_FREE_TRIAL: bool = True
 
 # MoMo 公益提链服务与代理配置。
 EXTRACT_LINK_MOMO_BASE: str = "https://dasaobi.online"
@@ -34,6 +35,7 @@ EXTRACT_LINK_EVENT_TIMEOUT: int = 180
 apply_env_overrides(globals(), {
     'EXTRACT_LINK_MODE': 'str',
     'EXTRACT_LINK_PROVIDER': 'str',
+    'EXTRACT_LINK_ONLY_FREE_TRIAL': 'bool',
     'EXTRACT_LINK_MOMO_BASE': 'str',
     'EXTRACT_LINK_MOMO_CHECKOUT_PROXY': 'str',
     'EXTRACT_LINK_MOMO_UPDATE_PROXY': 'str',

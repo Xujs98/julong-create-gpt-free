@@ -6941,7 +6941,7 @@ function _extractLinkAction(r) {
   const s = r.extract_link_status || '';
   if (['queued','running'].includes(s)) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
   const plan = (r.current_plan_type || r.plan_type || '').toString().toLowerCase();
-  const eligible = plan === 'free' && !!r.plus_trial_eligible;
+  const eligible = !_extractOnlyFreeTrialEnabled() ? !!String(r.access_token || '').trim() : (plan === 'free' && !!r.plus_trial_eligible);
   if (!eligible) return '';
   const failedReason = s === 'failed' ? (r.extract_link_error || r.extract_link_message || '') : '';
   return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(failedReason ? '重新提链；上次失败原因：' + failedReason : '为该 free(可Plus试用) 账号创建 PIX/UPI/KAKAO_PAY/IDEAL 提链任务')}">提链</button>`;
@@ -8531,11 +8531,11 @@ async function extractOneLink(id, btn) {
   const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
   if (!acc) { showToast('账号不存在'); return; }
   const plan = (acc.current_plan_type || acc.plan_type || '').toString().toLowerCase();
-  if (plan !== 'free' || !acc.plus_trial_eligible) {
+  if (_extractOnlyFreeTrialEnabled() && (plan !== 'free' || !acc.plus_trial_eligible)) {
     showToast('仅支持 free(可Plus试用) 账号提链');
     return;
   }
-  if (!await appConfirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n将使用配置中的通用提链服务；PP 协议提链无需 CDK。`)) return;
+  if (!await appConfirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n将使用配置中的 MoMo 公益提链服务。`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '提链中…';
@@ -8558,9 +8558,12 @@ async function extractSelectedLinks() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
-  const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
-  if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
-  if (!await appConfirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过；任务使用配置中的并发、重试和通用提链服务。`)) return;
+  const onlyFreeTrial = _extractOnlyFreeTrialEnabled();
+  const eligible = onlyFreeTrial
+    ? selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible)
+    : selected.filter(a => String(a.access_token || '').trim());
+  if (!eligible.length) { showToast(onlyFreeTrial ? '选中账号里没有 free(可Plus试用)' : '选中账号没有可用 Access Token'); return; }
+  if (!await appConfirm(`确定批量提链 ${eligible.length} 个账号吗？\n\n${onlyFreeTrial ? '非可试用账号会自动跳过。' : '已关闭仅 free(可Plus试用) 限制，所有有 Access Token 的账号均可提链。'}`)) return;
   const btn = $('#btnExtractSelectedLinksV2');
   const old = btn.textContent;
   btn.disabled = true;
@@ -10734,6 +10737,10 @@ function _extractConfigValue(key, fallback = '') {
   if (Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, key)) return CONFIG_PENDING_UPDATES[key];
   const field = CONFIG.find(item => item.key === key);
   return field ? field.value : fallback;
+}
+function _extractOnlyFreeTrialEnabled() {
+  const value = _extractConfigValue('EXTRACT_LINK_ONLY_FREE_TRIAL', true);
+  return value === true || ['1','true','yes','on'].includes(String(value).toLowerCase());
 }
 function renderExtractLinkSectionV2(fields) {
   const mode = 'momo';

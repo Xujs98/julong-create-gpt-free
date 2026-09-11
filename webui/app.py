@@ -1765,6 +1765,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         return jsonify({"ok": True, "deleted": service_id})
 
     def _is_extract_eligible(acc: dict) -> bool:
+        if not extract_link_service._bool_setting("EXTRACT_LINK_ONLY_FREE_TRIAL", True):
+            return bool(str(acc.get("access_token") or "").strip())
         plan = str(acc.get("current_plan_type") or acc.get("plan_type") or "").lower()
         return plan == "free" and bool(acc.get("plus_trial_eligible"))
 

@@ -935,6 +935,10 @@ EDITABLE_FIELDS = [
         "label": "提链服务", "help": "固定为 MoMo 公益提链",
     },
     {
+        "key": "EXTRACT_LINK_ONLY_FREE_TRIAL", "file": "extract_link.py", "type": "bool", "group": "提链",
+        "label": "仅允许 free(可Plus试用) 提链", "help": "开启时仅允许 free 且具备 Plus 试用资格的账号；关闭后所有有 Access Token 的账号均可提链",
+    },
+    {
         "key": "EXTRACT_LINK_MOMO_CHECKOUT_PROXY", "file": "extract_link.py", "type": "str", "group": "提链",
         "label": "MoMo Checkout Proxy", "help": "提交给 MoMo 创建 Checkout 的越南 rotating 代理",
     },
