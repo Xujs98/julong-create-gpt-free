@@ -4142,7 +4142,7 @@ try {
     <div class="outlook-import-head">
       <div class="outlook-import-head-main">
         <h3 id="outlookImportTitle">导入邮箱素材</h3>
-        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API / iCloud / 域名邮箱：邮箱----取码地址（---- 或 ==== 均可）。iCloud 与域名邮箱取码地址返回 HTML，系统会读取页面中的验证码。</p>
+        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API / 域名邮箱：邮箱----取码地址；iCloud 同时支持邮箱----取码地址及邮箱---认证Token---HTML接码地址。iCloud 与域名邮箱会读取页面或认证接口中的验证码。</p>
       </div>
       <button type="button" class="outlook-import-close" id="btnCloseOutlookImport" aria-label="关闭">×</button>
     </div>
@@ -4168,7 +4168,7 @@ try {
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
-        <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken&#10;通用API / iCloud / 域名邮箱: email----取码地址"></textarea>
+        <textarea id="importTextV2" placeholder="Outlook: email----password----clientId----refreshToken&#10;通用API / iCloud / 域名邮箱: email----取码地址&#10;iCloud 三段式: email---认证Token---HTML接码地址"></textarea>
       </label>
       <div class="outlook-import-check-result" id="importCheckResultV2" aria-live="polite"></div>
     </div>
@@ -9258,13 +9258,31 @@ function parseImportTextV2(text, source) {
   let valid = 0;
   input.forEach(item => {
     const line = item.text;
-    const delimiter = line.includes('----') ? '----' : line.includes('====') ? '====' : '';
+    const delimiter = ['----', '====', ...(source === 'icloud' ? ['---'] : [])]
+      .map(value => ({value, index: line.indexOf(value)}))
+      .filter(item => item.index >= 0)
+      .sort((left, right) => left.index - right.index || right.value.length - left.value.length)[0]?.value || '';
     const parts = delimiter ? line.split(delimiter).map(part => part.trim()) : [line];
     const errors = [];
     if (parts.length < expected) errors.push(`字段不足（需要至少 ${expected} 段）`);
-    if (!IMPORT_EMAIL_RE_V2.test(parts[0] || '')) errors.push('邮箱格式有误');
-    if (delimiter && parts.slice(0, expected).some(part => !part)) errors.push('必填字段不能为空');
-    if (source !== 'outlook' && parts.length >= 2 && !IMPORT_URL_RE_V2.test(parts[1] || '')) errors.push('取码地址格式有误');
+    const normalizeValue = (value, isUrl = false) => {
+      let normalized = String(value || '').trim();
+      if (isUrl) {
+        const markdown = normalized.match(/^\[[^\]]*\]\((https?:\/\/[^)\s]+)\)$/i);
+        if (markdown) normalized = markdown[1];
+        else if (normalized.startsWith('<') && normalized.endsWith('>')) normalized = normalized.slice(1, -1).trim();
+      }
+      return normalized.replace(/\\([@_&?=:/%.#-])/g, '$1');
+    };
+    const email = normalizeValue(parts[0]);
+    const second = normalizeValue(parts[1], true);
+    const third = normalizeValue(parts[2], true);
+    const tokenLayout = source === 'icloud' && parts.length >= 3 && !IMPORT_URL_RE_V2.test(second) && IMPORT_URL_RE_V2.test(third);
+    const codeUrl = tokenLayout ? third : second;
+    const required = tokenLayout ? [email, normalizeValue(parts[1]), codeUrl] : [email, codeUrl];
+    if (!IMPORT_EMAIL_RE_V2.test(email)) errors.push('邮箱格式有误');
+    if (delimiter && required.some(part => !part)) errors.push('必填字段不能为空');
+    if (source !== 'outlook' && parts.length >= 2 && !IMPORT_URL_RE_V2.test(codeUrl)) errors.push('取码地址格式有误');
     if (errors.length) invalid.push({ line: item.line, errors });
     else valid += 1;
   });

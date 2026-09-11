@@ -101,6 +101,7 @@ class ICloudWebUiTests(unittest.TestCase):
             {
                 "email": "sample@icloud.com",
                 "code_url": "https://mail.example/s/token/sample@icloud.com",
+                "auth_token": "",
                 "access_token": "",
                 "totp_secret": "",
             }
@@ -125,10 +126,69 @@ class ICloudWebUiTests(unittest.TestCase):
             {
                 "email": "sample.50@icloud.com",
                 "code_url": "https://remail.example/pickup?email=sample.50%40icloud.com&token=st_test",
+                "auth_token": "",
                 "access_token": "",
                 "totp_secret": "",
             }
         ])
+
+    @patch("webui.app.db.import_icloud_emails", return_value=(1, 0))
+    def test_import_route_accepts_authenticated_icloud_pickup_format(self, import_icloud):
+        token = "tok_test_credential"
+        pickup_url = (
+            "https://pickup.example/icloud/pickup#"
+            "email=three.part%40icloud.com\\&key=tok_test_credential"
+        )
+        response = self.client.post(
+            "/api/outlook/import",
+            json={
+                "source": "icloud",
+                "text": (
+                    "three.part\\@icloud.com---tok\\_test\\_credential---"
+                    f"[{pickup_url}]({pickup_url})"
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        import_icloud.assert_called_once_with([
+            {
+                "email": "three.part@icloud.com",
+                "code_url": (
+                    "https://pickup.example/icloud/pickup#"
+                    "email=three.part%40icloud.com&key=tok_test_credential"
+                ),
+                "auth_token": token,
+                "access_token": "",
+                "totp_secret": "",
+            }
+        ])
+
+    @patch("webui.app.db.list_icloud_email_pool")
+    def test_icloud_pool_response_redacts_pickup_token(self, list_pool):
+        list_pool.return_value = [{
+            "id": 1,
+            "email": "sample@icloud.com",
+            "code_url": (
+                "https://pickup.example/icloud/pickup#"
+                "email=sample%40icloud.com&key=tok_private_value"
+            ),
+            "auth_token": "tok_private_value",
+            "copy_line": (
+                "sample@icloud.com---tok_private_value---"
+                "https://pickup.example/icloud/pickup#email=sample%40icloud.com&key=tok_private_value"
+            ),
+            "status": "available",
+        }]
+
+        response = self.client.get("/api/outlook?source=icloud")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()[0]
+        self.assertNotIn("auth_token", body)
+        self.assertTrue(body["auth_token_available"])
+        self.assertNotIn("tok_private_value", response.get_data(as_text=True))
+        self.assertIn("key=***", body["code_url"])
 
     @patch("webui.app.db.import_icloud_emails")
     def test_import_route_rejects_invalid_material_before_writing(self, import_icloud):

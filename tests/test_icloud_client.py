@@ -96,6 +96,46 @@ class ICloudClientTests(unittest.TestCase):
         get_context.assert_not_called()
         self.assertEqual(request_get.call_args.args[0], "https://mail.example.test/code/target")
 
+    @patch("core.icloud_client.requests.get")
+    @patch("core.icloud_client.get_account_context")
+    def test_fetch_latest_otp_uses_authenticated_pickup_api(self, get_context, request_get):
+        get_context.return_value = icloud_client.ICloudEmailAccount(
+            email="sample@icloud.com",
+            code_url=(
+                "https://pickup.example/icloud/pickup#"
+                "email=sample%40icloud.com&key=tok_test_credential"
+            ),
+            auth_token="tok_test_credential",
+        )
+        response = Mock(status_code=200, text="")
+        response.json.return_value = {
+            "email": "sample@icloud.com",
+            "message": {
+                "subject": "Your temporary code",
+                "html": "<p>Enter this temporary code:</p><p>482931</p>",
+                "text": "Enter this temporary code: 482931",
+                "mailboxReceivedAt": "2026-09-11T10:00:00Z",
+            },
+        }
+        request_get.return_value = response
+
+        code = icloud_client.fetch_latest_otp(
+            "sample@icloud.com",
+            max_wait=2,
+            poll_interval=1,
+            settle_seconds=0,
+        )
+
+        self.assertEqual(code, "482931")
+        request_get.assert_called_once()
+        args, kwargs = request_get.call_args
+        self.assertEqual(
+            args[0],
+            "https://pickup.example/icloud/api/pickup/messages/latest",
+        )
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok_test_credential")
+        self.assertEqual(kwargs["headers"]["X-Mailbox-Email"], "sample@icloud.com")
+
 
 class ICloudPoolTests(unittest.TestCase):
     def test_import_claim_release_and_delete(self):
@@ -105,13 +145,22 @@ class ICloudPoolTests(unittest.TestCase):
                 db, "_ICLOUD_EMAIL_TXT", root / "icloud.txt"
             ), patch.object(db, "_ACCOUNTS_JSON", root / "accounts.json"):
                 inserted, skipped = db.import_icloud_emails([
-                    {"email": "sample@icloud.com", "code_url": "https://mail.example/code"}
+                    {
+                        "email": "sample@icloud.com",
+                        "code_url": "https://mail.example/code",
+                        "auth_token": "tok_test_credential",
+                    }
                 ])
                 self.assertEqual((inserted, skipped), (1, 0))
                 self.assertEqual(db.icloud_email_pool_summary()["available"], 1)
 
                 claimed = db.claim_next_icloud_email()
                 self.assertEqual(claimed["email"], "sample@icloud.com")
+                self.assertEqual(claimed["auth_token"], "tok_test_credential")
+                self.assertEqual(
+                    claimed["copy_line"],
+                    "sample@icloud.com---tok_test_credential---https://mail.example/code",
+                )
                 self.assertEqual(db.icloud_email_pool_summary()["used"], 1)
 
                 db.release_icloud_email("sample@icloud.com", status="available")

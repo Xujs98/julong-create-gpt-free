@@ -156,23 +156,48 @@ def _parse_email_import_text(text: str, source: str) -> dict:
         if not line or line.startswith("#"):
             continue
         input_count += 1
-        delimiter = "----" if "----" in line else "====" if "====" in line else ""
+        delimiters = ["----", "===="] + (["---"] if source == "icloud" else [])
+        matches = [(line.find(value), -len(value), value) for value in delimiters if value in line]
+        delimiter = min(matches)[2] if matches else ""
         parts = [part.strip() for part in line.split(delimiter)] if delimiter else [line]
         errors = []
         if len(parts) < expected:
             errors.append(f"字段不足（需要至少 {expected} 段）")
         email = _normalize_import_value(parts[0] if parts else "")
-        code_url = _normalize_import_value(parts[1], url=True) if len(parts) >= 2 else ""
+        second_value = _normalize_import_value(parts[1], url=True) if len(parts) >= 2 else ""
+        third_value = _normalize_import_value(parts[2], url=True) if len(parts) >= 3 else ""
+        icloud_token_layout = (
+            source == "icloud"
+            and len(parts) >= 3
+            and not _IMPORT_URL_RE.fullmatch(second_value)
+            and bool(_IMPORT_URL_RE.fullmatch(third_value))
+        )
+        code_url = third_value if icloud_token_layout else second_value
+        auth_token = _normalize_import_value(parts[1]) if icloud_token_layout else ""
         if not _IMPORT_EMAIL_RE.fullmatch(email):
             errors.append("邮箱格式有误")
-        if delimiter and any(not part for part in parts[:expected]):
+        required_values = [email, auth_token, code_url] if icloud_token_layout else [email, code_url]
+        if delimiter and any(not part for part in required_values):
             errors.append("必填字段不能为空")
         if source in ("generic_api", "icloud", "cloudflare_domain") and len(parts) >= 2 and not _IMPORT_URL_RE.fullmatch(code_url):
             errors.append("取码地址需为 http(s) 或 data 地址")
         if errors:
-            invalid.append({"line": line_no, "text": line, "email": email, "errors": errors})
+            invalid.append({
+                "line": line_no,
+                "text": email if source == "icloud" else line,
+                "email": email,
+                "errors": errors,
+            })
             continue
-        if source in ("generic_api", "icloud", "cloudflare_domain"):
+        if source == "icloud":
+            records.append({
+                "email": email,
+                "code_url": code_url,
+                "auth_token": auth_token,
+                "access_token": parts[2] if len(parts) > 2 and not icloud_token_layout else "",
+                "totp_secret": parts[3] if len(parts) > 3 and not icloud_token_layout else "",
+            })
+        elif source in ("generic_api", "cloudflare_domain"):
             records.append({
                 "email": email,
                 "code_url": code_url,
@@ -209,6 +234,17 @@ def _with_pool_source(rows: list[dict], source: str) -> list[dict]:
     for r in rows:
         x = dict(r)
         x["source"] = source
+        if source == "icloud":
+            x["auth_token_available"] = bool(str(x.pop("auth_token", "") or "").strip())
+            x["code_url"] = re.sub(
+                r"(?i)([?#&]key=)[^&#]*",
+                r"\1***",
+                str(x.get("code_url") or ""),
+            )
+            x["copy_line"] = "----".join([
+                str(x.get("email") or ""),
+                str(x.get("code_url") or ""),
+            ])
         if not x.get("copy_line"):
             x["copy_line"] = x.get("email") or ""
         out.append(x)
@@ -461,7 +497,7 @@ def _rebind_response_secrets(row: dict | None) -> list[str]:
             records.append(pool_row)
     keys = {
         "password", "client_id", "clientId", "refresh_token", "refreshToken",
-        "access_token", "token", "code_url", "url", "reservation_id",
+        "access_token", "auth_token", "token", "code_url", "url", "reservation_id",
         "rebind_reservation_id", "rebind_proxy", "log_file", "original_email_line",
     }
     values: list[str] = []
@@ -2503,8 +2539,9 @@ def create_app(auth_code: str | None = None) -> Flask:
         """
         粘贴文本导入邮箱素材。
         Outlook：email----password----clientId----refreshToken
-        通用 API / iCloud / 域名邮箱：email----code_url
-        分隔符兼容 ---- 与 ====。
+        通用 API / 域名邮箱：email----code_url
+        iCloud：email----code_url 或 email---auth_token---code_url
+        分隔符兼容 ---- 与 ====；iCloud 三段式额外兼容 ---。
         """
         data = request.get_json(silent=True) or {}
         source = (data.get("source") or data.get("type") or "").strip()
@@ -2514,7 +2551,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         as_registered = bool(data.get("as_registered", False))
         check = _parse_email_import_text(text, source)
         if not check["input_count"]:
-            need = "2 段：邮箱----取码地址" if source in ("generic_api", "icloud", "cloudflare_domain") else "4 段：email----password----clientId----refreshToken"
+            need = "2 段：邮箱----取码地址（iCloud 也支持 邮箱---认证Token---HTML接码地址）" if source in ("generic_api", "icloud", "cloudflare_domain") else "4 段：email----password----clientId----refreshToken"
             return jsonify({"ok": False, "error": f"未解析到邮箱素材（需 {need}，---- 或 ==== 分隔）", **{k: check[k] for k in ("input_count", "valid_count", "invalid_count", "invalid")}}), 400
         if check["invalid_count"]:
             details = "；".join(
@@ -2529,7 +2566,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             }), 400
         records = check["records"]
         if not records:
-            need = "2 段：邮箱----取码地址" if source in ("generic_api", "icloud", "cloudflare_domain") else "4 段：email----password----clientId----refreshToken"
+            need = "2 段：邮箱----取码地址（iCloud 也支持 邮箱---认证Token---HTML接码地址）" if source in ("generic_api", "icloud", "cloudflare_domain") else "4 段：email----password----clientId----refreshToken"
             return jsonify({"ok": False, "error": f"未解析到有效邮箱行（需 {need}，---- 或 ==== 分隔）"}), 400
         if as_registered:
             inserted, skipped = db.import_registered_email_accounts(records, source=source)

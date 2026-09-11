@@ -277,11 +277,11 @@ def _generic_api_email_line(row: dict) -> str:
 
 
 def _icloud_email_line(row: dict) -> str:
-    """生成 iCloud 邮箱池文本行：邮箱----HTML 取码地址。"""
-    return "----".join([
-        row.get("email") or "",
-        row.get("code_url") or "",
-    ])
+    """生成 iCloud 邮箱池文本行，并保留可选的取件认证令牌。"""
+    email = row.get("email") or ""
+    code_url = row.get("code_url") or ""
+    auth_token = row.get("auth_token") or ""
+    return "---".join([email, auth_token, code_url]) if auth_token else "----".join([email, code_url])
 
 
 def _domain_email_line(row: dict) -> str:
@@ -4023,7 +4023,8 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
 
     source:
       - outlook: records 元素 {email,password,client_id,refresh_token[,access_token,totp_secret]}
-      - generic_api / icloud / cloudflare_domain: records 元素 {email,code_url[,access_token,totp_secret]}
+      - generic_api / cloudflare_domain: records 元素 {email,code_url[,access_token,totp_secret]}
+      - icloud: records 元素 {email,code_url[,auth_token,access_token,totp_secret]}
 
     返回 (新增账号数, 跳过数)。已存在账号会跳过；邮箱池中已存在的素材会复用并标记 used。
     """
@@ -4056,6 +4057,7 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
 
             if source in ("generic_api", "icloud", "cloudflare_domain"):
                 code_url = (raw.get("code_url") or raw.get("url") or "").strip()
+                auth_token = (raw.get("auth_token") or "").strip() if source == "icloud" else ""
                 if not code_url:
                     skipped += 1
                     continue
@@ -4080,6 +4082,8 @@ def import_registered_email_accounts(records: list[dict], source: str | None) ->
                     pool_rows.append(pool_row)
                 else:
                     pool_row["code_url"] = code_url or pool_row.get("code_url")
+                if source == "icloud" and auth_token:
+                    pool_row["auth_token"] = auth_token
                 pool_row["status"] = "used"
                 pool_row["used_at"] = pool_row.get("used_at") or now
                 pool_row["completed_at"] = pool_row.get("completed_at") or now
@@ -4391,13 +4395,14 @@ def get_generic_api_email_by_email(email: str) -> dict | None:
 # ============================================================
 
 def import_icloud_emails(records: list[dict]) -> tuple[int, int]:
-    """批量导入 iCloud 邮箱，记录格式为 {email, code_url}。"""
+    """批量导入 iCloud 邮箱，记录格式为 {email, code_url[, auth_token]}。"""
     with _LOCK:
         rows = _load_icloud_emails()
         inserted = skipped = 0
         for raw in records:
             email = (raw.get("email") or "").strip()
             code_url = (raw.get("code_url") or raw.get("url") or "").strip()
+            auth_token = (raw.get("auth_token") or "").strip()
             if not email or not code_url:
                 skipped += 1
                 continue
@@ -4408,6 +4413,7 @@ def import_icloud_emails(records: list[dict]) -> tuple[int, int]:
                 "id": _next_id(rows),
                 "email": email,
                 "code_url": code_url,
+                "auth_token": auth_token,
                 "status": "available",
                 "used_at": None,
                 "note": None,

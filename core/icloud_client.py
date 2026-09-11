@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import requests
 
@@ -29,10 +29,11 @@ class ICloudMailError(RuntimeError):
 
 @dataclass
 class ICloudEmailAccount:
-    """一个 iCloud 邮箱及其 HTML 取码地址。"""
+    """一个 iCloud 邮箱及其 HTML 取码上下文。"""
 
     email: str
     code_url: str
+    auth_token: str = ""
 
 
 _CONTEXT_CACHE: dict[str, ICloudEmailAccount] = {}
@@ -51,7 +52,11 @@ def pick_account() -> ICloudEmailAccount:
     if row is None:
         summary = icloud_email_pool_summary()
         raise ICloudMailError(f"iCloud 邮箱池没有可用账号: {summary}，请导入“邮箱----URL”素材")
-    account = ICloudEmailAccount(email=row["email"], code_url=row["code_url"])
+    account = ICloudEmailAccount(
+        email=row["email"],
+        code_url=row["code_url"],
+        auth_token=str(row.get("auth_token") or ""),
+    )
     _CONTEXT_CACHE[_key(account.email)] = account
     logger.info("[iCloud] 选中邮箱: %s（DB id=%s）", account.email, row.get("id"))
     return account
@@ -67,7 +72,11 @@ def get_account_context(email: str) -> ICloudEmailAccount | None:
     row = get_icloud_email_by_email(email)
     if row is None:
         return None
-    account = ICloudEmailAccount(email=row["email"], code_url=row["code_url"])
+    account = ICloudEmailAccount(
+        email=row["email"],
+        code_url=row["code_url"],
+        auth_token=str(row.get("auth_token") or ""),
+    )
     _CONTEXT_CACHE[cache_key] = account
     return account
 
@@ -172,6 +181,23 @@ def _mailbox_api_url(code_url: str, page_body: str) -> str | None:
     return urlunsplit((parsed.scheme, parsed.netloc, f"/v1{path}", parsed.query, ""))
 
 
+def _authenticated_pickup_api(code_url: str, auth_token: str = "") -> tuple[str, str] | None:
+    """Return the JSON latest-message endpoint and token for fragment-auth pickup pages."""
+    try:
+        parsed = urlsplit(str(code_url or ""))
+    except Exception:
+        return None
+    path = (parsed.path or "").rstrip("/")
+    if not parsed.scheme.startswith("http") or not path.endswith("/pickup"):
+        return None
+    fragment = parse_qs(parsed.fragment, keep_blank_values=True)
+    token = str(auth_token or "").strip() or str((fragment.get("key") or [""])[0]).strip()
+    if not token:
+        return None
+    api_path = f"{path[:-len('/pickup')]}/api/pickup/messages/latest"
+    return urlunsplit((parsed.scheme, parsed.netloc, api_path, "", "")), token
+
+
 def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
     """从动态邮箱页面的 JSON 数据中按时间倒序读取最新验证码。"""
     if not isinstance(payload, dict):
@@ -186,10 +212,20 @@ def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
     items = payload.get("items")
     if isinstance(items, list):
         candidates.extend(item for item in items if isinstance(item, dict))
+    message = payload.get("message")
+    if isinstance(message, dict):
+        candidates.append(message)
 
     def msg_ts(item: dict) -> float:
         return _parse_generic_api_ts(
-            item.get("received_at") or item.get("receivedAt") or item.get("received_at_ts") or item.get("time") or item.get("date")
+            item.get("received_at")
+            or item.get("receivedAt")
+            or item.get("received_at_ts")
+            or item.get("mailboxReceivedAt")
+            or item.get("ingestedAt")
+            or item.get("sentAt")
+            or item.get("time")
+            or item.get("date")
         ) or 0.0
 
     candidates.sort(key=msg_ts, reverse=True)
@@ -210,6 +246,7 @@ def _mailbox_payload_code(payload, after_ts: float | None = None) -> str | None:
         html_body = str(
             item.get("html_body")
             or item.get("htmlBody")
+            or item.get("html")
             or item.get("bodyPreview")
             or ""
         )
@@ -258,10 +295,58 @@ def fetch_latest_otp(
     last_error = ""
     rendered_reader: _PlaywrightOtpReader | None = None
     rendered_unavailable = False
+    authenticated_api = _authenticated_pickup_api(account.code_url, account.auth_token)
     logger.info("[iCloud] 开始轮询 HTML 取码地址: %s", email)
 
     while time.time() < deadline:
         try:
+            code = None
+            if authenticated_api:
+                api_url, api_token = authenticated_api
+                api_response = requests.get(
+                    api_url,
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {api_token}",
+                        "X-Mailbox-Email": account.email,
+                        "User-Agent": headers["User-Agent"],
+                    },
+                    timeout=timeout,
+                    verify=verify,
+                )
+                if api_response.status_code == 200:
+                    try:
+                        payload = api_response.json()
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        payload = json.loads(api_response.text or "{}")
+                    code = _mailbox_payload_code(payload, after_ts=after_ts)
+                    if code:
+                        logger.info("[iCloud] 认证取件接口提取到验证码=%s", code)
+                else:
+                    last_error = f"认证取件接口 HTTP {api_response.status_code}"
+
+            if code:
+                if code in excluded:
+                    if code != last_excluded_logged:
+                        logger.info("[iCloud] 忽略已被拒绝的旧验证码=%s", code)
+                        last_excluded_logged = code
+                    time.sleep(interval)
+                    continue
+                if settle <= 0:
+                    if rendered_reader is not None:
+                        rendered_reader.close()
+                    return code
+                if code != best:
+                    best = code
+                    settle_until = time.time() + settle
+                elif settle_until is not None and time.time() >= settle_until:
+                    if rendered_reader is not None:
+                        rendered_reader.close()
+                    return code
+            if authenticated_api:
+                time.sleep(interval)
+                continue
+
             response = requests.get(account.code_url, headers=headers, timeout=timeout, verify=verify)
             if response.status_code != 200:
                 last_error = f"HTTP {response.status_code}: {(response.text or '')[:160]}"
