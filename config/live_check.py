@@ -27,6 +27,8 @@ LIVE_CHECK_PROXY_API_TIMEOUT: float = 8.0
 REBIND_LOGIN_DRIVER: str = "cloak"
 REBIND_ACTION_DRIVER: str = "protocol"
 REBIND_HYBRID_MODE: bool = True
+# 协议登录遇到 403/429/代理连接失败时，最多筛选多少个独立代理出口。
+REBIND_PROXY_MAX_ATTEMPTS: int = 8
 
 
 apply_env_overrides(globals(), {
@@ -39,4 +41,5 @@ apply_env_overrides(globals(), {
     "REBIND_LOGIN_DRIVER": "str",
     "REBIND_ACTION_DRIVER": "str",
     "REBIND_HYBRID_MODE": "bool",
+    "REBIND_PROXY_MAX_ATTEMPTS": "int",
 })

@@ -224,6 +224,11 @@ EDITABLE_FIELDS = [
         "label": "换绑混合模式", "help": "开启后按“换绑登录方式 → 换绑提交方式”执行；关闭后换绑任务沿用单一驱动。默认是指纹浏览器登录、协议提交。",
     },
     {
+        "key": "REBIND_PROXY_MAX_ATTEMPTS", "file": "live_check.py", "type": "int", "group": "账号查活",
+        "label": "换绑出口筛选次数", "help": "协议登录遇到 403、429 或代理连接失败时，逐个获取并验证新出口的最大次数",
+        "min": 1, "max": 20,
+    },
+    {
         "key": "CODEX_RETRY_FOLLOW_LIVE_CHECK", "file": "codex.py", "type": "bool", "group": "账号查活",
         "label": "Codex补跑跟随查活", "help": "开启后，Codex补跑自动使用账号查活的驱动；关闭后使用下方独立补跑方式",
     },

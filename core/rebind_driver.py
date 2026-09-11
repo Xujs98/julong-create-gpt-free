@@ -204,6 +204,16 @@ def _rebind_proxy_mode() -> str:
     return "api" if configured == "api" else "pool"
 
 
+def _rebind_proxy_max_attempts() -> int:
+    from config import live_check as live_cfg
+
+    try:
+        configured = int(getattr(live_cfg, "REBIND_PROXY_MAX_ATTEMPTS", 8) or 8)
+    except (TypeError, ValueError):
+        configured = 8
+    return max(1, min(configured, 20))
+
+
 def _pick_rebind_proxy_source(failed_proxy: str | None = None) -> str:
     """Pick a rebind route from the configured API or static pool source."""
     from config import proxy as proxy_cfg
@@ -304,31 +314,38 @@ def _protocol_preflight_with_fallback(
     """Run protocol preflight and retry through the configured proxy source."""
     from core.account_liveness import _network_preflight_with_retry
 
-    candidates: list[str | None] = [proxy]
+    max_candidates = _rebind_proxy_max_attempts()
+    candidate = proxy
     errors: list[str] = []
-    for index, candidate in enumerate(candidates):
+    for index in range(max_candidates):
         if index:
             _safe_log(
                 log,
-                "协议登录出口连接异常，按当前代理来源重新获取出口",
+                f"协议登录出口连接异常，按当前代理来源筛选新出口（{index + 1}/{max_candidates}）",
             )
         try:
             return _network_preflight_with_retry(
                 email,
                 candidate,
-                max_attempts=2,
-                rotate_proxy_on_retry=True,
+                max_attempts=1,
+                rotate_proxy_on_retry=False,
                 screen_hint="login",
             )
         except Exception as exc:
             if not _is_browser_network_error(exc):
                 raise
             errors.append(_browser_error_text(exc) or type(exc).__name__)
-            if index == 0 and candidate:
-                candidates.extend(_rebind_proxy_fallbacks(candidate))
+            if index + 1 >= max_candidates:
+                break
+            fallbacks = _rebind_proxy_fallbacks(candidate)
+            if not fallbacks:
+                break
+            candidate = fallbacks[0]
 
     detail = "; ".join(item for item in errors if item)[:500]
-    raise RebindDriverError(f"协议登录网络出口均失败：{detail or '代理连接失败'}")
+    raise RebindDriverError(
+        f"协议登录在 {len(errors)} 个候选出口上均失败：{detail or '代理连接失败'}"
+    )
 
 
 def _normalize_driver(value: Any, default: str = "protocol") -> str:
@@ -2963,7 +2980,38 @@ def rebind_account(
             _normalize_hook_result(context, raw_login)
             _require_stage_success(raw_login, "登录")
         elif login_name == "protocol":
-            session, info = _protocol_login_builtin(account, proxy=effective_proxy, otp_getter=otp_getter, log=log, hooks=hook_map)
+            try:
+                session, info = _protocol_login_builtin(
+                    account, proxy=effective_proxy, otp_getter=otp_getter, log=log, hooks=hook_map
+                )
+            except RebindDriverError as first_exc:
+                if not effective_proxy or not _is_browser_network_error(first_exc):
+                    raise
+                session = info = None
+                failed_proxy = effective_proxy
+                errors: list[str] = []
+                for retry_index in range(1, min(3, _rebind_proxy_max_attempts())):
+                    routes = _rebind_proxy_fallbacks(failed_proxy)
+                    if not routes:
+                        break
+                    retry_proxy = routes[0]
+                    _safe_log(log, f"协议登录认证阶段网络异常，使用新出口重建完整登录态（{retry_index + 1}/3）")
+                    try:
+                        session, info = _protocol_login_builtin(
+                            account, proxy=retry_proxy, otp_getter=otp_getter, log=log, hooks=hook_map
+                        )
+                        effective_proxy = retry_proxy
+                        break
+                    except RebindDriverError as retry_exc:
+                        if not _is_browser_network_error(retry_exc):
+                            raise
+                        errors.append(_browser_error_text(retry_exc))
+                        failed_proxy = retry_proxy
+                if session is None or not isinstance(info, Mapping):
+                    detail = "; ".join(item for item in errors if item)[:500]
+                    raise RebindDriverError(
+                        f"协议登录认证阶段重建会话仍失败：{detail or _browser_error_text(first_exc)}"
+                    ) from first_exc
             context.session = session
             context.session_info = info
             actual_proxy = str(getattr(session, "proxy", "") or "").strip()

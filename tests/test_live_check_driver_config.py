@@ -67,9 +67,11 @@ def test_rebind_hybrid_driver_config_defaults_to_browser_login_protocol_action()
     assert 'REBIND_LOGIN_DRIVER: str = "cloak"' in source
     assert 'REBIND_ACTION_DRIVER: str = "protocol"' in source
     assert "REBIND_HYBRID_MODE: bool = True" in source
+    assert "REBIND_PROXY_MAX_ATTEMPTS: int = 8" in source
     assert fields["REBIND_LOGIN_DRIVER"]["choices"] == ["cloak", "roxy", "protocol"]
     assert fields["REBIND_ACTION_DRIVER"]["choices"] == ["protocol", "cloak", "roxy"]
     assert fields["REBIND_HYBRID_MODE"]["type"] == "bool"
+    assert fields["REBIND_PROXY_MAX_ATTEMPTS"]["type"] == "int"
     assert live_check.REBIND_LOGIN_DRIVER in {"cloak", "roxy", "protocol"}
     assert live_check.REBIND_ACTION_DRIVER in {"cloak", "roxy", "protocol"}
     assert isinstance(live_check.REBIND_HYBRID_MODE, bool)

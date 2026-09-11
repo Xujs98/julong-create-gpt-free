@@ -161,7 +161,7 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertIn("待修正 <strong>${check.invalidCount}</strong> 条", html)
         self.assertIn("submitBtn.disabled = check.inputCount === 0 || check.invalidCount > 0", html)
 
-    @patch("core.proxy_test.test_proxy")
+    @patch("core.proxy_test.probe_proxy_login_flow")
     def test_proxy_route_returns_ip_and_location(self, test_proxy):
         test_proxy.return_value = {
             "ok": True,
@@ -171,6 +171,7 @@ class ICloudWebUiTests(unittest.TestCase):
             "country": "Japan",
             "region": "Tokyo",
             "city": "Tokyo",
+            "login_flow_ok": True,
         }
         response = self.client.post("/api/proxy/test", json={"proxy": "http://user:pass@proxy.example:8080"})
 

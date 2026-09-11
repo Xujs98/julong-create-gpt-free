@@ -124,6 +124,7 @@ _FOLLOW_AUTH_MAX_ATTEMPTS = 3
 _FOLLOW_AUTH_BACKOFF_BASE = 2.0  # 第 N 次重试前等 2^(N-1) 秒
 _SENTINEL_MAX_ATTEMPTS = 3
 _SENTINEL_BACKOFF_BASE = 1.0
+_PASSWORD_VERIFY_MAX_ATTEMPTS = 3
 
 
 def _is_transient_network_error(exc: Exception) -> bool:
@@ -527,15 +528,39 @@ def verify_login_password(session: BrowserSession, password: str) -> dict:
     password = str(password or "").strip()
     if not password:
         raise ValueError("登录密码为空")
-    sentinel_resp = request_sentinel_token(session, "password_verify")
-    sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, "password_verify")
-    headers = session.get_auth_headers(referer="https://auth.openai.com/log-in/password")
-    headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
     url = "https://auth.openai.com/api/accounts/password/verify"
-    logger.info("[协议登录] 提交保存的账号密码")
-    resp = session.post(url, headers=headers, data=json.dumps({"password": password}))
+    last_exc: Exception | None = None
+    resp = None
+    for attempt in range(1, _PASSWORD_VERIFY_MAX_ATTEMPTS + 1):
+        try:
+            sentinel_resp = request_sentinel_token(session, "password_verify")
+            sentinel_header, so_header = build_sentinel_header(session, sentinel_resp, "password_verify")
+            headers = session.get_auth_headers(referer="https://auth.openai.com/log-in/password")
+            headers["openai-sentinel-token"] = sentinel_header
+            if so_header:
+                headers["openai-sentinel-so-token"] = so_header
+            logger.info(
+                "[协议登录] 提交保存的账号密码（尝试 %s/%s）",
+                attempt,
+                _PASSWORD_VERIFY_MAX_ATTEMPTS,
+            )
+            resp = session.post(url, headers=headers, data=json.dumps({"password": password}))
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= _PASSWORD_VERIFY_MAX_ATTEMPTS or not _is_transient_network_error(exc):
+                raise
+            backoff = _FOLLOW_AUTH_BACKOFF_BASE ** (attempt - 1)
+            logger.warning(
+                "[协议登录] 密码校验网络异常（%s/%s），%.1fs 后保持当前会话重试：%s",
+                attempt,
+                _PASSWORD_VERIFY_MAX_ATTEMPTS,
+                backoff,
+                type(exc).__name__,
+            )
+            time.sleep(backoff)
+    if resp is None:
+        raise last_exc if last_exc else RuntimeError("协议密码校验重试耗尽")
     if resp.status_code != 200:
         code = _extract_error_code(resp)
         if code in _ACCOUNT_DEAD_CODES:

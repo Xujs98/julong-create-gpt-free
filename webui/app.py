@@ -3929,14 +3929,14 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/proxy/test")
     def api_proxy_test():
-        """测试当前表单中的代理，返回出口 IP 和地理位置。"""
+        """测试当前代理的出口 IP，以及换绑协议登录入口。"""
         data = request.get_json(silent=True) or {}
         proxy_url = str(data.get("proxy") or "").strip()
         timeout = data.get("timeout")
         try:
-            from core.proxy_test import test_proxy
+            from core.proxy_test import probe_proxy_login_flow
 
-            result = test_proxy(proxy_url, timeout=timeout)
+            result = probe_proxy_login_flow(proxy_url, timeout=timeout)
             return jsonify(result)
         except Exception as exc:
             logger.warning("代理测试失败: %s: %s", type(exc).__name__, exc)

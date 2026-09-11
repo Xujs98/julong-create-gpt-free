@@ -438,13 +438,30 @@ def test_protocol_preflight_rotates_failed_proxy_within_pool(monkeypatch):
     assert all(
         item[2]
         == {
-            "max_attempts": 2,
-            "rotate_proxy_on_retry": True,
+            "max_attempts": 1,
+            "rotate_proxy_on_retry": False,
             "screen_hint": "login",
         }
         for item in calls
     )
-    assert any("按当前代理来源重新获取出口" in line for line in logs)
+    assert any("按当前代理来源筛选新出口" in line for line in logs)
+
+
+def test_protocol_preflight_honors_configured_candidate_limit(monkeypatch):
+    calls = []
+
+    def preflight(_email, proxy, **_kwargs):
+        calls.append(proxy)
+        raise RuntimeError("HTTP Error 403")
+
+    monkeypatch.setattr("config.live_check.REBIND_PROXY_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(rebind_driver, "_rebind_proxy_fallbacks", lambda failed: [f"{failed}-next"])
+    monkeypatch.setattr("core.account_liveness._network_preflight_with_retry", preflight)
+
+    with pytest.raises(rebind_driver.RebindDriverError, match="3 个候选出口"):
+        rebind_driver._protocol_preflight_with_fallback(OLD, "FIRST", log=None)
+
+    assert calls == ["FIRST", "FIRST-next", "FIRST-next-next"]
 
 
 def test_protocol_preflight_rebuilds_same_single_pool_route(monkeypatch):
@@ -1073,6 +1090,23 @@ def test_protocol_login_password_failure_does_not_fall_back_to_source_email_otp(
 
     assert calls == ["password"]
     assert fake_session.closed is True
+
+
+def test_password_verify_retries_transient_timeout_in_same_session(monkeypatch):
+    from core import openai_auth
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"continue_url": "https://auth.openai.com/authorize/continue"}
+    session = MagicMock()
+    session.post.side_effect = [RuntimeError("curl: (28) operation timed out"), response]
+    monkeypatch.setattr(openai_auth, "request_sentinel_token", lambda *_args: {"token": "proof"})
+    monkeypatch.setattr(openai_auth, "build_sentinel_header", lambda *_args: ("sentinel", ""))
+    monkeypatch.setattr(openai_auth.time, "sleep", lambda _seconds: None)
+
+    result = openai_auth.verify_login_password(session, "pw")
+
+    assert result["continue_url"].endswith("/authorize/continue")
+    assert session.post.call_count == 2
 
 
 def test_protocol_login_uses_source_email_otp_only_when_server_explicitly_requests_it(monkeypatch):

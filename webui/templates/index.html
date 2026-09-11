@@ -655,7 +655,7 @@
     .jobs-toolbar-v2 .jobs-tb-select:focus { border-color: #409eff; }
     .jobs-toolbar-v2 .el-input-number,
     .accounts-filter-v2 .el-input-number {
-      position: relative; display: inline-flex; width: 150px; height: 40px;
+      position: relative; display: inline-flex; width: 110px; height: 40px;
       border: 1px solid #dcdfe6; border-radius: 6px; background: #fff;
       box-sizing: border-box; overflow: hidden; vertical-align: middle;
     }
@@ -10715,7 +10715,7 @@ function renderProxyTestToolsV2() {
     <div class="roxy-workspace-box" style="margin-top:18px;">
       <div>
         <b>当前代理测试</b>
-        <div class="hint">普通测试只检查出口连通；代理池预热会综合检查 IP 信誉、匿名性、出口一致性、延迟、业务入口和 Cloudflare 挑战。</div>
+        <div class="hint">当前测试同时检查出口连通和换绑协议登录入口；代理池预热还会综合检查 IP 信誉、匿名性、出口一致性、延迟和 Cloudflare 挑战。</div>
       </div>
       <div class="action-cell">
         <button class="btn" type="button" id="btnTestProxyV2">测试当前代理</button>

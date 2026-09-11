@@ -86,6 +86,10 @@ def _network_preflight_with_retry(
         except Exception as exc:
             last_exc = exc
             if attempt >= max_attempts or not _is_retryable_network_error(exc):
+                try:
+                    session.session.close()
+                except Exception:
+                    pass
                 raise
             logger.warning(
                 "[查活] 网络预检失败（%s/%s），换新 IP 重试：%s",

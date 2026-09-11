@@ -156,6 +156,43 @@ def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
     raise ProxyTestError("代理测试失败；" + " | ".join(errors[-3:]))
 
 
+def probe_proxy_login_flow(proxy_url: str, timeout: float | None = None) -> dict:
+    """Verify GeoIP plus the same three unauthenticated steps used by rebind."""
+    result = test_proxy(proxy_url, timeout=timeout)
+    from core.chatgpt_auth import get_csrf_token, get_providers, signin_openai
+    from core.session import BrowserSession
+
+    session = None
+    try:
+        session = BrowserSession(proxy=proxy_url, detect_exit_geo=False)
+        if timeout is not None:
+            session.session.timeout = max(1.0, min(30.0, float(timeout)))
+        get_providers(session)
+        csrf = get_csrf_token(session)
+        authorize_url = signin_openai(
+            session,
+            csrf,
+            "proxy-check@example.test",
+            screen_hint="login",
+        )
+        if not str(authorize_url or "").startswith("https://auth.openai.com/"):
+            raise ProxyTestError("协议登录未返回有效授权地址")
+    except Exception as exc:
+        status = int(getattr(getattr(exc, "response", None), "status_code", 0) or 0)
+        detail = f"HTTP {status}" if status else type(exc).__name__
+        raise ProxyTestError(
+            f"出口 IP {result.get('ip') or '-'} 可连通，但完整协议登录预检不可用：{detail}"
+        ) from exc
+    finally:
+        if session is not None:
+            try:
+                session.session.close()
+            except Exception:
+                pass
+    result["login_flow_ok"] = True
+    return result
+
+
 def test_proxy_pool(
     proxy_urls: list[str] | tuple[str, ...] | None,
     timeout: float | None = None,

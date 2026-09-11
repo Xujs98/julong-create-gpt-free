@@ -11,6 +11,7 @@ from core.proxy_test import (
     _reputation_assessment,
     choose_healthy_proxy,
     test_proxy as run_proxy_test,
+    probe_proxy_login_flow,
     test_proxy_health as run_proxy_health_test,
     test_proxy_pool as run_proxy_pool_test,
     warmup_proxy_pool,
@@ -18,6 +19,31 @@ from core.proxy_test import (
 
 
 class ProxyTestTests(unittest.TestCase):
+    @patch("core.proxy_test.test_proxy")
+    @patch("core.chatgpt_auth.signin_openai", return_value="https://auth.openai.com/api/accounts/authorize?test=1")
+    @patch("core.chatgpt_auth.get_csrf_token", return_value="csrf")
+    @patch("core.chatgpt_auth.get_providers")
+    @patch("core.session.BrowserSession")
+    def test_login_flow_reuses_same_proxy_after_geo_check(
+        self, session_class, get_providers, get_csrf, signin, test_proxy
+    ):
+        test_proxy.return_value = {"ok": True, "ip": "203.0.113.9"}
+        session = session_class.return_value
+        result = probe_proxy_login_flow("http://proxy.example:8080", timeout=3)
+        self.assertTrue(result["login_flow_ok"])
+        session_class.assert_called_once_with(proxy="http://proxy.example:8080", detect_exit_geo=False)
+        get_providers.assert_called_once_with(session)
+        get_csrf.assert_called_once_with(session)
+        signin.assert_called_once_with(session, "csrf", "proxy-check@example.test", screen_hint="login")
+
+    @patch("core.proxy_test.test_proxy", return_value={"ok": True, "ip": "203.0.113.9"})
+    @patch("core.chatgpt_auth.get_providers", side_effect=RuntimeError("HTTP Error 403"))
+    @patch("core.session.BrowserSession")
+    def test_login_flow_rejects_geo_reachable_edge_block(self, session_class, _get_providers, _test_proxy):
+        with self.assertRaisesRegex(ProxyTestError, "完整协议登录预检不可用"):
+            probe_proxy_login_flow("http://proxy.example:8080", timeout=3)
+        session_class.return_value.session.close.assert_called_once()
+
     def test_challenge_page_markers_include_html_title(self):
         response = MagicMock()
         response.text = "<html><title>Just a Moment...</title></html>"
