@@ -8805,25 +8805,46 @@ async function stopSelectedCodex() {
 async function retrySelectedCodex() {
   const ids = Array.from(ACCOUNT_SELECTED);
   if (ids.length === 0) { showToast('请先选择账号'); return; }
+  const btn = $('#btnRetrySelectedCodexV2');
+  if (!btn) return;
+  btn.disabled = true;
   const workers = getCodexBulkWorkers();
   const workersElV2 = $('#codexBulkWorkersV2');
   if (workersElV2) workersElV2.value = workers;
   const selectedAccounts = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const retryingCount = selectedAccounts.filter(a => (a.codex_status || '') === 'retrying').length;
   const deactivatedCount = selectedAccounts.filter(a => (a.codex_status || '') === 'deactivated').length;
-  let msg = `批量补跑选中的 ${ids.length} 个账号 Codex 授权？
+  try {
+    const smsProvider = String((CONFIG.find(field => field.key === 'SMS_PROVIDER') || {}).value || '').trim().toLowerCase();
+    let cdkCheck = null;
+    if (smsProvider === 'codex') {
+      cdkCheck = await api('/api/codex-sms/check', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:'{}',
+      });
+      const available = Number(cdkCheck.counts?.available || 0);
+      if (available < ids.length) {
+        await appAlert('', {
+          title: 'CDK 数量不足',
+          body: `可用数量小于选中数量\n\n可用数量：${available}\n选中数量：${ids.length}`,
+          tone: 'danger',
+          confirmText: '知道了',
+        });
+        return;
+      }
+    }
+
+    let msg = `批量补跑选中的 ${ids.length} 个账号 Codex 授权？
 
 并发线程数：${workers}
 
 将按账号消耗邮箱 OTP 和接码短信。`;
-  if (retryingCount || deactivatedCount) msg += `
+    if (cdkCheck) msg += `
+
+Codex 接码助手可用 CDK：${Number(cdkCheck.counts?.available || 0)} 个。`;
+    if (retryingCount || deactivatedCount) msg += `
 
 其中：补跑中 ${retryingCount} 个、已废号 ${deactivatedCount} 个会自动跳过。`;
-  if (!await appConfirm(msg)) return;
-  const btn = $('#btnRetrySelectedCodexV2');
-  if (!btn) return;
-  btn.disabled = true;
-  try {
+    if (!await appConfirm(msg)) return;
     const r = await api('/api/codex/retry-bulk', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -8837,7 +8858,17 @@ async function retrySelectedCodex() {
     const poll = setInterval(loadAccounts, 5000);
     setTimeout(() => clearInterval(poll), 10 * 60 * 1000);
   } catch(err) {
-    showToast('批量补跑失败: ' + err.message);
+    if (err.code === 'codex_sms_cdk_shortage') {
+      await appAlert('', {
+        title: 'CDK 数量不足',
+        body: `可用数量小于选中数量\n\n可用数量：${Number(err.payload?.available_count || 0)}\n选中数量：${Number(err.payload?.selected_count || ids.length)}`,
+        tone: 'danger',
+        confirmText: '知道了',
+      });
+    } else {
+      showToast('批量补跑失败: ' + err.message);
+    }
+  } finally {
     updateAccountSelectionUi();
   }
 }

@@ -16,10 +16,66 @@ _RETRYING_LOCK = threading.Lock()
 _STOP_REQUESTED: set[str] = set()
 _RUNNING_THREADS: dict[str, int] = {}
 _RESERVED_AT: dict[str, float] = {}
+_LOG_CAPTURE_LOCK = threading.RLock()
+_LOG_CAPTURE_DEPTH = 0
+_LOG_CAPTURE_PREVIOUS_CORE_LEVEL: int | None = None
 
 
 class CodexRetryStopped(Exception):
     """用户手动停止 Codex 补跑。"""
+
+
+class _CompactLogFormatter(logging.Formatter):
+    """把每条记录压成单行，避免页面正文/异常堆栈冲乱实时日志。"""
+
+    def __init__(self, *args, max_chars: int = 1200, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_chars = max(240, int(max_chars))
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = " ".join(super().format(record).split())
+        if len(text) > self.max_chars:
+            text = text[: self.max_chars - 12].rstrip() + " [已截断]"
+        return text
+
+
+class _RetryLogContext:
+    """捕获当前补跑线程的 INFO+ 日志，并在退出后恢复 core 日志级别。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.handler: logging.FileHandler | None = None
+
+    def __enter__(self):
+        global _LOG_CAPTURE_DEPTH, _LOG_CAPTURE_PREVIOUS_CORE_LEVEL
+        thread_id = threading.get_ident()
+        self.handler = logging.FileHandler(str(self.path), encoding="utf-8")
+        self.handler.setLevel(logging.INFO)
+        self.handler.setFormatter(_CompactLogFormatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        self.handler.addFilter(lambda record: record.thread == thread_id)
+        logging.getLogger().addHandler(self.handler)
+        with _LOG_CAPTURE_LOCK:
+            core_logger = logging.getLogger("core")
+            if _LOG_CAPTURE_DEPTH == 0:
+                _LOG_CAPTURE_PREVIOUS_CORE_LEVEL = core_logger.level
+            if core_logger.getEffectiveLevel() > logging.INFO:
+                core_logger.setLevel(logging.INFO)
+            _LOG_CAPTURE_DEPTH += 1
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        global _LOG_CAPTURE_DEPTH, _LOG_CAPTURE_PREVIOUS_CORE_LEVEL
+        if self.handler is not None:
+            logging.getLogger().removeHandler(self.handler)
+            self.handler.close()
+        with _LOG_CAPTURE_LOCK:
+            _LOG_CAPTURE_DEPTH = max(0, _LOG_CAPTURE_DEPTH - 1)
+            if _LOG_CAPTURE_DEPTH == 0 and _LOG_CAPTURE_PREVIOUS_CORE_LEVEL is not None:
+                logging.getLogger("core").setLevel(_LOG_CAPTURE_PREVIOUS_CORE_LEVEL)
+                _LOG_CAPTURE_PREVIOUS_CORE_LEVEL = None
 
 
 def _thread_alive(thread_id: int | None) -> bool:
@@ -170,8 +226,7 @@ def run_worker(
     target_log_path: str | Path | None = None,
 ) -> dict:
     """执行一次 Codex 补跑。调用前必须先 reserve，结束时会自动 release。"""
-    fh: logging.FileHandler | None = None
-    root_logger = logging.getLogger()
+    log_context: _RetryLogContext | None = None
     result: dict = {"status": "failed", "ok": False, "message": "Codex 补跑未返回结果"}
     key = (email or "").strip().lower()
     try:
@@ -187,15 +242,8 @@ def run_worker(
         if clear_log:
             path.write_text("", encoding="utf-8")
 
-        thread_name = threading.current_thread().name
-        fh = logging.FileHandler(str(path), encoding="utf-8")
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%H:%M:%S",
-        ))
-        fh.addFilter(lambda record: record.threadName == thread_name)
-        root_logger.addHandler(fh)
+        log_context = _RetryLogContext(path)
+        log_context.__enter__()
 
         try:
             import config as config_pkg
@@ -317,9 +365,8 @@ def run_worker(
     finally:
         try:
             logger.info("[Codex 补跑] 结束：%s", email)
-            if fh is not None:
-                root_logger.removeHandler(fh)
-                fh.close()
+            if log_context is not None:
+                log_context.__exit__(None, None, None)
         finally:
             release(email)
             with _RETRYING_LOCK:

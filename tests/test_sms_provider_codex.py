@@ -39,6 +39,8 @@ class CodexSmsProviderTests(unittest.TestCase):
     def setUp(self):
         sms_provider._CODEX_SESSIONS.clear()
         sms_provider._CODEX_KNOWN_TYPES.clear()
+        sms_provider._CODEX_PRECHECKED_SESSIONS.clear()
+        sms_provider._CODEX_CDK_IN_USE.clear()
         sms_provider._ACQUIRED_AT.clear()
 
     def test_config_and_ui_fields(self):
@@ -79,6 +81,69 @@ class CodexSmsProviderTests(unittest.TestCase):
             session, _ = sms_provider.acquire_number(http=http)
             sms_provider.complete(session, http=http)
         remove.assert_called_once_with("LONG-1")
+        self.assertNotIn("LONG-1", sms_provider._CODEX_CDK_IN_USE)
+
+    def test_codex_set_status_is_local_noop(self):
+        http = _Http([])
+        with patch.object(codex_config, "SMS_PROVIDER", "codex"):
+            result = sms_provider.set_status("sess-noop", 1, http=http)
+        self.assertEqual(result, "OK")
+        self.assertEqual(http.calls, [])
+
+    def test_replace_number_uses_switch_on_same_session(self):
+        http = _Http([
+            _Resp({"sessionId": "sess-switch", "phone": "+15550000001", "state": "polling"}),
+            _Resp({
+                "sessionId": "sess-switch",
+                "phone": "+15550000002",
+                "attempt": 2,
+                "switchCount": 1,
+                "remainingSwitches": 4,
+            }),
+        ])
+        with patch.object(codex_config, "SMS_PROVIDER", "codex"), \
+                patch.object(codex_config, "CODEX_SMS_CDKS", ["SHORT-SWITCH"]):
+            session, _ = sms_provider.acquire_number(http=http)
+            new_session, phone = sms_provider.replace_number(session, http=http)
+            sms_provider.cancel(new_session, http=http)
+        self.assertEqual((new_session, phone), ("sess-switch", "15550000002"))
+        self.assertTrue(http.calls[1][1].endswith("/api/v1/code/sess-switch/switch"))
+        self.assertEqual(sum(call[1].endswith("/api/v1/code/request") for call in http.calls), 1)
+
+    def test_concurrent_acquires_reserve_different_cdks(self):
+        http = _Http([
+            _Resp({"sessionId": "sess-a", "phone": "+15550000001", "state": "polling"}),
+            _Resp({"sessionId": "sess-b", "phone": "+15550000002", "state": "polling"}),
+        ])
+        with patch.object(codex_config, "SMS_PROVIDER", "codex"), \
+                patch.object(codex_config, "CODEX_SMS_CDKS", ["SHORT-A", "SHORT-B"]):
+            first = sms_provider.acquire_number(http=http)
+            second = sms_provider.acquire_number(http=http)
+            with self.assertRaisesRegex(sms_provider.SmsNoNumbersError, "正被其他补跑任务使用"):
+                sms_provider.acquire_number(http=http)
+            sms_provider.cancel(first[0], http=http)
+            sms_provider.cancel(second[0], http=http)
+        payloads = [json.loads(call[3]) for call in http.calls if call[0] == "POST"]
+        self.assertEqual(payloads, [{"cdk": "SHORT-A"}, {"cdk": "SHORT-B"}])
+
+    def test_acquire_reuses_onetime_session_from_batch_check(self):
+        http = _Http([])
+        sms_provider.cache_codex_batch_results(
+            ["SHORT-CACHED"],
+            [{
+                "index": 0,
+                "status": "success",
+                "type": "onetime",
+                "sessionId": "sess-cached",
+                "phone": "+15550000003",
+            }],
+        )
+        with patch.object(codex_config, "SMS_PROVIDER", "codex"), \
+                patch.object(codex_config, "CODEX_SMS_CDKS", ["SHORT-CACHED"]):
+            session, phone = sms_provider.acquire_number(http=http)
+            sms_provider.cancel(session, http=http)
+        self.assertEqual((session, phone), ("sess-cached", "15550000003"))
+        self.assertEqual(http.calls, [])
 
 
 if __name__ == "__main__":

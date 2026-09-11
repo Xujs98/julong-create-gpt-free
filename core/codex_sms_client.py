@@ -55,9 +55,9 @@ class CodexSmsClient:
         data = self._json(resp)
         if resp.status_code == 429:
             raise CodexSmsError("Codex 接码助手请求频率受限，请稍后重试")
-        if resp.status_code >= 400 or data.get("state") == "error":
+        if resp.status_code >= 400 or data.get("state") == "error" or data.get("success") is False:
             msg = self._error(data, getattr(resp, "text", ""))
-            if "invalid" in msg.lower() or "unavailable" in msg.lower():
+            if any(word in msg.lower() for word in ("invalid", "unavailable", "used", "redeemed", "expired")):
                 raise CodexSmsNoNumbers(f"CDK 不可用：{msg}")
             raise CodexSmsError(f"Codex 接码助手 HTTP {resp.status_code}: {msg[:240]}")
         session_id = str(data.get("sessionId") or "").strip()
@@ -75,20 +75,31 @@ class CodexSmsClient:
             raise CodexSmsError("sessionId 不能为空")
         resp = self.http.get(self._url(f"/api/v1/code/{sid}"))
         data = self._json(resp)
-        if resp.status_code >= 400:
+        if resp.status_code == 429:
+            raise CodexSmsError("Codex 接码助手查询请求频率受限，请稍后重试")
+        if resp.status_code >= 400 or data.get("state") == "error" or data.get("success") is False:
             raise CodexSmsError(f"Codex 接码助手 HTTP {resp.status_code}: {self._error(data, getattr(resp, 'text', ''))[:240]}")
         return data
 
     def switch_session(self, session_id: str) -> dict:
         sid = quote(str(session_id or "").strip(), safe="")
+        if not sid:
+            raise CodexSmsError("sessionId 不能为空")
         resp = self.http.post(
             self._url(f"/api/v1/code/{sid}/switch"),
             headers={"Content-Type": "application/json"},
             data="{}",
         )
         data = self._json(resp)
-        if resp.status_code >= 400:
+        if resp.status_code == 429:
+            raise CodexSmsError("Codex 接码助手换号请求频率受限，请稍后重试")
+        if resp.status_code >= 400 or data.get("state") == "error" or data.get("success") is False:
             raise CodexSmsError(f"Codex 接码助手换号失败：{self._error(data, getattr(resp, 'text', ''))[:240]}")
+        phone = str(data.get("phone") or "").strip()
+        if not phone:
+            raise CodexSmsError(f"Codex 接码助手换号响应缺少 phone：{str(data)[:240]}")
+        data["sessionId"] = str(data.get("sessionId") or session_id).strip()
+        data["phone"] = phone
         return data
 
     def batch_redeem(self, cdks: list[str]) -> dict:

@@ -11,6 +11,7 @@ Flask 本地控制台。
 默认绑定 127.0.0.1，仅本地访问。
 """
 import logging
+import copy
 import json
 import html
 import re
@@ -33,6 +34,101 @@ logger = logging.getLogger(__name__)
 # 中文注释：邮箱池导入格式检查统一放在后端，确保前端绕过时也不会写入脏数据。
 _IMPORT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _IMPORT_URL_RE = re.compile(r"^(?:https?://|data:)[^\s]+$", re.IGNORECASE)
+_CODEX_SMS_CHECK_CACHE_LOCK = threading.RLock()
+_CODEX_SMS_CHECK_CACHE: dict[tuple[str, ...], tuple[float, dict]] = {}
+_CODEX_SMS_CHECK_CACHE_TTL = 90.0
+
+
+def _normalize_codex_sms_cdks(raw) -> list[str]:
+    values = raw.splitlines() if isinstance(raw, str) else list(raw or [])
+    result = []
+    seen = set()
+    for value in values:
+        cdk = str(value or "").strip().upper()
+        if cdk and cdk not in seen:
+            result.append(cdk)
+            seen.add(cdk)
+    return result
+
+
+def _invalidate_codex_sms_check_cache(raw=None) -> None:
+    from config import codex as codex_cfg
+
+    cdks = _normalize_codex_sms_cdks(
+        getattr(codex_cfg, "CODEX_SMS_CDKS", []) if raw is None else raw
+    )
+    with _CODEX_SMS_CHECK_CACHE_LOCK:
+        _CODEX_SMS_CHECK_CACHE.pop(tuple(cdks), None)
+
+
+def _check_codex_sms_cdks(raw=None) -> dict:
+    """批量检查 CDK，并短暂缓存结果以供批量补跑启动前复用。"""
+    from config import codex as codex_cfg
+    from core import sms_provider
+    from core.codex_sms_client import CodexSmsClient
+
+    cdks = _normalize_codex_sms_cdks(
+        getattr(codex_cfg, "CODEX_SMS_CDKS", []) if raw is None else raw
+    )
+    if not cdks:
+        raise ValueError("请至少输入一个 CDK")
+    cache_key = tuple(cdks)
+    with _CODEX_SMS_CHECK_CACHE_LOCK:
+        cached = _CODEX_SMS_CHECK_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] <= _CODEX_SMS_CHECK_CACHE_TTL:
+            result = copy.deepcopy(cached[1])
+            result["cached"] = True
+            return result
+
+        http = sms_provider._http()
+        try:
+            client = CodexSmsClient(
+                getattr(codex_cfg, "CODEX_SMS_API_BASE", "https://sms.kkdos.store"),
+                http,
+                getattr(codex_cfg, "SMS_REQUEST_TIMEOUT", 30),
+            )
+            raw_items = []
+            for offset in range(0, len(cdks), 100):
+                chunk = cdks[offset:offset + 100]
+                batch = client.batch_redeem(chunk)
+                for fallback_index, raw_item in enumerate(batch.get("items") or []):
+                    item = dict(raw_item) if isinstance(raw_item, dict) else {}
+                    try:
+                        local_index = int(item.get("index", fallback_index))
+                    except (TypeError, ValueError):
+                        local_index = fallback_index
+                    item["index"] = offset + local_index
+                    raw_items.append(item)
+        finally:
+            http.close()
+
+        sms_provider.cache_codex_batch_results(cdks, raw_items)
+        items = []
+        counts = {"total": len(cdks), "available": 0, "long": 0, "short": 0, "failed": 0}
+        for fallback_index, item in enumerate(raw_items):
+            index = int(item.get("index", fallback_index))
+            source_cdk = cdks[index] if 0 <= index < len(cdks) else ""
+            success = str(item.get("status") or "").lower() == "success"
+            kind = str(item.get("type") or "").lower()
+            if success:
+                counts["available"] += 1
+                if kind == "bindable":
+                    counts["long"] += 1
+                elif kind == "onetime":
+                    counts["short"] += 1
+            else:
+                counts["failed"] += 1
+            items.append({
+                "index": index,
+                "status": "success" if success else "error",
+                "type": kind or None,
+                "phone": item.get("phone") if success else None,
+                "error": item.get("error") if not success else None,
+                "cdkHint": f"{source_cdk[:3]}***{source_cdk[-3:]}" if len(source_cdk) > 6 else "***",
+            })
+        result = {"ok": True, "items": items, "counts": counts, "cached": False}
+        _CODEX_SMS_CHECK_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(result))
+        return result
 
 
 def _normalize_import_value(value: str, *, url: bool = False) -> str:
@@ -3024,7 +3120,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         if len(ids) > 500:
             return jsonify({"ok": False, "error": "单次最多选择 500 个账号"}), 400
 
-        selected = []
+        candidates = []
         skipped = []
         seen_ids = set()
         for raw in ids:
@@ -3047,10 +3143,41 @@ def create_app(auth_code: str | None = None) -> Flask:
             if (acc.get("codex_status") or "") == "deactivated":
                 skipped.append({"id": acc_id, "email": email, "reason": "账号已废号"})
                 continue
-            if not _reserve_codex_retry(email):
-                skipped.append({"id": acc_id, "email": email, "reason": "正在补跑中"})
+            candidates.append({"id": acc_id, "email": email})
+
+        if not candidates:
+            return jsonify({"ok": False, "error": "没有可补跑的账号", "skipped": skipped}), 409
+
+        cdk_check = None
+        from config import codex as codex_cfg
+        if str(getattr(codex_cfg, "SMS_PROVIDER", "") or "").strip().lower() == "codex":
+            try:
+                cdk_check = _check_codex_sms_cdks()
+            except Exception as exc:
+                logger.warning("Codex 批量补跑 CDK 检查失败：%s: %s", type(exc).__name__, exc)
+                return jsonify({
+                    "ok": False,
+                    "code": "codex_sms_cdk_check_failed",
+                    "error": f"批量检查 CDK 失败：{exc}",
+                }), 502
+            available = int((cdk_check.get("counts") or {}).get("available") or 0)
+            selected_count = len(candidates)
+            if available < selected_count:
+                return jsonify({
+                    "ok": False,
+                    "code": "codex_sms_cdk_shortage",
+                    "error": "可用数量小于选中数量",
+                    "available_count": available,
+                    "selected_count": selected_count,
+                    "counts": cdk_check.get("counts") or {},
+                }), 409
+
+        selected = []
+        for item in candidates:
+            if not _reserve_codex_retry(item["email"]):
+                skipped.append({**item, "reason": "正在补跑中"})
                 continue
-            selected.append({"id": acc_id, "email": email})
+            selected.append(item)
 
         if not selected:
             return jsonify({"ok": False, "error": "没有可补跑的账号", "skipped": skipped}), 409
@@ -3083,6 +3210,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             name=f"codex-bulk-dispatch-{batch_id}",
             daemon=True,
         ).start()
+        if cdk_check:
+            _invalidate_codex_sms_check_cache()
         return jsonify({
             "ok": True,
             "message": f"已开始批量补跑 {len(selected)} 个账号，并发 {workers}",
@@ -3090,6 +3219,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             "started_count": len(selected),
             "skipped": skipped,
             "batch_id": batch_id,
+            "cdk_check": cdk_check,
         })
 
     @app.get("/api/codex/retry-log")
@@ -3851,56 +3981,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         """批量检查 Codex 接码助手 CDK，并返回脱敏明细与长期/短效统计。"""
         data = request.get_json(silent=True) or {}
         raw = data.get("cdks") if isinstance(data, dict) else None
-        if raw is None:
-            from config import codex as _codex_cfg
-            raw = getattr(_codex_cfg, "CODEX_SMS_CDKS", [])
-        if isinstance(raw, str):
-            cdks = [line.strip().upper() for line in raw.splitlines() if line.strip()]
-        else:
-            cdks = [str(line or "").strip().upper() for line in (raw or []) if str(line or "").strip()]
-        if not cdks:
-            return jsonify({"ok": False, "error": "请至少输入一个 CDK"}), 400
         try:
-            from core.codex_sms_client import CodexSmsClient
-            from core.sms_provider import _http
-            from config import codex as _codex_cfg
-
-            http = _http()
-            try:
-                result = CodexSmsClient(
-                    getattr(_codex_cfg, "CODEX_SMS_API_BASE", "https://sms.kkdos.store"),
-                    http,
-                    getattr(_codex_cfg, "SMS_REQUEST_TIMEOUT", 30),
-                ).batch_redeem(cdks)
-            finally:
-                http.close()
-            items = []
-            counts = {"total": len(cdks), "available": 0, "long": 0, "short": 0, "failed": 0}
-            for index, item in enumerate(result.get("items") or []):
-                item = item if isinstance(item, dict) else {}
-                source_index = item.get("index", index)
-                try:
-                    source_index = int(source_index)
-                except (TypeError, ValueError):
-                    source_index = index
-                source_cdk = cdks[source_index] if 0 <= source_index < len(cdks) else ""
-                success = str(item.get("status") or "").lower() == "success"
-                kind = str(item.get("type") or "").lower()
-                if success:
-                    counts["available"] += 1
-                    if kind == "bindable": counts["long"] += 1
-                    elif kind == "onetime": counts["short"] += 1
-                else:
-                    counts["failed"] += 1
-                items.append({
-                    "index": item.get("index", index),
-                    "status": "success" if success else "error",
-                    "type": kind or None,
-                    "phone": item.get("phone") if success else None,
-                    "error": item.get("error") if not success else None,
-                    "cdkHint": f"{source_cdk[:3]}***{source_cdk[-3:]}" if len(source_cdk) > 6 else "***",
-                })
-            return jsonify({"ok": True, "items": items, "counts": counts})
+            return jsonify(_check_codex_sms_cdks(raw))
         except Exception as exc:
             logger.warning("Codex CDK 批量检查失败：%s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400

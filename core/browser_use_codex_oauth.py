@@ -1187,65 +1187,93 @@ def _do_phone_verification_if_present(page) -> None:
         return
 
     http = sms_provider._http()
-    max_retries = int(getattr(sms_provider._cfg, "SMS_MAX_RETRIES", 10) or 10) if hasattr(sms_provider, "_cfg") else 10
-    last_error = ""
-    for attempt in range(1, max_retries + 1):
+    try:
+        max_retries = int(getattr(sms_provider._cfg, "SMS_MAX_RETRIES", 10) or 10) if hasattr(sms_provider, "_cfg") else 10
+        last_error = ""
         activation_id = None
-        try:
-            _t_phone_ready = _StepTimer(f"手机页准备 attempt={attempt}")
-            if not _ensure_add_phone_form(page, reason=f"attempt-{attempt}"):
-                raise RuntimeError("无法回到手机号输入页，暂不取新号")
-            _t_phone_ready.done()
-            logger.info("[Codex][BrowserUse] 需要手机验证，开始取号（%s/%s）", attempt, max_retries)
-            activation_id, phone = sms_provider.acquire_number(http)
-            logger.info("[Codex][BrowserUse] 已取号：%s activation=%s", phone, activation_id)
-            _t_phone_send = _StepTimer(f"填写并提交手机号 attempt={attempt}")
-            phone_e164 = _fill_phone(page, phone)
-            _bu_delay("form")
-            send_state = _wait_after_phone_send(page, timeout=12 if _fast_mode() else 18)
-            _t_phone_send.done(f"state={send_state}")
-            logger.info("[Codex][BrowserUse] 手机号提交后状态：%s phone=%s", send_state, phone_e164)
-            if send_state == "callback":
-                return
-            if send_state != "code_page":
-                raise RuntimeError(f"提交手机号后未确认发送短信/进入验证码页：state={send_state}, page={_current_state_for_log(page)}")
-            sms_provider.set_status(activation_id, 1, http=http)
-            _t_sms = _StepTimer(f"等待手机短信 attempt={attempt}")
-            sms_code = sms_provider.wait_for_sms_code(activation_id, http)
-            _t_sms.done()
-            logger.info("[Codex][BrowserUse] 手机 OTP 收到：%s", sms_code)
-            _clear_otp_inputs(page)
-            _type_otp(page, sms_code)
-            _bu_delay("otp_input")
-            _click_first_any_frame(
-                page,
-                ["button[type='submit']", "button:has-text('Continue')", "button:has-text('Verify')", "button:has-text('続行')", "button:has-text('送信')", "button:has-text('继续')", "button:has-text('验证')", "form button"],
-                timeout_ms=8000,
-            )
-            outcome = _wait_after_phone_otp(page, timeout=30)
-            logger.info("[Codex][BrowserUse] 手机 OTP 提交后状态：%s", outcome)
-            if outcome in ("accepted", "callback", "unknown"):
-                sms_provider.complete(activation_id, http)
-                return
-            raise RuntimeError(f"手机验证码未通过：{outcome}")
-        except Exception as exc:
-            last_error = f"{type(exc).__name__}: {str(exc)[:220]}"
-            logger.warning("[Codex][BrowserUse] 手机验证失败（%s/%s）：%s", attempt, max_retries, last_error)
-            if activation_id:
+        phone = ""
+        for attempt in range(1, max_retries + 1):
+            try:
+                _t_phone_ready = _StepTimer(f"手机页准备 attempt={attempt}")
+                if not _ensure_add_phone_form(page, reason=f"attempt-{attempt}"):
+                    raise RuntimeError("无法回到手机号输入页，暂不取新号")
+                _t_phone_ready.done()
+                logger.info("[Codex][BrowserUse] 需要手机验证，开始取号（%s/%s）", attempt, max_retries)
+                if not activation_id:
+                    activation_id, phone = sms_provider.acquire_number(http)
+                logger.info("[Codex][BrowserUse] 已取号：%s activation=%s", phone, activation_id)
+                _t_phone_send = _StepTimer(f"填写并提交手机号 attempt={attempt}")
+                phone_e164 = _fill_phone(page, phone)
+                _bu_delay("form")
+                send_state = _wait_after_phone_send(page, timeout=12 if _fast_mode() else 18)
+                _t_phone_send.done(f"state={send_state}")
+                logger.info("[Codex][BrowserUse] 手机号提交后状态：%s phone=%s", send_state, phone_e164)
+                if send_state == "callback":
+                    sms_provider.complete(activation_id, http)
+                    return
+                if send_state != "code_page":
+                    raise RuntimeError(
+                        f"提交手机号后未确认发送短信/进入验证码页：state={send_state}, "
+                        f"page={_current_state_for_log(page)}"
+                    )
+                sms_provider.set_status(activation_id, 1, http=http)
+                _t_sms = _StepTimer(f"等待手机短信 attempt={attempt}")
+                sms_code = sms_provider.wait_for_sms_code(activation_id, http)
+                _t_sms.done()
+                logger.info("[Codex][BrowserUse] 手机 OTP 收到：%s", sms_code)
+                _clear_otp_inputs(page)
+                _type_otp(page, sms_code)
+                _bu_delay("otp_input")
+                _click_first_any_frame(
+                    page,
+                    [
+                        "button[type='submit']", "button:has-text('Continue')",
+                        "button:has-text('Verify')", "button:has-text('続行')",
+                        "button:has-text('送信')", "button:has-text('继续')",
+                        "button:has-text('验证')", "form button",
+                    ],
+                    timeout_ms=8000,
+                )
+                outcome = _wait_after_phone_otp(page, timeout=30)
+                logger.info("[Codex][BrowserUse] 手机 OTP 提交后状态：%s", outcome)
+                if outcome in ("accepted", "callback", "unknown"):
+                    sms_provider.complete(activation_id, http)
+                    return
+                raise RuntimeError(f"手机验证码未通过：{outcome}")
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {' '.join(str(exc).split())[:220]}"
+                logger.warning("[Codex][BrowserUse] 手机验证失败（%s/%s）：%s", attempt, max_retries, last_error)
+                if activation_id:
+                    if attempt < max_retries:
+                        try:
+                            activation_id, phone = sms_provider.replace_number(activation_id, http)
+                            logger.info(
+                                "[Codex][BrowserUse] 接码平台已准备下一号码：session=%s phone=%s",
+                                activation_id,
+                                phone,
+                            )
+                        except Exception as switch_exc:
+                            logger.warning(
+                                "[Codex][BrowserUse] 接码平台换号失败，将尝试下一 CDK：%s",
+                                " ".join(str(switch_exc).split())[:220],
+                            )
+                            sms_provider.cancel(activation_id, http)
+                            activation_id, phone = None, ""
+                    else:
+                        sms_provider.cancel(activation_id, http)
+                        activation_id, phone = None, ""
+                if attempt >= max_retries:
+                    break
                 try:
-                    sms_provider.cancel(activation_id, http)
+                    _dismiss_phone_country_dropdown(page)
+                    _clear_phone_inputs(page)
+                    _ensure_add_phone_form(page, reason=f"after-fail-{attempt}")
                 except Exception:
                     pass
-            if attempt >= max_retries:
-                break
-            try:
-                _dismiss_phone_country_dropdown(page)
-                _clear_phone_inputs(page)
-                _ensure_add_phone_form(page, reason=f"after-fail-{attempt}")
-            except Exception:
-                pass
-            time.sleep(min(1 + attempt, 4))
-    raise RuntimeError(f"手机验证失败，已重试 {max_retries} 次：{last_error}")
+                time.sleep(min(1 + attempt, 4))
+        raise RuntimeError(f"手机验证失败，已重试 {max_retries} 次：{last_error}")
+    finally:
+        http.close()
 
 
 def _finish_consent_workspace(context, page) -> str:

@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from urllib.parse import urlparse
 
 import pyotp
+from selenium.webdriver.common.keys import Keys
 
 from config import roxybrowser as _roxy_cfg
 from core.email_provider import wait_for_otp
@@ -600,6 +601,24 @@ def _phone_page_state(driver) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}", "url": getattr(driver, 'current_url', '')}
 
 
+def _phone_state_for_log(state: dict) -> str:
+    """压缩手机号页面状态，避免国家列表和多行正文冲乱实时日志。"""
+    state = state if isinstance(state, dict) else {}
+    body = " ".join(str(state.get("bodyText") or "").split())[:180]
+    radios = state.get("radios") or []
+    checked = [str(item.get("value") or "-") for item in radios if item.get("checked")]
+    inputs = state.get("inputs") or []
+    visible_inputs = [
+        f"{item.get('name') or item.get('id') or item.get('type') or item.get('tag') or '-'}"
+        f"(invalid={item.get('ariaInvalid') or 'false'})"
+        for item in inputs[:6]
+    ]
+    return (
+        f"url={state.get('url') or '-'} checked_channel={','.join(checked) or '-'} "
+        f"inputs={','.join(visible_inputs) or '-'} body={body or '-'}"
+    )
+
+
 def _select_sms_channel_or_raise(driver) -> None:
     state = _phone_page_state(driver)
     radios = state.get('radios') or []
@@ -607,7 +626,7 @@ def _select_sms_channel_or_raise(driver) -> None:
     has_whatsapp = any('whatsapp' in str(r.get('value','')).lower().replace(' ', '') for r in radios)
     has_sms = any(str(r.get('value','')).lower() in ('sms', 'text', 'text_message', 'text-message') for r in radios)
     if has_whatsapp and not has_sms:
-        raise RuntimeError(f"whatsapp_channel: 页面仅提供 WhatsApp 通道 state={state}")
+        raise RuntimeError(f"whatsapp_channel: 页面仅提供 WhatsApp 通道 {_phone_state_for_log(state)}")
     # 选择 SMS/text radio。无 radio 时可能默认 SMS。
     selected = driver.execute_script(r"""
     const radios = [...document.querySelectorAll('input[type=radio]')];
@@ -870,6 +889,24 @@ def _blur_active_input_and_wait(driver, *, label: str = "输入完成") -> None:
     time.sleep(seconds)
 
 
+def _dismiss_phone_country_dropdown(driver) -> None:
+    """收起国家码列表，避免 portal/listbox 遮挡并吞掉 Continue 点击。"""
+    try:
+        driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+    except Exception:
+        pass
+    try:
+        driver.execute_script(r"""
+        const active = document.activeElement;
+        if (active && typeof active.blur === 'function') active.blur();
+        document.body?.click?.();
+        document.body?.focus?.();
+        """)
+    except Exception:
+        pass
+    time.sleep(0.2)
+
+
 def _verify_add_phone_value_before_submit(driver, expected_e164: str) -> dict:
     result = driver.execute_script(r"""
     const expected = String(arguments[0] || '').trim();
@@ -886,11 +923,18 @@ def _verify_add_phone_value_before_submit(driver, expected_e164: str) -> dict:
     const hiddenDigits = digits(hiddenValue);
     const expectedDigits = digits(expected);
     // 输入框可能被自动格式化，按数字比较；隐藏字段如果存在必须等于完整 E.164。
-    const ok = !!visibleDigits && visibleDigits === expectedDigits && (!hidden || hiddenDigits === expectedDigits);
-    return {ok, visibleValue, hiddenValue, expected, visibleDigits, hiddenDigits, expectedDigits, url: location.href};
+    const select = form.querySelector('select');
+    const selectedText = select && select.selectedIndex >= 0 ? String(select.options[select.selectedIndex]?.textContent || '') : '';
+    const dialCode = (selectedText.match(/\+(\d{1,4})\b/) || [])[1] || '';
+    const visibleOk = visibleDigits === expectedDigits || (!!dialCode && (dialCode + visibleDigits) === expectedDigits);
+    const ok = !!visibleDigits && visibleOk && (!hidden || hiddenDigits === expectedDigits);
+    return {ok, visibleValue, hiddenValue, expected, visibleDigits, hiddenDigits, expectedDigits, dialCode, url: location.href};
     """, expected_e164)
     if not result or not result.get("ok"):
-        raise RuntimeError(f"手机号提交前校验失败 result={result} state={_phone_page_state(driver)}")
+        raise RuntimeError(
+            f"手机号提交前校验失败 result={result} "
+            f"state={_phone_state_for_log(_phone_page_state(driver))}"
+        )
     return result
 
 
@@ -928,6 +972,7 @@ def _click_add_phone_continue_button(driver, *, timeout: int = 10) -> dict:
     参考 FlowPilot 的 getAddPhoneSubmitButton + simulateClick：优先在 add-phone form 内找
     enabled submit，点击失败时用 form.requestSubmit(button) 兜底。
     """
+    _dismiss_phone_country_dropdown(driver)
     end = time.time() + timeout
     last = None
     while time.time() < end:
@@ -986,6 +1031,7 @@ def _click_add_phone_continue_button(driver, *, timeout: int = 10) -> dict:
 
 def _force_submit_add_phone_form(driver) -> dict:
     """add-phone 页面点击按钮没生效时，直接 requestSubmit 当前 form。"""
+    _dismiss_phone_country_dropdown(driver)
     try:
         return driver.execute_script(r"""
         const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
@@ -1024,7 +1070,7 @@ def _wait_after_phone_send(driver, timeout: int = 12) -> str:
         if _is_add_phone_page(driver):
             invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
             if invalid:
-                raise RuntimeError(f"invalid_phone: add-phone input aria-invalid state={last}")
+                raise RuntimeError(f"invalid_phone: add-phone input aria-invalid {_phone_state_for_log(last)}")
             # Cloak/React-Aria 场景下 btn.click 可能只聚焦没触发表单提交；补一次 requestSubmit。
             if not force_submitted and time.time() > end - timeout + 3:
                 info = _force_submit_add_phone_form(driver)
@@ -1034,7 +1080,7 @@ def _wait_after_phone_send(driver, timeout: int = 12) -> str:
     if _is_phone_code_state(last) or _is_phone_code_page(driver):
         return 'code_page'
     if _is_add_phone_page(driver):
-        raise RuntimeError(f"send_not_accepted: 提交后仍停留在 add-phone state={last}")
+        raise RuntimeError(f"send_not_accepted: 提交后仍停留在 add-phone {_phone_state_for_log(last)}")
     return 'unknown'
 
 
@@ -1093,8 +1139,6 @@ def _classify_phone_page_failure(state: dict) -> str:
     text = str(state.get('bodyText') or '').lower()
     if 'invalid_auth_step' in text or 'invalid auth step' in text:
         return 'invalid_auth_step'
-    if 'whatsapp' in text or 'whats app' in text:
-        return 'whatsapp_channel'
     if any(k in text for k in ('invalid phone', 'not a valid phone', 'phone number is not valid', '号码无效', '手机号无效')):
         return 'invalid_phone'
     if any(k in text for k in (
@@ -1137,10 +1181,12 @@ def _do_phone_verification_if_present(driver) -> None:
             return
 
         last_err = None
+        activation_id = None
+        phone = ""
         for attempt in range(1, max_retries + 1):
-            activation_id = None
             try:
-                activation_id, phone = sms_provider.acquire_number(http)
+                if not activation_id:
+                    activation_id, phone = sms_provider.acquire_number(http)
                 logger.info("[Codex][Browser] 手机验证尝试 %s/%s，provider=%s，号码=+%s", attempt, max_retries, provider, phone)
                 logger.info("[Codex][Browser] 准备手机号输入页，重新设置新手机号")
                 _ensure_add_phone_input(driver, reason=f"attempt-{attempt}")
@@ -1161,7 +1207,10 @@ def _do_phone_verification_if_present(driver) -> None:
                 _wait_page_settle_after_submit()
 
                 # 等待页面进入 phone-verification；若号码无效/无法发送/WhatsApp 通道，立即换号。
-                _wait_after_phone_send(driver, timeout=15)
+                send_state = _wait_after_phone_send(driver, timeout=15)
+                if send_state == "callback":
+                    sms_provider.complete(activation_id, http)
+                    return
                 logger.info("[Codex][Browser] 已进入手机验证码页")
 
                 sms_provider.set_status(activation_id, 1, http=http)
@@ -1183,13 +1232,15 @@ def _do_phone_verification_if_present(driver) -> None:
                 return
             except Exception as exc:
                 last_err = exc
-                logger.warning("[Codex][Browser] 手机验证尝试失败，换号：%s", str(exc)[:240])
-                if activation_id:
-                    try:
-                        sms_provider.cancel(activation_id, http)
-                    except Exception:
-                        pass
+                logger.warning(
+                    "[Codex][Browser] 手机验证尝试 %s/%s 失败：%s",
+                    attempt,
+                    max_retries,
+                    " ".join(str(exc).split())[:360],
+                )
                 if "invalid_auth_step" in str(exc):
+                    if activation_id:
+                        sms_provider.cancel(activation_id, http)
                     raise RuntimeError(
                         "手机号流程进入 invalid_auth_step，说明授权状态还未从 email-verification 正常跳转或已失效；"
                         "已停止继续换号，避免继续消耗号码"
@@ -1206,11 +1257,33 @@ def _do_phone_verification_if_present(driver) -> None:
                         logger.info("[Codex][Browser] 仍处于手机号流程，继续换号重试")
                     else:
                         logger.info("[Codex][Browser] 手机输入页已消失，继续后续流程")
+                        if activation_id:
+                            sms_provider.complete(activation_id, http)
                         return
+                if activation_id:
+                    if attempt < max_retries:
+                        try:
+                            activation_id, phone = sms_provider.replace_number(activation_id, http)
+                            logger.info(
+                                "[Codex][Browser] 接码平台已准备下一号码：session=%s phone=+%s",
+                                activation_id,
+                                phone,
+                            )
+                        except Exception as switch_exc:
+                            logger.warning(
+                                "[Codex][Browser] 接码平台换号失败，将尝试下一 CDK：%s",
+                                " ".join(str(switch_exc).split())[:240],
+                            )
+                            sms_provider.cancel(activation_id, http)
+                            activation_id, phone = None, ""
+                    else:
+                        sms_provider.cancel(activation_id, http)
+                        activation_id, phone = None, ""
                 if attempt < max_retries:
                     _refresh_add_phone_for_retry(driver, reason=str(exc)[:120])
                 _sleep_before_phone_retry(attempt, max_retries)
-        raise RuntimeError(f"Roxy 手机验证重试 {max_retries} 次仍失败，最后错误：{last_err}")
+        last_summary = " ".join(str(last_err or "未知错误").split())[:360]
+        raise RuntimeError(f"Roxy 手机验证重试 {max_retries} 次仍失败，最后错误：{last_summary}")
     finally:
         try:
             http.close()

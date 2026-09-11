@@ -1,8 +1,25 @@
 import inspect
+import logging
 from unittest.mock import patch
 
 from core import codex_retry_service
 from core.codex_oauth import run_codex_oauth
+
+
+def test_retry_log_context_captures_info_and_compacts_multiline(tmp_path):
+    path = tmp_path / "retry.log"
+    core_logger = logging.getLogger("core")
+    previous_level = core_logger.level
+    try:
+        core_logger.setLevel(logging.WARNING)
+        with codex_retry_service._RetryLogContext(path):
+            logging.getLogger("core.retry-log-test").info("step one\ncountry list\nstep two")
+        content = path.read_text(encoding="utf-8")
+        assert "[INFO] step one country list step two" in content
+        assert content.count("\n") == 1
+        assert core_logger.level == logging.WARNING
+    finally:
+        core_logger.setLevel(previous_level)
 
 
 def test_codex_retry_settings_are_exposed_in_config_editor():
