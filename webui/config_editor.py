@@ -161,6 +161,10 @@ EDITABLE_FIELDS = [
         "label": "回调优先读取轻量 Session API", "help": "仅 stable/throttle 注册模式生效；OAuth 回调后直接读取 /api/auth/session，成功时跳过 ChatGPT SPA 首页资源，失败自动回退",
     },
     {
+        "key": "REGISTRATION_BLOCK_POST_AUTH_SPA", "file": "traffic.py", "type": "bool", "group": "功能开关",
+        "label": "OTP 后阻断首页 SPA 静态包", "help": "仅 stable/throttle 注册模式生效；资料提交前阻断回调后的 ChatGPT JS/CSS 静态包，Session API、Auth 和挑战请求保持放行",
+    },
+    {
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },

@@ -121,6 +121,8 @@ REGISTRATION_BLOCK_ANALYTICS=True
 REGISTRATION_BLOCK_MEDIA=True
 # OAuth 回调后优先直接读取 /api/auth/session，成功时跳过 ChatGPT SPA 首页资源；失败自动回退
 REGISTRATION_SESSION_API_FIRST=True
+# OTP 后提前阻断 ChatGPT 首页 JS/CSS 静态包；Session API、Auth 和挑战请求保持放行
+REGISTRATION_BLOCK_POST_AUTH_SPA=True
 # 可选：仅 throttle 模式拦截 .css；默认关闭，建议先对比挑战通过率
 REGISTRATION_BLOCK_STYLESHEETS=False
 ```

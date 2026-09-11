@@ -11,10 +11,22 @@ from config.traffic import (
 )
 from core.traffic_optimizer import (
     blocked_url_patterns,
+    install_post_auth_spa_block,
     install_playwright_network_optimization,
     install_selenium_network_optimization,
     should_block_url,
 )
+
+
+def test_post_auth_spa_block_adds_only_late_stage_bundle_patterns():
+    driver = Mock()
+    with patch("config.traffic.REGISTRATION_TRAFFIC_MODE", "throttle"):
+        assert install_post_auth_spa_block(driver) is True
+
+    call = next(item for item in driver.execute_cdp_cmd.call_args_list if item.args[0] == "Network.setBlockedURLs")
+    patterns = call.args[1]["urls"]
+    assert "*://chatgpt.com/_next/static/*" in patterns
+    assert not any("/api/auth/session" in item for item in patterns)
 
 
 def test_traffic_optimizer_blocks_optional_hosts_but_keeps_core_and_challenge_urls():

@@ -32,6 +32,10 @@ REGISTRATION_BLOCK_STYLESHEETS: bool = False
 # 仅 stable/throttle 生效；失败会回退原有首页导航，便于逐步验证。
 REGISTRATION_SESSION_API_FIRST: bool = True
 
+# 完成 OTP 后，注册表单已不再依赖 ChatGPT 首页脚本。此时可提前阻断 OAuth
+# 回调后的 SPA 静态包，避免重定向发生到 session 读取之间下载数 MB 资源。
+REGISTRATION_BLOCK_POST_AUTH_SPA: bool = True
+
 # stable 与 throttle 都阻断的低风险遥测主机。
 REGISTRATION_ANALYTICS_HOSTS: tuple[str, ...] = (
     "browser-intake-datadoghq.com",
@@ -88,6 +92,14 @@ REGISTRATION_MEDIA_EXTENSIONS: tuple[str, ...] = (
 
 REGISTRATION_STYLESHEET_EXTENSIONS: tuple[str, ...] = (".css",)
 
+REGISTRATION_POST_AUTH_SPA_URLS: tuple[str, ...] = (
+    "*://chatgpt.com/_next/static/*",
+    "*://chatgpt.com/assets/*.js*",
+    "*://chatgpt.com/assets/*.css*",
+    "*://chatgpt.com/*/*.js*",
+    "*://chatgpt.com/*/*.css*",
+)
+
 # Source map 是开发诊断资源；样式表默认保留，显式开启后才会在 throttle 中拦截。
 REGISTRATION_THROTTLE_ONLY_EXTENSIONS: tuple[str, ...] = (
     ".map",
@@ -135,4 +147,5 @@ apply_env_overrides(globals(), {
     "REGISTRATION_BLOCK_MEDIA": "bool",
     "REGISTRATION_BLOCK_STYLESHEETS": "bool",
     "REGISTRATION_SESSION_API_FIRST": "bool",
+    "REGISTRATION_BLOCK_POST_AUTH_SPA": "bool",
 })

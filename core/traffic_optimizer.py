@@ -170,6 +170,28 @@ def optimization_snapshot(target) -> dict:
     return {}
 
 
+def install_post_auth_spa_block(driver) -> bool:
+    """Block only the SPA bundles that become optional after OTP/profile input."""
+    if not _enabled() or not bool(getattr(_cfg, "REGISTRATION_BLOCK_POST_AUTH_SPA", True)):
+        return False
+    patterns = blocked_url_patterns() + [
+        str(item).strip()
+        for item in (getattr(_cfg, "REGISTRATION_POST_AUTH_SPA_URLS", ()) or ())
+        if str(item).strip()
+    ]
+    patterns = list(dict.fromkeys(patterns))
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": patterns})
+        handle = TrafficOptimizationHandle(True, "cdp", "Roxy post-auth", patterns, mode=_mode())
+        _store_handle(driver, handle)
+        logger.info("[Roxy] OTP 后追加阻断 ChatGPT SPA 静态包，共 %s 条规则", len(patterns))
+        return True
+    except Exception as exc:
+        logger.info("[Roxy] OTP 后 SPA 静态包阻断未安装，沿用原流程：%s", str(exc)[:180])
+        return False
+
+
 def install_selenium_network_optimization(driver, *, label: str = "Roxy") -> TrafficOptimizationHandle:
     """通过 Selenium CDP 为 Roxy/Chromium 会话安装 URL 阻断规则。"""
     patterns = blocked_url_patterns()

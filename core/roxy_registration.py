@@ -3126,6 +3126,11 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         # about-you / profile 信息页：必须完成或确认已有登录态，不能静默跳过。
         logger.info("[Roxy注册] 开始等待资料页/登录态")
         _check_manual_stop()
+        try:
+            from core.traffic_optimizer import install_post_auth_spa_block
+            install_post_auth_spa_block(driver)
+        except Exception:
+            logger.debug("[Roxy注册] OTP 后 SPA 静态包阻断跳过", exc_info=True)
         profile_submitted = _complete_profile_page(driver, name, birthday, timeout=60)
         if profile_submitted:
             create_acknowledged = True
