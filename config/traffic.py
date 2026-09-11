@@ -24,6 +24,10 @@ REGISTRATION_BLOCK_ANALYTICS: bool = True
 # 因此 Cloudflare/Turnstile 的 document/script/xhr 仍完整保留。
 REGISTRATION_BLOCK_MEDIA: bool = True
 
+# 样式表不是注册 API 的依赖，但部分挑战页面可能依赖其布局。默认关闭，
+# 仅在 throttle 模式且显式开启时拦截，便于按环境回滚并对比注册成功率。
+REGISTRATION_BLOCK_STYLESHEETS: bool = False
+
 # stable 与 throttle 都阻断的低风险遥测主机。
 REGISTRATION_ANALYTICS_HOSTS: tuple[str, ...] = (
     "browser-intake-datadoghq.com",
@@ -78,7 +82,9 @@ REGISTRATION_MEDIA_EXTENSIONS: tuple[str, ...] = (
     ".woff", ".woff2", ".ttf", ".otf", ".mp4", ".webm", ".mp3", ".m4a",
 )
 
-# Source map 是开发诊断资源；核心 CSS 保留，避免改变元素可见性和挑战布局。
+REGISTRATION_STYLESHEET_EXTENSIONS: tuple[str, ...] = (".css",)
+
+# Source map 是开发诊断资源；样式表默认保留，显式开启后才会在 throttle 中拦截。
 REGISTRATION_THROTTLE_ONLY_EXTENSIONS: tuple[str, ...] = (
     ".map",
 )
@@ -123,4 +129,5 @@ apply_env_overrides(globals(), {
     "REGISTRATION_TRAFFIC_OPTIMIZATION": "bool",
     "REGISTRATION_BLOCK_ANALYTICS": "bool",
     "REGISTRATION_BLOCK_MEDIA": "bool",
+    "REGISTRATION_BLOCK_STYLESHEETS": "bool",
 })

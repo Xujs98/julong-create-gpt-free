@@ -119,6 +119,8 @@ CHATGPT_AUTH_BOOTSTRAP_ENABLED=True
 REGISTRATION_TRAFFIC_OPTIMIZATION=True
 REGISTRATION_BLOCK_ANALYTICS=True
 REGISTRATION_BLOCK_MEDIA=True
+# 可选：仅 throttle 模式拦截 .css；默认关闭，建议先对比挑战通过率
+REGISTRATION_BLOCK_STYLESHEETS=False
 ```
 
 代理池建议在 WebUI「配置 → 代理」中填写，每行一个代理地址。也可以在 `.env` 使用带换行转义的值：

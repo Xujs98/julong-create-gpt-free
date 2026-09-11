@@ -78,6 +78,12 @@ def _media_patterns() -> list[str]:
             for item in (getattr(_cfg, "REGISTRATION_THROTTLE_ONLY_EXTENSIONS", ()) or ())
             if str(item).strip()
         )
+        if bool(getattr(_cfg, "REGISTRATION_BLOCK_STYLESHEETS", False)):
+            extensions.extend(
+                str(item).strip().lower()
+                for item in (getattr(_cfg, "REGISTRATION_STYLESHEET_EXTENSIONS", ()) or ())
+                if str(item).strip()
+            )
     return [f"*://{host}/*{extension}*" for host in hosts for extension in extensions]
 
 
@@ -134,9 +140,17 @@ def should_block_url(url: str, *, resource_type: str | None = None) -> bool:
     media_types = {"image", "media", "font", "texttrack"}
     if resource_type and str(resource_type).lower() in media_types:
         return True
+    if (
+        _mode() == "throttle"
+        and bool(getattr(_cfg, "REGISTRATION_BLOCK_STYLESHEETS", False))
+        and str(resource_type or "").lower() == "stylesheet"
+    ):
+        return True
     extensions = list(getattr(_cfg, "REGISTRATION_MEDIA_EXTENSIONS", ()) or ())
     if _mode() == "throttle":
         extensions.extend(getattr(_cfg, "REGISTRATION_THROTTLE_ONLY_EXTENSIONS", ()) or ())
+        if bool(getattr(_cfg, "REGISTRATION_BLOCK_STYLESHEETS", False)):
+            extensions.extend(getattr(_cfg, "REGISTRATION_STYLESHEET_EXTENSIONS", ()) or ())
     return any(path.endswith(str(extension).lower()) for extension in extensions)
 
 

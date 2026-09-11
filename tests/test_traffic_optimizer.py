@@ -25,6 +25,14 @@ def test_traffic_optimizer_blocks_optional_hosts_but_keeps_core_and_challenge_ur
         assert should_block_url("https://auth-cdn.oaistatic.com/assets/logo.webp", resource_type="image")
         assert not should_block_url("https://auth-cdn.oaistatic.com/assets/login.js", resource_type="script")
         assert not should_block_url("https://auth.openai.com/api/accounts/email-otp/validate", resource_type="xhr")
+
+    with patch("config.traffic.REGISTRATION_TRAFFIC_MODE", "throttle"), patch(
+        "config.traffic.REGISTRATION_BLOCK_STYLESHEETS", True
+    ):
+        assert should_block_url("https://auth.openai.com/assets/login.css", resource_type="stylesheet")
+        assert should_block_url("https://chatgpt.com/assets/app.css", resource_type="stylesheet")
+        assert not should_block_url("https://auth.openai.com/api/accounts/email-otp/validate", resource_type="xhr")
+        assert "*://chatgpt.com/*.css*" in blocked_url_patterns()
         assert not should_block_url("https://challenges.cloudflare.com/turnstile/v0/api.js", resource_type="script")
         assert blocked_url_patterns()
 
