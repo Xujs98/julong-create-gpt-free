@@ -18,6 +18,10 @@ try:
     from curl_cffi import requests as curl_requests
 except Exception:  # pragma: no cover - WebUI 环境未装依赖时标准库兜底
     curl_requests = None
+try:
+    import requests as http_requests
+except Exception:  # pragma: no cover
+    http_requests = None
 
 from config import extract_link as cfg
 from core import db, extract_link_registry, pp_extract_protocol
@@ -364,11 +368,152 @@ def _run_protocol_once(*, access_token: str, service: dict, account_id: int, ema
     return {"job_id": f"pp-{account_id}-{int(time.time())}", "result": result, "logs": []}
 
 
+def _momo_session():
+    if curl_requests is not None:
+        return curl_requests.Session(impersonate="chrome")
+    if http_requests is not None:
+        return http_requests.Session()
+    return None
+
+
+def _momo_json(session, method: str, url: str, *, payload: dict | None = None, timeout: int = 30) -> dict:
+    if session is None:
+        req = Request(url, data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+                      headers={"Accept": "application/json", "Content-Type": "application/json"},
+                      method=method.upper())
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    else:
+        resp = session.request(method.upper(), url, json=payload, timeout=timeout)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"error": (getattr(resp, "text", "") or "")[:500]}
+        if not 200 <= resp.status_code < 300:
+            raise RuntimeError(data.get("error") or f"MoMo HTTP {resp.status_code}")
+    if not isinstance(data, dict):
+        raise RuntimeError("MoMo 返回格式无效")
+    if data.get("ok") is False:
+        raise RuntimeError(_extract_error_message(data) or "MoMo 请求失败")
+    return data
+
+
+def _momo_result(task: dict) -> dict:
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    momo_url = str(result.get("momo_url") or task.get("momo_url") or "").strip()
+    if not momo_url:
+        raise RuntimeError(str(task.get("error") or "MoMo 未返回链接"))
+    return {**result, "momo_url": momo_url, "long_url": momo_url, "copy_paste": momo_url}
+
+
+def _run_momo_bulk(*, entries: list[dict], service: dict, checkout_proxy: str, update_proxy: str) -> None:
+    """一次提交最多 100 个 Token，MoMo 服务端负责排队；本地只轮询任务结果。"""
+    base = str(service.get("api_base") or _runtime_setting("EXTRACT_LINK_MOMO_BASE", "https://dasaobi.online")).rstrip("/")
+    timeout = _int_setting("EXTRACT_LINK_REQUEST_TIMEOUT", 30, 5, 300)
+    session = _momo_session()
+    try:
+        payload = {
+            "access_tokens": [str(item["access_token"]) for item in entries],
+            "checkout_proxy": checkout_proxy,
+            "update_proxy": update_proxy,
+        }
+        response = _momo_json(session, "POST", f"{base}/api/tasks/batch", payload=payload, timeout=timeout)
+        remote_tasks = response.get("tasks") if isinstance(response.get("tasks"), list) else []
+        if len(remote_tasks) != len(entries):
+            raise RuntimeError(f"MoMo 仅接受 {len(remote_tasks)}/{len(entries)} 个任务")
+        mapping = {}
+        for item, remote in zip(entries, remote_tasks):
+            task_id = str((remote or {}).get("task_id") or "").strip()
+            if not task_id:
+                raise RuntimeError("MoMo 返回任务缺少 task_id")
+            mapping[task_id] = item
+            db.update_account_extract(item["account_id"], {"ok": False, "status": "running", "job_id": task_id,
+                "link_type": "momo", "service_id": service.get("id"), "service_name": service.get("name"),
+                "mode": "momo", "message": "MoMo 任务已提交，等待远端队列", "progress": int((remote or {}).get("progress") or 0)})
+        pending = set(mapping)
+        while pending:
+            for task_id in list(pending):
+                item = mapping[task_id]
+                try:
+                    task = _momo_json(session, "GET", f"{base}/api/tasks/{quote(task_id, safe='')}", timeout=timeout)
+                    status = str(task.get("status") or "").lower()
+                    if status in {"queued", "running", "cancel_requested"}:
+                        db.update_account_extract(item["account_id"], {"ok": False, "status": "running", "job_id": task_id,
+                            "message": str(task.get("stage") or "MoMo 任务运行中"), "progress": int(task.get("progress") or 0)})
+                        continue
+                    if status == "succeeded":
+                        result = _momo_result(task)
+                        db.update_account_extract(item["account_id"], {"ok": True, "status": "success", "job_id": task_id,
+                            "link_type": "momo", "service_id": service.get("id"), "service_name": service.get("name"),
+                            "mode": "momo", "result": result, "message": "MoMo 提链成功", "progress": 100})
+                        _append_log(item["email"], f"MoMo 提链成功 job={task_id}")
+                        if bool(result.get("payment_completed") or result.get("paid") or task.get("payment_completed")):
+                            db.update_account_completion_status(item["account_id"], status_name="payment", enabled=True)
+                    else:
+                        reason = str(task.get("error") or task.get("message") or f"MoMo 任务状态: {status}")[:500]
+                        db.update_account_extract(item["account_id"], {"ok": False, "status": "failed", "job_id": task_id,
+                            "service_id": service.get("id"), "service_name": service.get("name"), "mode": "momo",
+                            "error": reason, "message": reason, "progress": 100})
+                        _append_log(item["email"], f"MoMo 提链失败 job={task_id}: {reason}", level="ERROR")
+                    pending.discard(task_id)
+                except Exception as exc:
+                    db.update_account_extract(item["account_id"], {"ok": False, "status": "failed", "job_id": task_id,
+                        "service_id": service.get("id"), "service_name": service.get("name"), "mode": "momo",
+                        "error": f"{type(exc).__name__}: {str(exc)[:450]}", "message": "MoMo 轮询失败", "progress": 100})
+                    pending.discard(task_id)
+            if pending:
+                time.sleep(2)
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {str(exc)[:450]}"
+        for item in entries:
+            db.update_account_extract(item["account_id"], {"ok": False, "status": "failed", "error": reason,
+                "message": reason, "progress": 100, "service_id": service.get("id"), "service_name": service.get("name"), "mode": "momo"})
+            _append_log(item["email"], f"MoMo 批量提交失败：{reason}", level="ERROR")
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+        for _ in entries:
+            _release_queue_slot()
+
+
+def enqueue_momo_bulk(*, entries: list[dict], checkout_proxy: str | None = None, update_proxy: str | None = None) -> dict:
+    if not entries or len(entries) > 100:
+        return {"accepted": False, "error": "MoMo 单次最多提交 100 个账号"}
+    service = extract_link_registry.resolve_service(mode="momo", provider="momo-public")
+    checkout = str(checkout_proxy or _runtime_setting("EXTRACT_LINK_MOMO_CHECKOUT_PROXY", "") or "").strip()
+    update = str(update_proxy or _runtime_setting("EXTRACT_LINK_MOMO_UPDATE_PROXY", "") or "").strip()
+    if not checkout or not update:
+        return {"accepted": False, "error": "请先配置 MoMo Checkout Proxy 和 Update Proxy"}
+    claimed = []
+    try:
+        for item in entries:
+            if not _try_acquire_queue_slot():
+                raise RuntimeError("提链队列已满")
+            if not db.claim_account_extract(item["account_id"], trigger=item.get("trigger", "manual_bulk"), link_type="momo",
+                service_id="momo-public", service_name=service.get("name"), mode="momo"):
+                _release_queue_slot(); continue
+            claimed.append(item)
+        if not claimed:
+            return {"accepted": False, "busy": True, "error": "账号均已在提链中"}
+        for item in claimed:
+            _append_log(item["email"], "MoMo 批量任务已入队", clear=True)
+        future = _EXECUTOR.submit(_run_momo_bulk, entries=claimed, service=service, checkout_proxy=checkout, update_proxy=update)
+        return {"accepted": True, "mode": "momo", "provider": "momo-public", "service_name": service.get("name"),
+                "started": [{"id": x["account_id"], "email": x["email"]} for x in claimed], "future": future}
+    except Exception:
+        for item in claimed:
+            db.update_account_extract(item["account_id"], {"ok": False, "status": "failed", "error": "MoMo 批量任务提交失败", "progress": 100})
+            _release_queue_slot()
+        raise
+
+
 def _validate_extract_result(result: dict | None) -> dict:
     payload = result if isinstance(result, dict) else {}
     link_fields = (
         "long_url", "copy_paste", "paypal_authorize_url", "hosted_checkout_url",
-        "image_url_png", "image_url_svg",
+        "image_url_png", "image_url_svg", "momo_url",
     )
     if not any(str(payload.get(key) or "").strip() for key in link_fields):
         raise RuntimeError("提链服务返回成功，但结果中没有可复制的链接或二维码")

@@ -927,13 +927,24 @@ EDITABLE_FIELDS = [
     # ---- 提链 ----
     {
         "key": "EXTRACT_LINK_MODE", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链方式", "help": "API提链=使用已保存的第三方提链服务；协议提链=使用项目内置协议实现",
-        "choices": ["api", "protocol"],
-        "choice_labels": {"api": "API提链", "protocol": "协议提链"},
+        "label": "提链方式", "help": "使用 MoMo 公益提链；一次最多提交 100 个账号，由 MoMo 服务端排队",
+        "choices": ["momo"], "choice_labels": {"momo": "MoMo 公益提链"},
     },
     {
         "key": "EXTRACT_LINK_PROVIDER", "file": "extract_link.py", "type": "str", "group": "提链",
-        "label": "提链服务", "help": "通用提链列表中当前选中的 API 或协议服务标识",
+        "label": "提链服务", "help": "固定为 MoMo 公益提链",
+    },
+    {
+        "key": "EXTRACT_LINK_MOMO_CHECKOUT_PROXY", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "MoMo Checkout Proxy", "help": "提交给 MoMo 创建 Checkout 的越南 rotating 代理",
+    },
+    {
+        "key": "EXTRACT_LINK_MOMO_UPDATE_PROXY", "file": "extract_link.py", "type": "str", "group": "提链",
+        "label": "MoMo Update Proxy", "help": "提交给 MoMo 更新 Checkout 的越南 rotating 代理",
+    },
+    {
+        "key": "EXTRACT_LINK_MOMO_WORKERS", "file": "extract_link.py", "type": "int", "group": "提链",
+        "label": "MoMo 本地轮询并发", "help": "仅控制结果轮询，不限制 MoMo 服务端批量提交；建议 7",
     },
     {
         "key": "EXTRACT_LINK_BILLING_COUNTRY", "file": "extract_link.py", "type": "str", "group": "提链",

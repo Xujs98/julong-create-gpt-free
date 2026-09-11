@@ -19,12 +19,13 @@ API_SERVICES_ENV = "EXTRACT_LINK_API_SERVICES_JSON"
 SUPPORTED_API_LINK_TYPES = {"pix", "upi", "kakao_pay", "ideal"}
 BUILTIN_PROTOCOL_SERVICES = (
     {
-        "id": "pp",
-        "name": "PP提链",
-        "mode": "protocol",
-        "protocol": "pp",
+        "id": "momo-public",
+        "name": "MoMo 公益提链",
+        "mode": "momo",
+        "protocol": "momo",
+        "api_base": "https://dasaobi.online",
         "requires_cdk": False,
-        "description": "项目内置 PayPal 协议提链，无需 CDK 配额",
+        "description": "固定越南 VN + MoMo，支持 Checkout Proxy 与 Update Proxy",
     },
 )
 
@@ -106,22 +107,8 @@ def _legacy_api_service() -> dict[str, Any] | None:
 
 
 def list_services(*, mask_secrets: bool = True) -> list[dict[str, Any]]:
+    # 公益 MoMo 是唯一可选提链服务；旧 API/协议配置不再暴露到配置页或运行时。
     services = [dict(item) for item in BUILTIN_PROTOCOL_SERVICES]
-    api_services = []
-    seen = set()
-    for raw in _raw_api_services():
-        try:
-            service = _normalize_api_service(raw, existing=raw)
-        except ValueError:
-            continue
-        if service["id"] in seen:
-            continue
-        seen.add(service["id"])
-        api_services.append(service)
-    legacy = _legacy_api_service()
-    if legacy and legacy["id"] not in seen:
-        api_services.append(legacy)
-    services.extend(api_services)
     if mask_secrets:
         for service in services:
             if service.get("mode") == "api":
@@ -144,10 +131,10 @@ def get_service(service_id: str, *, mode: str | None = None) -> dict[str, Any] |
 
 def resolve_service(*, mode: str | None = None, provider: str | None = None) -> dict[str, Any]:
     load_env(override=True)
-    selected_mode = str(mode or os.getenv("EXTRACT_LINK_MODE", "protocol") or "protocol").strip().lower()
-    selected_provider = str(provider or os.getenv("EXTRACT_LINK_PROVIDER", "pp") or "pp").strip().lower()
-    if selected_mode not in {"api", "protocol"}:
-        raise ValueError("提链方式无效，仅支持 api / protocol")
+    selected_mode = str(mode or os.getenv("EXTRACT_LINK_MODE", "momo") or "momo").strip().lower()
+    selected_provider = str(provider or os.getenv("EXTRACT_LINK_PROVIDER", "momo-public") or "momo-public").strip().lower()
+    if selected_mode not in {"api", "protocol", "momo"}:
+        raise ValueError("提链方式无效，仅支持 momo")
     service = get_service(selected_provider, mode=selected_mode)
     if service:
         return service

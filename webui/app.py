@@ -1785,6 +1785,18 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not token:
             return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
         try:
+            selected = extract_link_registry.resolve_service()
+        except Exception:
+            selected = None
+        if selected and selected.get("mode") == "momo":
+            queued = extract_link_service.enqueue_momo_bulk(
+                entries=[{"account_id": int(acc.get("id")), "email": acc.get("email") or "", "access_token": token, "trigger": "manual"}],
+                checkout_proxy=data.get("checkout_proxy"), update_proxy=data.get("update_proxy"),
+            )
+            if not queued.get("accepted"):
+                return jsonify({"ok": False, **queued}), 400
+            return jsonify({"ok": True, "started": True, **{k: v for k, v in queued.items() if k != "future"}}), 202
+        try:
             queued = extract_link_service.enqueue_account_extract(
                 account_id=int(acc.get("id")),
                 email=acc.get("email") or "",
@@ -1812,6 +1824,43 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
         if len(ids) > 500:
             return jsonify({"ok": False, "error": "单次最多提链 500 个账号"}), 400
+
+        # MoMo 公益提链由远端一次接收最多 100 个 Token 并自行排队。
+        try:
+            selected = extract_link_registry.resolve_service()
+        except Exception:
+            selected = None
+        if selected and selected.get("mode") == "momo":
+            if len(ids) > 100:
+                return jsonify({"ok": False, "error": "MoMo 单次最多提交 100 个账号"}), 400
+            entries = []
+            skipped = []
+            seen = set()
+            for raw in ids:
+                try:
+                    acc_id = int(raw)
+                except Exception:
+                    skipped.append({"id": raw, "reason": "ID 非法"}); continue
+                if acc_id in seen: continue
+                seen.add(acc_id)
+                acc = db.get_account(acc_id)
+                if not acc:
+                    skipped.append({"id": acc_id, "reason": "账号不存在"}); continue
+                if not _is_extract_eligible(acc):
+                    skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "不是 free(可Plus试用)"}); continue
+                token = str(acc.get("access_token") or "").strip()
+                if not token:
+                    skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"}); continue
+                entries.append({"account_id": acc_id, "email": acc.get("email") or "", "access_token": token, "trigger": "manual_bulk"})
+            if not entries:
+                return jsonify({"ok": True, "started": [], "started_count": 0, "skipped": skipped, "skipped_count": len(skipped),
+                                "busy": [], "busy_count": 0, "failed": [], "failed_count": 0}), 202
+            queued = extract_link_service.enqueue_momo_bulk(entries=entries, checkout_proxy=data.get("checkout_proxy"), update_proxy=data.get("update_proxy"))
+            if not queued.get("accepted"):
+                return jsonify({"ok": False, **queued}), 400
+            return jsonify({"ok": True, "started": queued.get("started", []), "started_count": len(queued.get("started", [])),
+                            "busy": [], "busy_count": 0, "failed": [], "failed_count": 0,
+                            "skipped": skipped, "skipped_count": len(skipped), "mode": "momo", "provider": "momo-public"}), 202
 
         started = []
         busy = []

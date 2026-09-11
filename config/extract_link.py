@@ -2,9 +2,15 @@
 """Plus 试用通用提链配置。"""
 from config.env_loader import apply_env_overrides
 
-# 通用提链：protocol=项目内协议提链；api=已保存的提链 API 服务。
-EXTRACT_LINK_MODE: str = "protocol"
-EXTRACT_LINK_PROVIDER: str = "pp"
+# 通用提链：MoMo 公益提链。
+EXTRACT_LINK_MODE: str = "momo"
+EXTRACT_LINK_PROVIDER: str = "momo-public"
+
+# MoMo 公益提链服务与代理配置。
+EXTRACT_LINK_MOMO_BASE: str = "https://dasaobi.online"
+EXTRACT_LINK_MOMO_CHECKOUT_PROXY: str = ""
+EXTRACT_LINK_MOMO_UPDATE_PROXY: str = ""
+EXTRACT_LINK_MOMO_WORKERS: int = 7
 
 # 兼容旧版单 API 配置；新 API 服务通过 WebUI 保存到
 # EXTRACT_LINK_API_SERVICES_JSON，不再要求所有服务共用一组字段。
@@ -28,6 +34,10 @@ EXTRACT_LINK_EVENT_TIMEOUT: int = 180
 apply_env_overrides(globals(), {
     'EXTRACT_LINK_MODE': 'str',
     'EXTRACT_LINK_PROVIDER': 'str',
+    'EXTRACT_LINK_MOMO_BASE': 'str',
+    'EXTRACT_LINK_MOMO_CHECKOUT_PROXY': 'str',
+    'EXTRACT_LINK_MOMO_UPDATE_PROXY': 'str',
+    'EXTRACT_LINK_MOMO_WORKERS': 'int',
     'EXTRACT_LINK_API_BASE': 'str',
     'EXTRACT_LINK_CDK': 'str',
     'EXTRACT_LINK_TYPE': 'str',

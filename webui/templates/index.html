@@ -4453,7 +4453,14 @@ try {
   </div>
 </div>
 <div id="qrPanel" class="body hidden">
-  <h3>支付二维码 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
+  <h3>提链结果 <button class="btn" onclick="closeQrModal()">关闭</button></h3>
+  <div id="qrResultLink" class="qr-link" style="margin:8px 0;color:var(--text);font-weight:600;"></div>
+  <div style="display:flex;gap:8px;justify-content:center;margin:8px 0;">
+    <button class="btn" id="qrCopyLink" type="button">复制链接</button>
+    <button class="btn" id="qrOpenPayment" type="button">打开链接</button>
+    <button class="btn" id="qrMarkPayment" type="button">标记支付成功</button>
+  </div>
+  <div id="qrExpire" class="hint"></div>
   <img id="qrImage" alt="支付二维码">
   <a id="qrOpenLink" class="qr-link" href="#" target="_blank" rel="noopener noreferrer"></a>
 </div>
@@ -5605,9 +5612,30 @@ function openQrModal(url) {
   $('#qrPanel').classList.remove('hidden');
   updateModalScrollLock();
 }
+function openExtractResultModal(account) {
+  const link = account.extract_link_long_url || account.extract_link_copy_paste || '';
+  const qr = account.extract_link_image_url_png || account.extract_link_image_url_svg || '';
+  if (!link && !qr) { showToast('提链结果为空'); return; }
+  $('#qrResultLink').textContent = link || '暂无可复制链接';
+  $('#qrExpire').textContent = account.extract_link_expires_at ? `支付链接到期：${_fmtExtractExpire(account.extract_link_expires_at)}` : '支付链接未返回到期时间';
+  $('#qrImage').src = qr || '';
+  $('#qrImage').style.display = qr ? 'block' : 'none';
+  $('#qrOpenLink').href = link || qr || '#';
+  $('#qrOpenLink').textContent = qr ? '打开二维码图片' : '';
+  $('#qrCopyLink').onclick = async () => { if (link && await copyText(link, false)) showToast('提链地址已复制'); };
+  $('#qrOpenPayment').onclick = () => { if (link) window.open(link, '_blank', 'noopener'); };
+  $('#qrMarkPayment').onclick = async () => {
+    try { await api(`/api/accounts/${encodeURIComponent(account.id)}/completion-status`, {method:'POST', body:JSON.stringify({status:'payment', enabled:true})}); showToast('已点亮支付状态'); await loadAccounts({force:true}); }
+    catch (e) { showToast('点亮支付状态失败：' + e.message); }
+  };
+  $('#qrPanel').classList.remove('hidden'); updateModalScrollLock();
+}
 function closeQrModal() {
   $('#qrPanel').classList.add('hidden');
   $('#qrImage').removeAttribute('src');
+  $('#qrImage').style.display = '';
+  $('#qrResultLink').textContent = '';
+  $('#qrExpire').textContent = '';
   updateModalScrollLock();
 }
 
@@ -6238,7 +6266,10 @@ async function loadAccounts(options = {}) {
     const initialLimit = visibleAccountRegionSize();
     const res = await api(accountRegionRequestUrl('/api/accounts', baseOffset, initialLimit, true), {signal: controller.signal});
     if (generation !== accountsLoadGeneration) return;
+    const previousExtractStatuses = new Map((ACCOUNTS || []).map(item => [String(item.id), String(item.extract_link_status || '')]));
     ACCOUNTS = res.items || [];
+    const newlySucceeded = ACCOUNTS.some(item => String(item.extract_link_status || '') === 'success' && previousExtractStatuses.get(String(item.id)) !== 'success');
+    if (newlySucceeded) announceExtractSuccess();
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
     if (p.page > totalPages) { p.page = totalPages; return loadAccounts(); }
@@ -6277,6 +6308,21 @@ async function loadAccounts(options = {}) {
     }
     if (accountsLoadAbortController === controller) accountsLoadAbortController = null;
   }
+}
+
+let extractSuccessAudioContext = null;
+function announceExtractSuccess() {
+  try {
+    extractSuccessAudioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = extractSuccessAudioContext;
+    if (ctx.state === 'suspended') ctx.resume();
+    const osc = ctx.createOscillator(); const gain = ctx.createGain();
+    osc.type = 'sine'; osc.frequency.value = 880; gain.gain.value = 0.08;
+    osc.connect(gain); gain.connect(ctx.destination); osc.start();
+    const stop = () => { try { osc.stop(); } catch (_) {} window.removeEventListener('click', stop, true); };
+    window.addEventListener('click', stop, true);
+    setTimeout(stop, 1200);
+  } catch (_) {}
 }
 async function pollAccountPlanStatuses() {
   if (planStatusLoading || accountsLoading) return;
@@ -6883,7 +6929,7 @@ function _extractLinkCell(r) {
     const copy = link ? cbtn('复制提链', link, 'extract-link-btn extract-copy') : '';
     const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
     const expireHtml = expire ? `<div class="extract-link-expire" title="支付链接过期时间">支付到期：${esc(expire)}</div>` : '';
-    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link)}">提链成功${typ ? '(' + esc(typ) + ')' : ''}</span>${copy}${qrBtn}${expireHtml}</div>`;
+    return `<div class="extract-link-cell"><button type="button" class="pill status-success" data-extract-result="${esc(r.id)}" title="点击查看链接、二维码并标记支付">提链成功${typ ? '(' + esc(typ) + ')' : ''}</button>${copy}${qrBtn}${expireHtml}</div>`;
   }
   if (s === 'failed') {
     const reason = err || msg || '未知原因';
@@ -7711,6 +7757,13 @@ async function onAccountsBodyClick(e) {
   const extractBtn = e.target.closest('[data-extract-link]');
   if (extractBtn) {
     await extractOneLink(Number(extractBtn.dataset.extractLink), extractBtn);
+    return;
+  }
+
+  const extractResultBtn = e.target.closest('[data-extract-result]');
+  if (extractResultBtn) {
+    const account = ACCOUNTS.find(item => Number(item.id) === Number(extractResultBtn.dataset.extractResult));
+    if (account) openExtractResultModal(account);
     return;
   }
 
@@ -10683,30 +10736,16 @@ function _extractConfigValue(key, fallback = '') {
   return field ? field.value : fallback;
 }
 function renderExtractLinkSectionV2(fields) {
-  const mode = String(_extractConfigValue('EXTRACT_LINK_MODE', 'protocol') || 'protocol');
-  const provider = String(_extractConfigValue('EXTRACT_LINK_PROVIDER', 'pp') || 'pp');
-  const services = (EXTRACT_LINK_SERVICES || []).filter(item => item.mode === mode);
-  const cards = services.length ? services.map(item => {
-    const active = String(item.id) === provider;
-    const meta = item.mode === 'protocol' ? (item.description || '内置协议提链') : `${item.api_base || ''} · ${item.link_type || 'pix'} · 并发 ${item.workers || 1}`;
-    return `<div class="config-service-v2-card${active ? ' is-active' : ''}">
-      <button type="button" class="config-service-v2-card-main" data-extract-provider="${attrEsc(item.id)}" data-extract-provider-mode="${attrEsc(item.mode)}"><b>${esc(item.name)}</b><div class="hint">${esc(meta)}</div></button>
-      ${item.mode === 'api' && !item.legacy ? `<button type="button" class="btn" data-delete-extract-api="${attrEsc(item.id)}">删除</button>` : ''}
-    </div>`;
-  }).join('') : '<div class="muted" style="padding:12px 0;">还没有已保存的 API 提链服务，请点击“添加提链 API”。</div>';
+  const mode = 'momo';
+  const provider = 'momo-public';
   const editable = fields.filter(f => !['EXTRACT_LINK_MODE','EXTRACT_LINK_PROVIDER'].includes(f.key));
   const switches = editable.filter(f => f.type === 'bool');
   const inputs = editable.filter(f => f.type !== 'bool');
   return `<section class="config-section-v2" id="${esc(configGroupSlug('提链'))}" data-config-section="提链">
-    ${renderConfigSectionHead('提链', '通用提链可选择 API 提链或项目内置协议提链；PP提链无需 CDK 配额。')}
-    <div class="config-subtabs-v2"><button type="button" class="config-subtab-v2 is-active">通用提链</button></div>
+    ${renderConfigSectionHead('提链', 'MoMo 公益提链固定使用越南 VN + MoMo；最多一次提交 100 个账号，任务排队与并发由 MoMo 服务端处理。')}
+    <div class="config-subtabs-v2"><button type="button" class="config-subtab-v2 is-active">MoMo 公益提链</button></div>
     <input type="hidden" data-key="EXTRACT_LINK_MODE" value="${attrEsc(mode)}"><input type="hidden" data-key="EXTRACT_LINK_PROVIDER" value="${attrEsc(provider)}">
-    <div class="config-mode-v2">
-      <button type="button" class="config-ep-select-item${mode === 'api' ? ' is-active' : ''}" data-extract-mode="api">API提链</button>
-      <button type="button" class="config-ep-select-item${mode === 'protocol' ? ' is-active' : ''}" data-extract-mode="protocol">协议提链</button>
-    </div>
-    <div class="config-service-v2-list">${cards}</div>
-    ${mode === 'api' ? '<div class="config-inline-action-v2"><button type="button" class="btn" id="btnAddExtractLinkApiV2">添加提链 API</button></div>' : ''}
+    <div class="config-service-v2-list"><div class="config-service-v2-card is-active"><div class="config-service-v2-card-main"><b>MoMo 公益提链</b><div class="hint">https://dasaobi.online · Checkout Proxy / Update Proxy · 远端批量排队</div></div></div></div>
     ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, {withIcon:false})).join('')}</div>` : ''}
     ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
     ${renderConfigSectionActionsV2()}
