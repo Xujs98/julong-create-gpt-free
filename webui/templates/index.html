@@ -9256,24 +9256,42 @@ function parseImportTextV2(text, source) {
   const expected = source === 'outlook' ? 4 : 2;
   const invalid = [];
   let valid = 0;
+  const normalizeValue = (value, isUrl = false) => {
+    let normalized = String(value || '').trim();
+    if (isUrl) {
+      const markdown = normalized.match(/^\[[^\]]*\]\((https?:\/\/[^)\s]+)\)$/i);
+      if (markdown) normalized = markdown[1];
+      else if (normalized.startsWith('<') && normalized.endsWith('>')) normalized = normalized.slice(1, -1).trim();
+    }
+    return normalized.replace(/\\([@_&?=:/%.#-])/g, '$1');
+  };
   input.forEach(item => {
     const line = item.text;
     const delimiter = ['----', '====', ...(source === 'icloud' ? ['---'] : [])]
       .map(value => ({value, index: line.indexOf(value)}))
       .filter(item => item.index >= 0)
       .sort((left, right) => left.index - right.index || right.value.length - left.value.length)[0]?.value || '';
-    const parts = delimiter ? line.split(delimiter).map(part => part.trim()) : [line];
+    let parts = delimiter ? line.split(delimiter).map(part => part.trim()) : [line];
+    if (source === 'icloud') {
+      const first = line.match(/={4}|-{3,4}/);
+      if (first?.index !== undefined) {
+        const emailPart = line.slice(0, first.index).trim();
+        const tail = line.slice(first.index + first[0].length).trim();
+        if (/^(?:https?:\/\/|data:|<https?:\/\/|\[[^\]]*\]\(https?:\/\/)/i.test(tail)) {
+          parts = line.split(first[0]).map(part => part.trim());
+        } else {
+          for (const boundary of tail.matchAll(/={4}|-{3,4}/g)) {
+            const candidateUrl = tail.slice((boundary.index || 0) + boundary[0].length).trim();
+            if (IMPORT_URL_RE_V2.test(normalizeValue(candidateUrl, true))) {
+              parts = [emailPart, tail.slice(0, boundary.index).trim(), candidateUrl];
+              break;
+            }
+          }
+        }
+      }
+    }
     const errors = [];
     if (parts.length < expected) errors.push(`字段不足（需要至少 ${expected} 段）`);
-    const normalizeValue = (value, isUrl = false) => {
-      let normalized = String(value || '').trim();
-      if (isUrl) {
-        const markdown = normalized.match(/^\[[^\]]*\]\((https?:\/\/[^)\s]+)\)$/i);
-        if (markdown) normalized = markdown[1];
-        else if (normalized.startsWith('<') && normalized.endsWith('>')) normalized = normalized.slice(1, -1).trim();
-      }
-      return normalized.replace(/\\([@_&?=:/%.#-])/g, '$1');
-    };
     const email = normalizeValue(parts[0]);
     const second = normalizeValue(parts[1], true);
     const third = normalizeValue(parts[2], true);

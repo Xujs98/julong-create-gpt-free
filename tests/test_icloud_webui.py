@@ -164,6 +164,40 @@ class ICloudWebUiTests(unittest.TestCase):
             }
         ])
 
+    @patch("webui.app.db.import_icloud_emails", return_value=(3, 0))
+    def test_import_route_accepts_mixed_icloud_dash_separators(self, import_icloud):
+        response = self.client.post(
+            "/api/outlook/import",
+            json={
+                "source": "icloud",
+                "text": "\n".join([
+                    (
+                        "mixed.one@icloud.com---tok_mixed_one----"
+                        "https://pickup.example/icloud/pickup#email=mixed.one%40icloud.com&key=tok_mixed_one"
+                    ),
+                    (
+                        "mixed.two@icloud.com----tok_mixed_two---"
+                        "https://pickup.example/icloud/pickup#email=mixed.two%40icloud.com&key=tok_mixed_two"
+                    ),
+                    (
+                        "legacy.extra@icloud.com----https://mail.example/pickup"
+                        "----account_access_token----totp_secret"
+                    ),
+                ]),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["valid_count"], 3)
+        records = import_icloud.call_args.args[0]
+        self.assertEqual(
+            [item["auth_token"] for item in records],
+            ["tok_mixed_one", "tok_mixed_two", ""],
+        )
+        self.assertEqual(records[2]["access_token"], "account_access_token")
+        self.assertEqual(records[2]["totp_secret"], "totp_secret")
+        self.assertTrue(all(item["code_url"].startswith("https://") for item in records))
+
     @patch("webui.app.db.list_icloud_email_pool")
     def test_icloud_pool_response_redacts_pickup_token(self, list_pool):
         list_pool.return_value = [{

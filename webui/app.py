@@ -144,6 +144,30 @@ def _normalize_import_value(value: str, *, url: bool = False) -> str:
     return re.sub(r"\\([@_&?=:/%.#-])", r"\1", text)
 
 
+def _split_email_import_line(line: str, source: str) -> tuple[str, list[str]]:
+    """Split one import row, including mixed three/four-dash iCloud separators."""
+    delimiters = ["----", "===="] + (["---"] if source == "icloud" else [])
+    matches = [(line.find(value), -len(value), value) for value in delimiters if value in line]
+    delimiter = min(matches)[2] if matches else ""
+    if not delimiter:
+        return "", [line]
+    if source != "icloud":
+        return delimiter, [part.strip() for part in line.split(delimiter)]
+
+    first = re.search(r"={4}|-{3,4}", line)
+    if first is None:
+        return delimiter, [part.strip() for part in line.split(delimiter)]
+    email = line[:first.start()].strip()
+    tail = line[first.end():].strip()
+    if re.match(r"(?i)^(?:https?://|data:|<https?://|\[[^\]]*\]\(https?://)", tail):
+        return first.group(0), [part.strip() for part in line.split(first.group(0))]
+    for boundary in re.finditer(r"={4}|-{3,4}", tail):
+        candidate_url = tail[boundary.end():].strip()
+        if _IMPORT_URL_RE.fullmatch(_normalize_import_value(candidate_url, url=True)):
+            return first.group(0), [email, tail[:boundary.start()].strip(), candidate_url]
+    return delimiter, [part.strip() for part in line.split(delimiter)]
+
+
 def _parse_email_import_text(text: str, source: str) -> dict:
     """解析并校验邮箱素材，返回统计信息、有效记录及逐行错误。"""
     source = str(source or "").strip().lower()
@@ -156,10 +180,7 @@ def _parse_email_import_text(text: str, source: str) -> dict:
         if not line or line.startswith("#"):
             continue
         input_count += 1
-        delimiters = ["----", "===="] + (["---"] if source == "icloud" else [])
-        matches = [(line.find(value), -len(value), value) for value in delimiters if value in line]
-        delimiter = min(matches)[2] if matches else ""
-        parts = [part.strip() for part in line.split(delimiter)] if delimiter else [line]
+        delimiter, parts = _split_email_import_line(line, source)
         errors = []
         if len(parts) < expected:
             errors.append(f"字段不足（需要至少 {expected} 段）")
