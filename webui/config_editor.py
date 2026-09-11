@@ -157,6 +157,10 @@ EDITABLE_FIELDS = [
         "label": "阻断媒体资源（高级）", "help": "仅 stable/throttle 注册模式生效；阻断图片、字体、音视频，Cloudflare/Turnstile 挑战域名保持放行",
     },
     {
+        "key": "REGISTRATION_SESSION_API_FIRST", "file": "traffic.py", "type": "bool", "group": "功能开关",
+        "label": "回调优先读取轻量 Session API", "help": "仅 stable/throttle 注册模式生效；OAuth 回调后直接读取 /api/auth/session，成功时跳过 ChatGPT SPA 首页资源，失败自动回退",
+    },
+    {
         "key": "REGISTRATION_DRIVER", "file": "roxybrowser.py", "type": "str", "group": "注册方式",
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },

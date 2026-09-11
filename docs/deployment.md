@@ -216,8 +216,8 @@ Docker 使用 `linux-arm64`，而部分旧版 Roxy Chrome（例如 152）没有�
 
 Docker 的 Roxy 会话同样执行「注册模式」对应的 CDP 请求规则。注册固定从
 `chatgpt.com/auth/login` 进入，以保留完整 OAuth/挑战上下文；OAuth 回调进入
-ChatGPT 后会停止非必要的首页资源下载，再读取 `/api/auth/session`，核心 Auth、
-Sentinel 和挑战请求保持放行。
+ChatGPT 后在 stable/throttle 模式优先直接读取 `/api/auth/session`，成功时跳过
+SPA 首页资源；失败自动回退传统首页读取，核心 Auth、Sentinel 和挑战请求保持放行。
 
 启动 RoxyBrowser 后重建应用：
 

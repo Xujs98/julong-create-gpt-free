@@ -28,6 +28,10 @@ REGISTRATION_BLOCK_MEDIA: bool = True
 # 仅在 throttle 模式且显式开启时拦截，便于按环境回滚并对比注册成功率。
 REGISTRATION_BLOCK_STYLESHEETS: bool = False
 
+# OAuth 回调后优先直接读取轻量 session API，成功时跳过 ChatGPT SPA 首页资源。
+# 仅 stable/throttle 生效；失败会回退原有首页导航，便于逐步验证。
+REGISTRATION_SESSION_API_FIRST: bool = True
+
 # stable 与 throttle 都阻断的低风险遥测主机。
 REGISTRATION_ANALYTICS_HOSTS: tuple[str, ...] = (
     "browser-intake-datadoghq.com",
@@ -130,4 +134,5 @@ apply_env_overrides(globals(), {
     "REGISTRATION_BLOCK_ANALYTICS": "bool",
     "REGISTRATION_BLOCK_MEDIA": "bool",
     "REGISTRATION_BLOCK_STYLESHEETS": "bool",
+    "REGISTRATION_SESSION_API_FIRST": "bool",
 })

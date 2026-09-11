@@ -2,6 +2,7 @@
 """通过 RoxyBrowser 指纹浏览器 + Selenium 执行 ChatGPT 注册。"""
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -2808,6 +2809,38 @@ def _read_chatgpt_session_once(driver) -> dict | None:
     return None
 
 
+def _session_api_first_enabled() -> bool:
+    """Whether browser registration may skip the ChatGPT SPA bootstrap."""
+    try:
+        from config import traffic as _traffic_cfg
+        return (
+            _traffic_cfg.normalize_registration_traffic_mode() != "default"
+            and bool(getattr(_traffic_cfg, "REGISTRATION_SESSION_API_FIRST", True))
+        )
+    except Exception:
+        return False
+
+
+def _read_chatgpt_session_api_document(driver, timeout: int = 20) -> dict | None:
+    """Read the callback session from the JSON endpoint without loading the SPA."""
+    try:
+        _safe_get(
+            driver,
+            "https://chatgpt.com/api/auth/session",
+            timeout=max(10, int(timeout)),
+            attempts=1,
+            accept_hosts=("chatgpt.com",),
+        )
+        body = driver.execute_script("return document.body ? document.body.innerText : ''")
+        data = json.loads(str(body or "{}"))
+        if isinstance(data, dict) and data.get("accessToken"):
+            logger.info("%s 直接读取 /api/auth/session 成功，跳过 ChatGPT SPA 首页", _log_prefix(driver))
+            return data
+    except Exception as exc:
+        logger.info("%s 直接读取 session API 未命中，回退首页：%s", _log_prefix(driver), str(exc)[:160])
+    return None
+
+
 def _stop_chatgpt_document_loading(driver) -> None:
     """Stop optional ChatGPT SPA assets once the OAuth callback is present.
 
@@ -2865,6 +2898,7 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
     last_data = None
     forced_chatgpt_open = False
     stopped_chatgpt_document = False
+    session_api_attempted = False
 
     while time.time() < end:
         try:
@@ -2877,6 +2911,11 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
                 current = str(getattr(driver, "current_url", "") or "")
             elif time.time() >= auto_jump_end and not forced_chatgpt_open:
                 try:
+                    if _session_api_first_enabled() and not session_api_attempted:
+                        session_api_attempted = True
+                        data = _read_chatgpt_session_api_document(driver)
+                        if data:
+                            return data
                     logger.info("%s 未在 %ss 内观察到当前窗口跳转 chatgpt.com，主动打开 ChatGPT 内读取 session", _log_prefix(driver), int(auto_jump_wait or 15))
                     _safe_get(driver, "https://chatgpt.com/", timeout=35, attempts=2, accept_hosts=("chatgpt.com",))
                     forced_chatgpt_open = True
@@ -2889,6 +2928,12 @@ def _fetch_chatgpt_session(driver, timeout: int = 90, auto_jump_wait: int = 15) 
                 continue
 
         if 'chatgpt.com' in current:
+            if _session_api_first_enabled() and not session_api_attempted and "/api/auth/session" not in current:
+                session_api_attempted = True
+                data = _read_chatgpt_session_api_document(driver)
+                if data:
+                    return data
+                current = str(getattr(driver, "current_url", "") or "")
             if not stopped_chatgpt_document:
                 _stop_chatgpt_document_loading(driver)
                 stopped_chatgpt_document = True
