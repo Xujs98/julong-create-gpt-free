@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from contextvars import ContextVar
+from functools import wraps
 from urllib.parse import urlsplit
 
 import requests
@@ -16,6 +19,34 @@ from urllib3.connection import HTTPSConnection
 from urllib3.connectionpool import HTTPSConnectionPool
 
 logger = logging.getLogger(__name__)
+_diagnostic = ContextVar('proxy_diagnostic', default=None)
+
+
+class DiagnosticTimeout(TimeoutError):
+    """The diagnostic exhausted its shared request budget."""
+
+
+def diagnostic_run(seconds):
+    """Share a deadline and transport choice, but never share sample connections."""
+    def decorate(fn):
+        @wraps(fn)
+        def run(*args, **kwargs):
+            if _diagnostic.get() is not None:
+                return fn(*args, **kwargs)
+            token = _diagnostic.set({'deadline': time.monotonic() + seconds, 'compat': set()})
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _diagnostic.reset(token)
+        return run
+    return decorate
+
+
+def _request_options(kwargs, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise DiagnosticTimeout('代理检测时间预算已用尽')
+    return {**kwargs, 'timeout': remaining}
 
 
 class _HTTP10Tunnel(HTTPSConnection):
@@ -41,6 +72,8 @@ class _TunnelAdapter(HTTPAdapter):
 
 def safe_transport_error(exc: Exception) -> str:
     """Only controlled error labels/codes; exception URLs may contain secrets."""
+    if isinstance(exc, DiagnosticTimeout):
+        return '代理检测时间预算已用尽'
     text = str(exc).lower()
     status = re.search(r'\bhttp\s+(\d{3})\b', text)
     if status:
@@ -59,23 +92,44 @@ def safe_transport_error(exc: Exception) -> str:
 
 
 def compatible_get(session, url: str, **kwargs):
+    state = _diagnostic.get()
+    request_timeout = float(kwargs.get('timeout') or 12)
+    deadline = time.monotonic() + request_timeout
+    if state is not None:
+        deadline = min(deadline, state['deadline'])
+    proxy = (session.proxies or {}).get('https' if url.startswith('https:') else 'http')
     fallback = session.__dict__.get('_proxy_http_compat')
+    if fallback is None and state is not None and proxy in state['compat']:
+        fallback = _fallback_session(session, proxy)
     if fallback is not None:
-        return fallback.get(url, **kwargs)
+        return fallback.get(url, **_request_options(kwargs, deadline))
     try:
-        return session.get(url, **kwargs)
+        options = _request_options(kwargs, deadline)
+        if state is not None and isinstance(proxy, str) and urlsplit(proxy).scheme == 'http':
+            # Reserve time for the compatible transport instead of spending
+            # the entire operation budget on a known-problematic CONNECT.
+            options['timeout'] = min(options['timeout'], 4.0, request_timeout / 2)
+        return session.get(url, **options)
     except Exception as exc:
-        proxy = (session.proxies or {}).get('https' if url.startswith('https:') else 'http')
         code = getattr(exc, 'code', None)
         if not isinstance(proxy, str) or urlsplit(proxy).scheme != 'http' or code not in {5, 7, 28, 35, 56, 97}:
             raise
-        fallback = requests.Session()
-        fallback.trust_env = False
-        fallback.proxies = {'http': proxy, 'https': proxy}
-        fallback.mount('https://', _TunnelAdapter(max_retries=0))
-        session.__dict__['_proxy_http_compat'] = fallback
+        options = _request_options(kwargs, deadline)
+        fallback = _fallback_session(session, proxy)
         logger.info('[代理检测] HTTP CONNECT 兼容重试，保持同一出口；原因=%s', safe_transport_error(exc))
-        return fallback.get(url, **kwargs)
+        response = fallback.get(url, **options)
+        if state is not None:
+            state['compat'].add(proxy)
+        return response
+
+
+def _fallback_session(session, proxy):
+    fallback = requests.Session()
+    fallback.trust_env = False
+    fallback.proxies = {'http': proxy, 'https': proxy}
+    fallback.mount('https://', _TunnelAdapter(max_retries=0))
+    session.__dict__['_proxy_http_compat'] = fallback
+    return fallback
 
 
 def close_diagnostic_session(session):

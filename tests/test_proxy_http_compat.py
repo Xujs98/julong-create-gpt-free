@@ -17,7 +17,8 @@ def test_http_tunnel_fallback_preserves_proxy_tls_and_reuses_session():
         compatible_get(primary,'https://other.test',timeout=3)
     assert fallback.trust_env is False
     assert fallback.proxies==primary.proxies
-    fallback.get.assert_called_with('https://other.test',timeout=3)
+    assert fallback.get.call_args.args == ('https://other.test',)
+    assert 0 < fallback.get.call_args.kwargs['timeout'] <= 3
     primary.get.assert_called_once()
     close_diagnostic_session(primary)
     fallback.close.assert_called_once();primary.close.assert_called_once()

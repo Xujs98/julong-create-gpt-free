@@ -38,3 +38,13 @@ def test_proxy_warmup_running_status_shows_progress(template):
 
     assert "正在预热'}：已检查 ${task.completed || 0}/${task.total || 0}" in source
     assert "const isActive = ['running', 'cancelling'].includes(task.status)" in source
+
+
+def test_manual_proxy_test_separates_connectivity_from_login_and_has_deadline():
+    source = TEMPLATES[0].read_text(encoding="utf-8")
+
+    assert 'id="btnTestProxyLoginV2"' in source
+    assert "testCurrentProxyV2(check = 'connectivity')" in source
+    assert "body: JSON.stringify({proxy, check, timeout: 6})" in source
+    assert "const controller = new AbortController()" in source
+    assert "API 已提取成功，正在检测出口连通" in source

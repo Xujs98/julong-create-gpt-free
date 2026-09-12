@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import logging
 import random
 import re
 import threading
@@ -14,9 +15,11 @@ from curl_cffi.requests import Session
 
 from config import browser as _browser_cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
-from core.proxy_http_compat import compatible_get, close_diagnostic_session, safe_transport_error
+from core.proxy_http_compat import (compatible_get, close_diagnostic_session,
+                                    safe_transport_error, diagnostic_run, DiagnosticTimeout)
 
 __test__ = False
+logger = logging.getLogger(__name__)
 
 
 class ProxyTestError(RuntimeError):
@@ -97,8 +100,10 @@ def _normalize_geo(data: dict) -> dict:
     }
 
 
+@diagnostic_run(20)
 def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
     """通过指定代理访问 GeoIP 服务，成功时返回出口 IP 和位置。"""
+    raw_proxy = str(proxy_url or "").strip()
     try:
         proxy_url = normalize_proxy_url(proxy_url, default_scheme="auto")
     except ValueError as exc:
@@ -117,18 +122,34 @@ def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
     if parsed.scheme.lower() == "socks5":
         remote_dns = urlunsplit(("socks5h", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
         candidates = [remote_dns, proxy_url]
+    elif "://" not in raw_proxy:
+        # Legacy pool entries often omit a scheme.  Auto-detection normally
+        # identifies SOCKS5h, but a transient handshake failure can classify
+        # the same endpoint as HTTP. Try the other protocol only after the
+        # first candidate has failed; explicit user schemes are untouched.
+        alternate_scheme = "socks5h" if parsed.scheme.lower() in {"http", "https"} else "http"
+        alternate = normalize_proxy_url(raw_proxy, default_scheme=alternate_scheme)
+        if alternate and alternate not in candidates:
+            candidates.append(alternate)
     headers = {"Accept": "application/json", "User-Agent": getattr(_browser_cfg, "USER_AGENT", "Mozilla/5.0")}
     errors = []
     retry_budget = max(0, min(2, int(getattr(_browser_cfg, "IP_GEO_RETRIES", 1) or 0)))
+    # A dead pool entry must finish promptly instead of waiting for every
+    # endpoint and retry to consume the full timeout independently.
+    overall_deadline = time.monotonic() + max(6.0, min(15.0, timeout * 2.0))
     for candidate in candidates:
         session = Session(impersonate=getattr(_browser_cfg, "IMPERSONATE", "chrome"))
         session.proxies = {"http": candidate, "https": candidate}
         try:
             for endpoint in endpoints:
+                remaining = overall_deadline - time.monotonic()
+                if remaining <= 0:
+                    errors.append("代理检测总时限已到")
+                    break
                 endpoint_retried = False
                 while True:
                     try:
-                        response = compatible_get(session, endpoint, headers=headers, timeout=timeout)
+                        response = compatible_get(session, endpoint, headers=headers, timeout=min(timeout, max(0.01, remaining)))
                         if response.status_code != 200:
                             errors.append(f"{endpoint}: HTTP {response.status_code}")
                             break
@@ -147,12 +168,17 @@ def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
                             "dns_mode": "proxy" if urlsplit(candidate).scheme.lower() == "socks5h" else "default",
                             **geo,
                         }
+                    except DiagnosticTimeout:
+                        raise
                     except Exception as exc:
                         errors.append(f"{urlsplit(endpoint).hostname}: {safe_transport_error(exc)}")
                         if not endpoint_retried and retry_budget > 0 and _geo_error_retryable(exc):
                             endpoint_retried = True
                             retry_budget -= 1
                             time.sleep(0.2)
+                            remaining = overall_deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
                             continue
                         break
         finally:
@@ -371,6 +397,7 @@ def _anonymity_assessment(payload: dict, expected_ip: str) -> dict:
     }
 
 
+@diagnostic_run(45)
 def test_proxy_health(
     proxy_url: str,
     timeout: float | None = None,
@@ -391,11 +418,6 @@ def test_proxy_health(
     clean_threshold = max(0, min(100, int(min_clean_score if min_clean_score is not None else 80)))
     latency_limit = max(0.0, float(max_latency if max_latency is not None else 8.0))
     sample_count = max(1, min(5, int(exit_samples if exit_samples is not None else 3)))
-    try:
-        geo, sampled_exit_ips = _sample_proxy_exits(proxy_url, timeout=timeout, samples=sample_count)
-    except Exception as exc:
-        raise ProxyTestError(f"出口IP检测失败：{safe_transport_error(exc)}") from exc
-    stable_exit = len(set(sampled_exit_ips)) == 1
     normalized = normalize_proxy_url(proxy_url, default_scheme="auto")
     parsed = urlsplit(normalized or "")
     candidates = [normalized]
@@ -410,6 +432,36 @@ def test_proxy_health(
         session = Session(impersonate=getattr(_browser_cfg, "IMPERSONATE", "chrome"))
         session.proxies = {"http": candidate, "https": candidate}
         try:
+            logger.info('[代理检测] 检查业务入口（单出口共用 45 秒请求预算）')
+            started = time.monotonic()
+            response = compatible_get(session, endpoint, headers=headers, timeout=timeout, allow_redirects=True)
+            latency = max(0.0, time.monotonic() - started)
+            challenge, markers = _challenge_evidence(response)
+            status = int(response.status_code or 0)
+            final_url = str(getattr(response, "url", "") or endpoint)
+            business_ok = 200 <= status < 400
+            latency_ok = not latency_limit or latency <= latency_limit
+            if not business_ok or challenge:
+                reasons = ([f'http_{status}'] if not business_ok else []) + (['cloudflare_challenge'] if challenge else [])
+                logger.info('[代理检测] 目标入口 HTTP %s%s，结束当前出口检测', status, ' / Cloudflare 挑战' if challenge else '')
+                return {
+                    'ok': False, 'healthy': False, 'clean': False, 'removable': True,
+                    'verification_complete': False, 'inconclusive': False,
+                    'proxy': _masked_proxy(candidate), 'status': status,
+                    'latency_seconds': round(latency, 3), 'health_url': endpoint, 'final_url': final_url,
+                    'challenge_detected': challenge, 'challenge_markers': markers,
+                    'reason': ','.join(reasons),
+                    'steps': [
+                        {'name': '业务入口可达性', 'ok': business_ok, 'detail': f'HTTP {status}'},
+                        {'name': 'Cloudflare 挑战识别', 'ok': not challenge,
+                         'detail': ', '.join(markers) if markers else '未发现挑战特征'},
+                        {'name': '后续检查', 'ok': False,
+                         'detail': '目标入口未通过，已跳过信誉和匿名性检查'},
+                    ],
+                }
+            logger.info('[代理检测] 业务入口通过，开始 %s 次独立连接出口采样', sample_count)
+            geo, sampled_exit_ips = _sample_proxy_exits(proxy_url, timeout=timeout, samples=sample_count)
+            stable_exit = len(set(sampled_exit_ips)) == 1
             steps = [
                 {"name": "出口 IP 检查", "ok": True, "detail": geo.get("ip", "") or "已获取"},
                 {
@@ -425,6 +477,7 @@ def test_proxy_health(
             reputation = {"known": False, "high_risk": [], "network_risk": [], "penalty": 0, "clean": not reputation_endpoint}
             reputation_verified = not reputation_endpoint
             if reputation_endpoint:
+                logger.info('[代理检测] IP 信誉检查')
                 try:
                     reputation_payload, _ = _request_json(
                         session,
@@ -438,6 +491,8 @@ def test_proxy_health(
                     if not reputation["known"]:
                         detail = "接口未返回可识别的信誉字段"
                     steps.append({"name": "IP 信誉检查", "ok": reputation["clean"], "detail": detail})
+                except DiagnosticTimeout:
+                    raise
                 except Exception as exc:
                     reputation = {"known": False, "high_risk": [], "network_risk": [], "penalty": 10, "clean": False, "error": type(exc).__name__}
                     steps.append({"name": "IP 信誉检查", "ok": False, "detail": "信誉接口请求失败"})
@@ -445,6 +500,8 @@ def test_proxy_health(
             anonymity = {"origin": "", "leak_headers": [], "exit_consistent": True, "anonymous": True}
             anonymity_verified = not anonymity_endpoints
             anonymity_errors = []
+            if anonymity_endpoints:
+                logger.info('[代理检测] 匿名性检查')
             for anonymity_check_url in anonymity_endpoints:
                 try:
                     anonymity_payload, _ = _request_json(session, anonymity_check_url, timeout=timeout)
@@ -460,20 +517,14 @@ def test_proxy_health(
                         "detail": "未发现来源泄漏" if not problems else ", ".join(problems),
                     })
                     break
+                except DiagnosticTimeout:
+                    raise
                 except Exception as exc:
                     anonymity_errors.append(type(exc).__name__)
             if anonymity_endpoints and not anonymity_verified:
                 anonymity = {"origin": "", "leak_headers": [], "exit_consistent": False, "anonymous": False, "error": ",".join(anonymity_errors[-3:])}
                 steps.append({"name": "代理匿名性检查", "ok": False, "detail": f"{len(anonymity_endpoints)} 个匿名性接口均请求失败"})
 
-            started = time.monotonic()
-            response = compatible_get(session, endpoint, headers=headers, timeout=timeout, allow_redirects=True)
-            latency = max(0.0, time.monotonic() - started)
-            challenge, markers = _challenge_evidence(response)
-            status = int(response.status_code or 0)
-            final_url = str(getattr(response, "url", "") or endpoint)
-            business_ok = 200 <= status < 400
-            latency_ok = not latency_limit or latency <= latency_limit
             steps.extend([
                 {"name": "业务入口可达性", "ok": business_ok, "detail": f"HTTP {status}"},
                 {"name": "出口延迟检查", "ok": latency_ok, "detail": f"{latency:.2f}s / 上限 {latency_limit:.2f}s"},
@@ -556,6 +607,9 @@ def test_proxy_health(
                 "reason": "clean" if healthy else ",".join(dict.fromkeys(reasons)) or "not_clean",
                 "steps": steps,
             }
+        except DiagnosticTimeout as exc:
+            return {'ok': False, 'healthy': False, 'inconclusive': True, 'removable': False,
+                    'proxy': _masked_proxy(candidate), 'reason': safe_transport_error(exc)}
         except Exception as exc:
             errors.append(safe_transport_error(exc))
         finally:

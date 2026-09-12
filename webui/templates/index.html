@@ -3156,6 +3156,7 @@
     .config-inline-action-v2 { margin: 12px 24px 0; }
     .config-field-stat { margin-top: 7px; color: #7d8799; font-size: 11px; }
     .proxy-api-panel-v2 { display: grid; gap: 14px; margin: 16px 24px 0; }
+    #btnCancelWarmupProxyV2[hidden] { display: none !important; }
     .proxy-api-panel-v2[hidden], .proxy-pool-panel-v2[hidden], .proxy-api-field-v2[hidden] { display: none !important; }
     .proxy-api-grid-v2 { display: grid; grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(120px, 1fr)); gap: 12px; }
     .proxy-api-field-v2 { display: grid; gap: 7px; min-width: 0; color: #4a5870; font-size: 12px; font-weight: 650; }
@@ -11100,10 +11101,11 @@ function renderProxyTestToolsV2() {
     <div class="roxy-workspace-box" style="margin-top:18px;">
       <div>
         <b>当前代理测试</b>
-        <div class="hint">当前测试同时检查出口连通和换绑协议登录入口；代理池预热还会综合检查 IP 信誉、匿名性、出口一致性、延迟和 Cloudflare 挑战。</div>
+        <div class="hint">当前测试仅检查代理出口连通；协议登录单独测试。API 模式仅提取一次，不执行任务重试循环；固定池测试列表中的第一条代理。预热检查 IP 信誉、匿名性、出口一致性和业务入口。</div>
       </div>
       <div class="action-cell">
         <button class="btn" type="button" id="btnTestProxyV2">测试当前代理</button>
+        <button class="btn" type="button" id="btnTestProxyLoginV2">测试协议登录</button>
         <button class="btn" type="button" id="btnWarmupProxyV2">代理池预热</button>
         <button class="btn danger" type="button" id="btnCancelWarmupProxyV2" hidden>终止预热</button>
         <button class="btn" type="button" id="btnWarmupLogV2">预热日志</button>
@@ -11120,6 +11122,11 @@ function bindProxyTestToolsV2() {
   if (btn && !btn.dataset.bound) {
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => testCurrentProxyV2());
+  }
+  const loginBtn = $('#btnTestProxyLoginV2');
+  if (loginBtn && !loginBtn.dataset.bound) {
+    loginBtn.dataset.bound = '1';
+    loginBtn.addEventListener('click', () => testCurrentProxyV2('login'));
   }
   const warmupBtn = $('#btnWarmupProxyV2');
   if (warmupBtn && !warmupBtn.dataset.bound) {
@@ -11272,37 +11279,51 @@ async function warmupProxyPoolV2() {
 }
 $('#btnCloseProxyWarmupLog').addEventListener('click', closeProxyWarmupLogModal);
 
-async function testCurrentProxyV2() {
+async function testCurrentProxyV2(check = 'connectivity') {
   const btn = $('#btnTestProxyV2');
   const status = $('#proxyTestStatusV2');
   if (!btn || !status) return;
+  const loginBtn = $('#btnTestProxyLoginV2');
   btn.disabled = true;
+  if (loginBtn) loginBtn.disabled = true;
+  const controller = new AbortController();
+  const started = Date.now();
+  let stage = '';
+  const renderStage = () => { status.textContent = `${stage} · 已用 ${Math.floor((Date.now() - started) / 1000)} 秒`; };
+  const timer = setInterval(renderStage, 1000);
+  const deadline = setTimeout(() => controller.abort(), check === 'login' ? 60000 : 35000);
   let proxy = '';
   try {
     const mode = String(_configValueV2('PROXY_MODE') || 'pool').toLowerCase();
     if (mode === 'api') {
-      status.textContent = '正在从 API 获取临时代理出口...';
-      const preview = await api('/api/proxy/api-preview');
+      stage = '1/2 正在提取 API 出口（单次请求）';
+      renderStage();
+      const preview = await api('/api/proxy/api-preview', {signal: controller.signal});
       proxy = String(preview.proxy || '').trim();
     } else {
-      const dedicated = String(_configValueV2('PLAN_CHECK_PROXY') || '').trim();
       const pool = String(_configValueV2('PROXY_POOL') || '');
-      proxy = dedicated || pool.split(/\r?\n/).map(x => x.trim()).find(Boolean) || '';
+      proxy = pool.split(/\r?\n/).map(x => x.trim()).find(Boolean) || '';
     }
     if (!proxy) throw new Error('当前配置没有可测试的代理');
-    status.textContent = '正在测试代理出口...';
+    stage = check === 'login' ? '正在测试出口及协议登录入口' : (mode === 'api' ? '2/2 API 已提取成功，正在检测出口连通' : '正在检测固定池第一条代理出口');
+    renderStage();
     const r = await api('/api/proxy/test', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({proxy}),
+      body: JSON.stringify({proxy, check, timeout: 6}),
+      signal: controller.signal,
     });
     const location = [r.country || r.country_code, r.region, r.city].filter(Boolean).join(' / ') || '位置未知';
-    status.innerHTML = `<span style="color:var(--green);">可用</span> · IP: <span class="mono">${esc(r.ip || '-')}</span> · ${esc(location)}${r.timezone ? ` · ${esc(r.timezone)}` : ''}`;
-    showToast(`代理可用：${r.ip || '-'}`);
+    status.innerHTML = `<span style="color:var(--green);">${check === 'login' ? '协议登录通过' : '出口连通成功（未验证业务登录）'}</span> · IP: <span class="mono">${esc(r.ip || '-')}</span> · ${esc(location)}${r.timezone ? ` · ${esc(r.timezone)}` : ''}`;
+    showToast(`${check === 'login' ? '协议登录通过' : '出口连通成功'}：${r.ip || '-'}`);
   } catch(e) {
-    status.innerHTML = `<span style="color:var(--red);">测试失败：${esc(e.message)}</span>`;
+    const detail = e.name === 'AbortError' ? '检测超时，已结束等待；请查看代理连接或目标站状态' : e.message;
+    status.innerHTML = `<span style="color:var(--red);">${esc(stage)} · 测试失败：${esc(detail)}</span>`;
   } finally {
+    clearInterval(timer);
+    clearTimeout(deadline);
     btn.disabled = false;
+    if (loginBtn) loginBtn.disabled = false;
   }
 }
 

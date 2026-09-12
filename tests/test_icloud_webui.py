@@ -274,6 +274,21 @@ class ICloudWebUiTests(unittest.TestCase):
         self.assertEqual(body["ip"], "203.0.113.8")
         self.assertEqual(body["city"], "Tokyo")
 
+    @patch("core.proxy_test.probe_proxy_login_flow")
+    @patch("core.proxy_test.test_proxy")
+    def test_proxy_route_connectivity_does_not_run_protocol_login(self, test_proxy, login_probe):
+        test_proxy.return_value = {"ok": True, "ip": "203.0.113.9", "country_code": "JP"}
+
+        response = self.client.post(
+            "/api/proxy/test",
+            json={"proxy": "proxy.example:8080:user:pass", "check": "connectivity", "timeout": 6},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["check"], "connectivity")
+        test_proxy.assert_called_once_with("proxy.example:8080:user:pass", timeout=6)
+        login_probe.assert_not_called()
+
     @patch("webui.app.db.icloud_email_pool_summary", return_value={"total": 1, "available": 1, "used": 0, "failed": 0})
     @patch("webui.app.svc.submit_registration", return_value=[{"id": 1}])
     def test_jobs_explicit_icloud_source_skips_global_mailnest(self, submit_registration, _icloud_summary):

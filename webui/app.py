@@ -4174,9 +4174,13 @@ def create_app(auth_code: str | None = None) -> Flask:
         proxy_url = str(data.get("proxy") or "").strip()
         timeout = data.get("timeout")
         try:
-            from core.proxy_test import probe_proxy_login_flow
+            from core.proxy_test import probe_proxy_login_flow, test_proxy
 
-            result = probe_proxy_login_flow(proxy_url, timeout=timeout)
+            check = str(data.get('check') or 'login')
+            if check not in {'connectivity', 'login'}:
+                return jsonify({'ok': False, 'error': '未知代理检测类型'}), 400
+            result = (test_proxy if check == 'connectivity' else probe_proxy_login_flow)(proxy_url, timeout=timeout)
+            result['check'] = check
             return jsonify(result)
         except Exception as exc:
             logger.warning("代理测试失败: %s: %s", type(exc).__name__, exc)
@@ -4218,19 +4222,27 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.get("/api/proxy/api-preview")
     def api_proxy_api_preview():
-        """按已保存的 API 代理配置获取一个临时出口供 WebUI 测试。"""
+        """仅提取一次；手动诊断的健康结果由后续检测单独报告。"""
         try:
             from config import proxy as _proxy_cfg
+            from core.live_check_proxy import fetch_proxy_api
 
             if str(getattr(_proxy_cfg, "PROXY_MODE", "pool") or "pool").strip().lower() != "api":
                 return jsonify({"ok": False, "error": "当前代理来源不是 API 代理"}), 400
-            proxy = str(_proxy_cfg.pick_proxy() or "").strip()
+            region = str(_proxy_cfg.PROXY_API_REGION or 'Rand').strip() or 'Rand'
+            proxies = fetch_proxy_api(
+                region, api_url=_proxy_cfg.build_proxy_api_request_url(region=region),
+                timeout=max(0.5, min(10.0, float(_proxy_cfg.PROXY_API_TIMEOUT or 8))),
+            )
+            proxy = str(proxies[0] if proxies else '').strip()
             if not proxy:
                 return jsonify({"ok": False, "error": "代理 API 未返回可用代理"}), 502
-            return jsonify({"ok": True, "proxy": proxy})
+            return jsonify({"ok": True, "proxy": proxy, "extracted": True, "count": len(proxies)})
         except Exception as exc:
-            logger.warning("获取 API 代理预览失败: %s: %s", type(exc).__name__, exc)
-            return jsonify({"ok": False, "error": str(exc)}), 400
+            from core.proxy_http_compat import safe_transport_error
+            detail = str(exc) if isinstance(exc, ValueError) else safe_transport_error(exc)
+            logger.warning("获取 API 代理预览失败: %s", detail)
+            return jsonify({"ok": False, "error": detail}), 400
 
     @app.post("/api/proxy/warmup")
     def api_proxy_warmup():

@@ -166,6 +166,33 @@ class ProxyTestTests(unittest.TestCase):
         self.assertIn("rotating_exit", result["reason"])
         self.assertEqual(result["exit_samples"], ["203.0.113.9", "203.0.113.10", "203.0.113.9"])
 
+    @patch("core.proxy_test._request_json")
+    @patch("core.proxy_test._sample_proxy_exits")
+    @patch("core.proxy_test.Session")
+    def test_health_stops_after_business_challenge_without_extra_proxy_rounds(
+        self, session_class, sample_exits, request_json
+    ):
+        response = MagicMock(
+            status_code=403,
+            text="<html><title>Just a Moment...</title></html>",
+            headers={},
+            url="https://service.test/login",
+        )
+        session_class.return_value.get.return_value = response
+
+        result = run_proxy_health_test(
+            "http://proxy.test:8080",
+            health_url="https://service.test/login",
+            reputation_url="https://reputation.test/{ip}",
+            anonymity_url="https://echo.test/get",
+        )
+
+        self.assertFalse(result["healthy"])
+        self.assertEqual(result["status"], 403)
+        self.assertIn("cloudflare_challenge", result["reason"])
+        sample_exits.assert_not_called()
+        request_json.assert_not_called()
+
     @patch("core.proxy_test.test_proxy_health")
     def test_warmup_reports_all_healthy_and_target_clean(self, health):
         health.side_effect = [
@@ -288,6 +315,29 @@ class ProxyTestTests(unittest.TestCase):
         self.assertEqual(result["ip"], "203.0.113.10")
         self.assertEqual(session.get.call_count, 2)
         sleep.assert_called_once_with(0.2)
+
+    @patch("core.proxy_utils._endpoint_supports_socks5", return_value=False)
+    @patch("core.proxy_test.Session")
+    def test_legacy_pool_entry_falls_back_to_socks5h_after_auto_detection_failure(
+        self, session_class, _supports_socks5
+    ):
+        first = MagicMock()
+        first.get.side_effect = RuntimeError("curl: (28) Operation timed out")
+        second = MagicMock()
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"ip": "203.0.113.12", "country": "JP"}
+        second.get.return_value = response
+        session_class.side_effect = [first, second]
+
+        with patch("core.proxy_test._browser_cfg.IP_GEO_ENDPOINTS", ["https://geo.example/json"]), patch(
+            "core.proxy_test._browser_cfg.IP_GEO_RETRIES", 0
+        ):
+            result = run_proxy_test("proxy.example:8080:user:pass", timeout=2)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["proxy"], "socks5h://***:***@proxy.example:8080")
+        self.assertEqual(first.proxies["https"], "http://user:pass@proxy.example:8080")
+        self.assertEqual(second.proxies["https"], "socks5h://user:pass@proxy.example:8080")
 
     @patch("core.proxy_test.test_proxy")
     def test_pool_preflight_keeps_passed_proxy_and_reports_failed_proxy(self, test_one):
