@@ -207,3 +207,59 @@ def test_success_cleanup_still_honors_keep_open_setting():
 
     close.assert_not_called()
     delete.assert_not_called()
+
+
+def test_randomize_profile_uses_workspace_and_dir_id():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.request = Mock(return_value={"code": 0})
+    with patch("core.roxybrowser_client._cfg.ROXY_WORKSPACE_ID", "WORKSPACE"):
+        client.randomize_profile("123")
+    client.request.assert_called_once_with(
+        "POST", "/browser/random_env", json_body={"workspaceId": "WORKSPACE", "dirId": 123}
+    )
+
+
+def test_clear_profile_state_defaults_to_local_all_cache():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.request = Mock(return_value={"code": 0})
+    client.clear_profile_state("PROFILE")
+    client.request.assert_called_once_with(
+        "POST", "/browser/clear_local_cache", json_body={"dirIds": ["PROFILE"], "type": "all"}
+    )
+
+
+def test_update_profile_proxy_uses_mdf_and_tracks_proxy():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.request = Mock(return_value={"code": 0})
+    with patch("core.roxybrowser_client._cfg.ROXY_WORKSPACE_ID", "WORKSPACE"), patch(
+        "core.roxybrowser_client._cfg.ROXY_PROXY_CHECK_CHANNEL", ""
+    ):
+        client.update_profile_proxy("123", "socks5h://user:pass@proxy.test:3010")
+    body = client.request.call_args.kwargs["json_body"]
+    assert client.request.call_args.args == ("POST", "/browser/mdf")
+    assert body["workspaceId"] == "WORKSPACE"
+    assert body["dirId"] == 123
+    assert body["proxyInfo"]["protocol"] == "SOCKS5"
+    assert client.last_proxy_url == "socks5h://user:pass@proxy.test:3010"
+
+
+def test_persistent_cleanup_closes_but_never_deletes():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    opened = RoxyOpenResult("PROFILE", {}, created_by_run=True)
+    with patch("core.roxybrowser_client._cfg.ROXY_PERSIST_PROFILE_PER_ACCOUNT", True), patch.object(
+        client, "close_profile"
+    ) as close, patch.object(client, "delete_profile") as delete:
+        client.cleanup_profile(opened, force=True)
+    close.assert_called_once_with("PROFILE")
+    delete.assert_not_called()
+
+
+def test_persistent_mode_allows_opening_account_bound_profile():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    client.request = Mock(return_value={"code": 0, "data": {"debuggerAddress": "127.0.0.1:9222"}})
+    with patch("core.roxybrowser_client._cfg.ROXY_ONE_PROFILE_PER_ACCOUNT", True), patch(
+        "core.roxybrowser_client._cfg.ROXY_PERSIST_PROFILE_PER_ACCOUNT", True
+    ):
+        opened = client.open_profile(profile_id="PROFILE")
+    assert opened.profile_id == "PROFILE"
+    assert opened.created_by_run is False

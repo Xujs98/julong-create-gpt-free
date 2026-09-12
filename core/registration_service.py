@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from config import roxybrowser as _roxy_cfg
 from core import codex_retry_service, db
 
 logger = logging.getLogger(__name__)
@@ -692,6 +693,12 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                         "name": name,
                         "birthday": birthday,
                     }
+                    # Roxy 持久环境模式按账号邮箱绑定 dirId；其它驱动忽略该可选参数。
+                    driver_name = str(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "") or "").strip().lower()
+                    if bool(getattr(_roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)) and driver_name in {
+                        "roxy", "roxybrowser", "fingerprint", "browser",
+                    }:
+                        registration_kwargs["profile_binding_key"] = email
                     if registration_proxy:
                         registration_kwargs["proxy"] = registration_proxy
                     result = run_registration(**registration_kwargs)

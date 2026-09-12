@@ -538,6 +538,22 @@ EDITABLE_FIELDS = [
         "label": "一号一环境", "help": "每个账号强制创建新 Roxy Profile，用完关闭并删除，禁止复用固定环境",
     },
     {
+        "key": "ROXY_PERSIST_PROFILE_PER_ACCOUNT", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
+        "label": "账号持久环境模式", "help": "新增模式：每个账号绑定独立 Roxy 环境；任务结束关闭但不删除，下次开始前清理状态、刷新代理并随机指纹。关闭后保持原有新建/删除流程",
+    },
+    {
+        "key": "ROXY_RANDOM_ENV_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "随机指纹接口路径", "help": "默认 /browser/random_env",
+    },
+    {
+        "key": "ROXY_CLEAR_LOCAL_CACHE_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "清理环境接口路径", "help": "默认 /browser/clear_local_cache",
+    },
+    {
+        "key": "ROXY_MDF_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "编辑环境接口路径", "help": "默认 /browser/mdf；持久环境 API 代理模式用于写入新代理",
+    },
+    {
         "key": "ROXY_DELETE_PROFILE_AFTER_RUN", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
         "label": "结束后删除环境", "help": "一号一环境模式下，任务结束后删除本轮创建的 Roxy Profile",
     },

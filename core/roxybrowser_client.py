@@ -589,6 +589,52 @@ class RoxyBrowserClient:
             raise RuntimeError(f"Roxy 创建环境成功但未返回 dirId/profile_id: {result}")
         return profile_id
 
+    def randomize_profile(self, profile_id: str) -> dict:
+        """Refresh the fingerprint of an existing Roxy environment."""
+        if not profile_id:
+            raise ValueError("Roxy random_env 需要 profile_id")
+        body = {
+            "workspaceId": _workspace_id_value(),
+            "dirId": int(profile_id) if str(profile_id).isdigit() else profile_id,
+        }
+        path = str(getattr(_cfg, "ROXY_RANDOM_ENV_PATH", "/browser/random_env") or "/browser/random_env")
+        result = self.request("POST", path, json_body=body)
+        logger.info("[Roxy] 已刷新环境指纹：%s", profile_id)
+        return result
+
+    def clear_profile_state(self, profile_id: str, *, cloud: bool = False) -> dict:
+        """Clear cookies/cache/site storage while retaining the fingerprint."""
+        if not profile_id:
+            raise ValueError("Roxy clear_local_cache 需要 profile_id")
+        body = {
+            "dirIds": [int(profile_id) if str(profile_id).isdigit() else profile_id],
+            "type": "cloud" if cloud else "all",
+        }
+        if cloud:
+            body["workspaceId"] = _workspace_id_value()
+        path = str(getattr(_cfg, "ROXY_CLEAR_LOCAL_CACHE_PATH", "/browser/clear_local_cache") or "/browser/clear_local_cache")
+        result = self.request("POST", path, json_body=body)
+        logger.info("[Roxy] 已清理环境状态：profile=%s type=%s", profile_id, body["type"])
+        return result
+
+    def update_profile_proxy(self, profile_id: str, proxy: str) -> dict:
+        """Write a new proxy to an existing environment via /browser/mdf."""
+        if not profile_id:
+            raise ValueError("Roxy mdf 需要 profile_id")
+        selected = normalize_proxy_url(proxy, default_scheme="auto") or str(proxy or "").strip()
+        if not selected:
+            raise ValueError("持久环境模式下更新代理时代理为空")
+        body = {
+            "workspaceId": _workspace_id_value(),
+            "dirId": int(profile_id) if str(profile_id).isdigit() else profile_id,
+            "proxyInfo": _proxy_url_to_roxy_info(selected),
+        }
+        path = str(getattr(_cfg, "ROXY_MDF_PATH", "/browser/mdf") or "/browser/mdf")
+        result = self.request("POST", path, json_body=body)
+        self.last_proxy_url = selected
+        logger.info("[Roxy] 已更新环境代理：profile=%s proxy=%s", profile_id, _mask_proxy(selected))
+        return result
+
     @staticmethod
     def _normalize_profile_id(value: str | None) -> str:
         text = str(value or "").strip()
@@ -606,8 +652,9 @@ class RoxyBrowserClient:
     ) -> RoxyOpenResult:
         """打开 Roxy 环境；headless 显式传值时仅覆盖本次调用。"""
         one_profile = bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
+        persistent = bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False))
         configured_pid = self._normalize_profile_id(profile_id if profile_id is not None else getattr(_cfg, "ROXY_PROFILE_ID", ""))
-        if one_profile and configured_pid:
+        if one_profile and configured_pid and not persistent:
             raise RuntimeError(
                 "已启用 ROXY_ONE_PROFILE_PER_ACCOUNT=True（一号一环境），"
                 "不能配置/传入固定 ROXY_PROFILE_ID；请留空以便每个账号创建新环境。"
@@ -764,8 +811,15 @@ class RoxyBrowserClient:
             logger.warning("[Roxy] 删除环境失败：%s", exc)
 
     def cleanup_profile(self, opened: RoxyOpenResult | None, *, force: bool = False) -> None:
-        """任务结束清理；失败任务 ``force=True`` 时忽略保留现场配置并删除临时 Profile。"""
+        """任务结束清理；持久环境模式只关闭并保留绑定的 Profile。"""
         if not opened or not opened.profile_id:
+            return
+        if bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+            # This branch intentionally takes precedence over the historical
+            # keep-open/delete switches: the new mode guarantees a reusable
+            # account environment while preserving the old path when disabled.
+            self.close_profile(opened.profile_id)
+            logger.info("[Roxy] 持久环境模式保留环境（仅关闭）：%s", opened.profile_id)
             return
         keep_open = bool(getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
         if force and keep_open:

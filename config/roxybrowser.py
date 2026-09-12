@@ -95,6 +95,16 @@ ROXY_CREATE_RETRIES: int = 3
 #   False = 可复用 ROXY_PROFILE_ID 或只关闭不删除
 ROXY_ONE_PROFILE_PER_ACCOUNT: bool = True
 
+# 账号持久环境模式（独立于上面的历史生命周期开关）：开启后按账号绑定
+# 一个 Roxy dirId，任务结束只关闭不删除；下次任务开始前清理状态、刷新代理并
+# 调用 random_env。关闭后完全走原有新建/关闭/删除逻辑。
+ROXY_PERSIST_PROFILE_PER_ACCOUNT: bool = False
+
+# 持久环境模式使用的 Roxy 接口路径；不同版本可在 WebUI 中调整。
+ROXY_RANDOM_ENV_PATH: str = "/browser/random_env"
+ROXY_CLEAR_LOCAL_CACHE_PATH: str = "/browser/clear_local_cache"
+ROXY_MDF_PATH: str = "/browser/mdf"
+
 # 一号一环境结束后是否删除 Profile。建议保持 True。
 ROXY_DELETE_PROFILE_AFTER_RUN: bool = True
 
@@ -137,4 +147,4 @@ ROXY_PROFILE_CREATE_PAYLOAD: dict = {
 ROXY_CODEX_CALLBACK_TIMEOUT: int = 180
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_DEBUGGER_HOST': 'str', 'ROXY_DEBUGGER_RESOLVE_HOST': 'bool', 'ROXY_DOCKER_WEBDRIVER_URL': 'str', 'ROXY_CHROMEDRIVER_PATH': 'str', 'ROXY_DRIVER_CACHE_DIR': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_SELENIUM_TIMEOUT': 'int', 'ROXY_API_TIMEOUT': 'int', 'ROXY_OPEN_TIMEOUT': 'int', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})
+apply_env_overrides(globals(), {'REGISTRATION_DRIVER': 'str', 'ROXY_API_BASE': 'str', 'ROXY_API_TOKEN': 'str', 'ROXY_DEBUGGER_HOST': 'str', 'ROXY_DEBUGGER_RESOLVE_HOST': 'bool', 'ROXY_DOCKER_WEBDRIVER_URL': 'str', 'ROXY_CHROMEDRIVER_PATH': 'str', 'ROXY_DRIVER_CACHE_DIR': 'str', 'ROXY_PROFILE_ID': 'str', 'ROXY_WORKSPACE_ID': 'str', 'ROXY_PROJECT_ID': 'str', 'ROXY_WORKSPACE_LIST_PATH': 'str', 'ROXY_OPEN_PATH': 'str', 'ROXY_OPEN_HEADLESS': 'bool', 'ROXY_SELENIUM_TIMEOUT': 'int', 'ROXY_API_TIMEOUT': 'int', 'ROXY_OPEN_TIMEOUT': 'int', 'ROXY_CLOSE_PATH': 'str', 'ROXY_KEEP_BROWSER_OPEN': 'bool', 'ROXY_ONE_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_PERSIST_PROFILE_PER_ACCOUNT': 'bool', 'ROXY_RANDOM_ENV_PATH': 'str', 'ROXY_CLEAR_LOCAL_CACHE_PATH': 'str', 'ROXY_MDF_PATH': 'str', 'ROXY_DELETE_PROFILE_AFTER_RUN': 'bool', 'ROXY_RANDOM_OS_ON_CREATE': 'bool', 'ROXY_RANDOM_OS_CHOICES': 'str', 'ROXY_RANDOM_PROFILE_NAME_ON_CREATE': 'bool', 'ROXY_PROFILE_NAME_PREFIX': 'str', 'ROXY_CREATE_USE_PROXY_POOL': 'bool', 'ROXY_PROXY_CHECK_CHANNEL': 'str', 'ROXY_DELETE_PATH': 'str', 'ROXY_CODEX_CALLBACK_TIMEOUT': 'int'})

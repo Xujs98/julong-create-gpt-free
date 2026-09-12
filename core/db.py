@@ -50,8 +50,11 @@ _CODEX_DIR = _PROJECT_ROOT / "codex_accounts"
 # 导出状态单独存：{ "codex-邮箱-plan.json": {"exported_at": "...", "exported_count": N} }
 # 不污染 CPA 兼容的原文件
 _CODEX_EXPORT_STATE = _PROJECT_ROOT / "codex_导出状态.json"
+# 账号 -> Roxy dirId 绑定；SQLite 为权威存储时同时保留 JSON 兼容镜像。
+_ROXY_PROFILE_BINDINGS_FILE = _PROJECT_ROOT / "roxy_profile_bindings.json"
 _DOMAIN_EMAIL_JSON = _PROJECT_ROOT / "用于注册的域名邮箱.json"
 _GROUPS_JSON = _PROJECT_ROOT / "账号分组.json"
+_ROXY_PROFILE_BINDINGS_DOCUMENT = "roxy_profile_bindings"
 
 _SQLITE_PATH = _LEGACY_DATA_DIR / "registration.sqlite3"
 _DEFAULT_SQLITE_PATH = _SQLITE_PATH
@@ -62,6 +65,7 @@ _DEFAULT_ACCOUNTS_JSON = _ACCOUNTS_JSON
 _DEFAULT_JOBS_JSON = _JOBS_JSON
 _DEFAULT_REGISTRATION_BATCHES_JSON = _REGISTRATION_BATCHES_JSON
 _DEFAULT_CODEX_EXPORT_STATE = _CODEX_EXPORT_STATE
+_DEFAULT_ROXY_PROFILE_BINDINGS_FILE = _ROXY_PROFILE_BINDINGS_FILE
 _DEFAULT_DOMAIN_EMAIL_JSON = _DOMAIN_EMAIL_JSON
 _DEFAULT_GROUPS_JSON = _GROUPS_JSON
 _SQLITE_MIGRATION_MARKER = "json_to_sqlite_migration_completed_at"
@@ -224,6 +228,7 @@ def _sqlite_source_snapshot() -> tuple[dict[str, list[dict]], dict[str, Any]]:
     )
     documents = {
         "codex_export_state": _read_migration_value(_CODEX_EXPORT_STATE, dict, {}),
+        _ROXY_PROFILE_BINDINGS_DOCUMENT: _read_migration_value(_ROXY_PROFILE_BINDINGS_FILE, dict, {}),
     }
     return collections, documents
 
@@ -4532,6 +4537,74 @@ def _save_codex_export_state(state: dict) -> None:
     if _uses_sqlite(_CODEX_EXPORT_STATE, _DEFAULT_CODEX_EXPORT_STATE):
         _sqlite_store().replace_document("codex_export_state", state)
     _write_json(_CODEX_EXPORT_STATE, state)
+
+
+# ============================================================
+# RoxyBrowser 账号环境绑定
+# ============================================================
+
+def _normalize_roxy_binding_key(value: str) -> str:
+    """Return a stable, case-insensitive key for an account email."""
+    return str(value or "").strip().casefold()
+
+
+def _load_roxy_profile_bindings() -> dict[str, dict]:
+    if _uses_sqlite(_ROXY_PROFILE_BINDINGS_FILE, _DEFAULT_ROXY_PROFILE_BINDINGS_FILE):
+        data = _sqlite_store().load_document(_ROXY_PROFILE_BINDINGS_DOCUMENT, {})
+    else:
+        data = _read_json(_ROXY_PROFILE_BINDINGS_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def get_roxy_profile_binding(binding_key: str) -> dict | None:
+    """Load the persistent Roxy environment bound to one account."""
+    key = _normalize_roxy_binding_key(binding_key)
+    if not key:
+        return None
+    with _LOCK:
+        value = _load_roxy_profile_bindings().get(key)
+        return dict(value) if isinstance(value, dict) else None
+
+
+def set_roxy_profile_binding(binding_key: str, data: dict) -> dict:
+    """Atomically create/update one account -> Roxy dirId binding."""
+    key = _normalize_roxy_binding_key(binding_key)
+    if not key:
+        raise ValueError("Roxy 环境绑定需要账号邮箱")
+    if not isinstance(data, dict) or not str(data.get("profile_id") or "").strip():
+        raise ValueError("Roxy 环境绑定缺少 profile_id")
+    with _LOCK:
+        bindings = _load_roxy_profile_bindings()
+        value = dict(data)
+        value["profile_id"] = str(value["profile_id"]).strip()
+        value["binding_key"] = key
+        bindings[key] = value
+        if _uses_sqlite(_ROXY_PROFILE_BINDINGS_FILE, _DEFAULT_ROXY_PROFILE_BINDINGS_FILE):
+            _sqlite_store().replace_document(_ROXY_PROFILE_BINDINGS_DOCUMENT, bindings)
+        _write_json(_ROXY_PROFILE_BINDINGS_FILE, bindings)
+        return dict(value)
+
+
+def list_roxy_profile_bindings() -> dict[str, dict]:
+    with _LOCK:
+        return {
+            str(key): dict(value)
+            for key, value in _load_roxy_profile_bindings().items()
+            if isinstance(value, dict)
+        }
+
+
+def delete_roxy_profile_binding(binding_key: str) -> None:
+    key = _normalize_roxy_binding_key(binding_key)
+    if not key:
+        return
+    with _LOCK:
+        bindings = _load_roxy_profile_bindings()
+        if key in bindings:
+            bindings.pop(key, None)
+            if _uses_sqlite(_ROXY_PROFILE_BINDINGS_FILE, _DEFAULT_ROXY_PROFILE_BINDINGS_FILE):
+                _sqlite_store().replace_document(_ROXY_PROFILE_BINDINGS_DOCUMENT, bindings)
+            _write_json(_ROXY_PROFILE_BINDINGS_FILE, bindings)
 
 
 def list_codex_accounts() -> list[dict]:

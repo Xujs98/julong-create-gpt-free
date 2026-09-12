@@ -230,6 +230,7 @@ def run_registration(
     proxy: str = None,
     otp_code: str = None,
     batch_dir=None,
+    profile_binding_key: str | None = None,
 ):
     """
     执行完整的 ChatGPT 注册流程；按 ENABLE_CREATE_PASSWORD 选择密码或 OTP-only 分支。
@@ -265,6 +266,7 @@ def run_registration(
             proxy=proxy,
             otp_code=otp_code,
             batch_dir=batch_dir,
+            profile_binding_key=profile_binding_key,
         )
     if driver_mode in ("cloak", "cloakbrowser"):
         from core.cloakbrowser_registration import run_cloak_registration

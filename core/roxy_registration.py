@@ -7,6 +7,7 @@ import logging
 import random
 import re
 import string
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +21,20 @@ from core.session_state import build_saved_session, capture_browser_cookies
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 
 logger = logging.getLogger(__name__)
+
+# Prevent two concurrent jobs for the same/new account from creating separate
+# Roxy environments during the lookup-create-bind window.  The lock is held
+# only while preparing the environment; browser registration itself remains
+# concurrent for different accounts.
+_PROFILE_BINDING_PREPARE_LOCK = threading.Lock()
+_PROFILE_BINDING_LOCK_GUARD = threading.Lock()
+_PROFILE_BINDING_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _profile_binding_lock(binding_key: str) -> threading.Lock:
+    key = str(binding_key or "").strip().casefold()
+    with _PROFILE_BINDING_LOCK_GUARD:
+        return _PROFILE_BINDING_LOCKS.setdefault(key, threading.Lock())
 
 
 def _log_prefix(driver=None) -> str:
@@ -2991,7 +3006,15 @@ def _check_manual_stop() -> None:
         return
 
 
-def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = None, otp_code: str = None, batch_dir: Path | None = None) -> dict:
+def run_roxy_registration(
+    email: str,
+    name: str,
+    birthday: str,
+    proxy: str = None,
+    otp_code: str = None,
+    batch_dir: Path | None = None,
+    profile_binding_key: str | None = None,
+) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     if proxy is None:
         # 与纯协议/任务服务保持一致：未显式传入时从项目代理池取一个出口；
@@ -3007,8 +3030,74 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
     create_acknowledged = False
     openai_password: str | None = None
     task_succeeded = False
+    persistent_mode = bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False))
+    persistent_binding = None
+    fingerprint_generation = ""
+    binding_lock = None
+    if persistent_mode:
+        binding_lock = _profile_binding_lock(str(profile_binding_key or email or ""))
+        binding_lock.acquire()
     try:
-        opened = client.open_profile(proxy=proxy)
+        if persistent_mode:
+            # Email is the only stable account identifier available before the
+            # account row is created.  Never silently fall back to a global
+            # ROXY_PROFILE_ID in this mode, otherwise two accounts can share a
+            # fingerprint environment.
+            binding_key = str(profile_binding_key or email or "").strip()
+            if not binding_key:
+                raise RuntimeError("持久环境模式需要 profile_binding_key（通常为账号邮箱）")
+            with _PROFILE_BINDING_PREPARE_LOCK:
+                try:
+                    from core import db as _db
+                    persistent_binding = _db.get_roxy_profile_binding(binding_key)
+                except Exception as exc:
+                    raise RuntimeError(f"读取 Roxy 账号环境绑定失败：{type(exc).__name__}: {exc}") from exc
+
+                profile_id = str((persistent_binding or {}).get("profile_id") or "").strip()
+                if profile_id:
+                    # A previous run leaves the profile closed.  The close call
+                    # is idempotent on Roxy and also handles an interrupted run.
+                    client.close_profile(profile_id)
+                    client.clear_profile_state(profile_id, cloud=False)
+                    if proxy:
+                        from config import proxy as _proxy_cfg
+                        if str(getattr(_proxy_cfg, "PROXY_MODE", "pool") or "pool").strip().lower() == "api":
+                            client.update_profile_proxy(profile_id, proxy)
+                        else:
+                            client.last_proxy_url = client.last_proxy_url or proxy
+                    client.randomize_profile(profile_id)
+                    fingerprint_generation = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    try:
+                        from core import db as _db
+                        refreshed = dict(persistent_binding or {})
+                        refreshed.update({"updated_at": fingerprint_generation, "fingerprint_generation": fingerprint_generation})
+                        persistent_binding = _db.set_roxy_profile_binding(binding_key, refreshed)
+                    except Exception as exc:
+                        logger.warning("[Roxy注册] 保存指纹刷新时间失败，继续使用已有绑定：%s", exc)
+                    logger.info("[Roxy注册] 复用账号持久环境：profile=%s key=%s", profile_id, binding_key)
+                    opened = client.open_profile(profile_id=profile_id, proxy=proxy)
+                else:
+                    profile_id = client.create_profile(proxy=proxy)
+                    # Persist immediately after creation so retries of a partially
+                    # completed registration reuse the same environment.
+                    from core import db as _db
+                    persistent_binding = _db.set_roxy_profile_binding(binding_key, {
+                        "profile_id": profile_id,
+                        "workspace_id": str(getattr(_cfg, "ROXY_WORKSPACE_ID", "") or ""),
+                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "last_proxy": client.last_proxy_url or proxy or "",
+                        "status": "active",
+                    })
+                    client.randomize_profile(profile_id)
+                    fingerprint_generation = time.strftime("%Y-%m-%dT%H:%M:%S")
+                    persistent_binding["fingerprint_generation"] = fingerprint_generation
+                    persistent_binding["updated_at"] = fingerprint_generation
+                    persistent_binding = _db.set_roxy_profile_binding(binding_key, persistent_binding)
+                    logger.info("[Roxy注册] 创建并绑定账号持久环境：profile=%s key=%s", profile_id, binding_key)
+                    opened = client.open_profile(profile_id=profile_id, proxy=proxy)
+        else:
+            opened = client.open_profile(proxy=proxy)
         try:
             from core.roxy_selenium import _running_in_container
             logger.info(
@@ -3266,12 +3355,28 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
                     "profile_id": opened.profile_id,
                     "open_result": opened.raw,
                     "proxy_used": client.last_proxy_url or proxy or "",
+                    "persistent_mode": persistent_mode,
+                    "profile_binding_key": str(profile_binding_key or email) if persistent_mode else "",
+                    "fingerprint_generation": fingerprint_generation,
                 },
                 "registration_password": openai_password,
                 "twofa": twofa_result,
                 "codex": codex_result,
             },
         )
+        if persistent_mode and persistent_binding:
+            try:
+                from core import db as _db
+                refreshed_binding = dict(persistent_binding)
+                refreshed_binding.update({
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "last_proxy": client.last_proxy_url or proxy or refreshed_binding.get("last_proxy", ""),
+                    "status": "active",
+                })
+                _db.set_roxy_profile_binding(str(profile_binding_key or email), refreshed_binding)
+                persistent_binding = refreshed_binding
+            except Exception as exc:
+                logger.warning("[Roxy注册] 更新账号环境绑定元数据失败，保留已有绑定：%s", exc)
         codex_ok = codex_result.get("ok") or codex_result.get("status") == "skipped"
         result = {
             "success": bool(codex_ok),
@@ -3303,10 +3408,12 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         return {"success": False, "email": email, "registration_traffic": failed_traffic, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
     finally:
         failed = not task_succeeded
-        if driver and (failed or not bool(_cfg.ROXY_KEEP_BROWSER_OPEN)):
+        if driver and (persistent_mode or failed or not bool(_cfg.ROXY_KEEP_BROWSER_OPEN)):
             try:
                 driver.quit()
             except Exception:
                 pass
         if opened is not None:
             client.cleanup_profile(opened, force=failed)
+        if binding_lock is not None:
+            binding_lock.release()
