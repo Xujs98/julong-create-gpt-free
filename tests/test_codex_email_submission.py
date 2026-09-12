@@ -53,6 +53,8 @@ def test_codex_totp_challenge_uses_saved_secret(monkeypatch):
     from core import db
     monkeypatch.setattr(db, "get_account_by_email", lambda _email: {"totp_secret": "TESTSECRET"})
     monkeypatch.setattr(mod.pyotp, "TOTP", lambda _secret: FakeTotp())
+    monkeypatch.setattr(mod, "_email_otp_page_state", lambda _driver: {"inputs": [{"autocomplete": "one-time-code"}]})
+    monkeypatch.setattr("core.account_export._totp_code_with_margin", lambda totp, **_kwargs: totp.now())
     monkeypatch.setattr(mod, "_clear_otp_inputs", lambda _driver: None)
     monkeypatch.setattr(mod, "_type_otp", lambda _driver, code: typed.append(code))
     monkeypatch.setattr(mod, "human_delay", lambda *_args, **_kwargs: None)

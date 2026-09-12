@@ -1315,16 +1315,87 @@ def _finish_consent_workspace(driver) -> str:
     return _wait_for_callback(driver, timeout=5)
 
 
+class _TotpAuthorizationRestartRequired(RuntimeError):
+    """The MFA document is an authorization error, not a code-entry form."""
+
+
+def _totp_challenge_stage(driver) -> str:
+    """Classify MFA using the current DOM; never log OTP values or auth URLs."""
+    current = str(getattr(driver, "current_url", "") or "")
+    if _is_callback_url(current):
+        return "advanced"
+    # A host-side callback without a listener can show Chrome's network-error
+    # document. Only accept it when the existing extractor proves the callback.
+    if current.startswith("chrome-error:"):
+        callback = _extract_callback_url_from_page(driver)
+        return "advanced" if _is_callback_url(callback) else "pending"
+    state = _email_otp_page_state(driver) or {}
+    inputs = state.get("inputs") or []
+    otp_inputs = [item for item in inputs if any(marker in " ".join(
+        str(item.get(key) or "") for key in ("type", "name", "id", "autocomplete", "inputmode")
+    ).lower() for marker in ("one-time-code", "numeric", "otp", "code", "tel"))]
+    has_form = bool(otp_inputs) or len(inputs) == 6
+    retry_action = any(
+        not item.get("disabled") and (
+            str(item.get("action") or "").strip().casefold() == "try again"
+            or str(item.get("text") or "").strip().casefold() in {
+                "try again", "重试", "再试一次", "thử lại", "もう一度試す",
+            }
+        ) for item in (state.get("buttons") or [])
+    )
+    # Auth can replace the form with a localized error document while keeping
+    # /mfa-challenge in the address bar. The stable action attribute survives.
+    if retry_action and not has_form:
+        return "auth_error"
+    path = urlparse(current).path.lower()
+    if "/mfa-challenge" in path:
+        if not has_form:
+            return "pending"
+        invalid = any(str(item.get("ariaInvalid") or "").lower() == "true" for item in otp_inputs)
+        return "rejected" if invalid or state.get("errors") else "challenge"
+    if any(part in path for part in (
+        "/consent", "/workspace", "/sign-in-with-chatgpt", "/add-phone", "/phone-verification",
+    )):
+        return "advanced"
+    if any(part in path for part in ("/error", "/log-in", "/login")):
+        return "auth_error"
+    return "pending"
+
+
+def _wait_totp_stage(driver, timeout: int, *, after_submit: bool = False) -> str:
+    end = time.monotonic() + max(1, int(timeout))
+    stage = "pending"
+    while time.monotonic() < end:
+        stage = _totp_challenge_stage(driver)
+        if stage in {"advanced", "auth_error", "rejected"}:
+            return stage
+        if stage == "challenge" and not after_submit:
+            return stage
+        time.sleep(0.5)
+    return stage
+
+
+def _require_totp_form(stage: str) -> bool:
+    if stage == "auth_error":
+        raise _TotpAuthorizationRestartRequired(
+            "Codex TOTP 授权页面进入错误状态（Try again/登录失效），需要重新建立授权会话"
+        )
+    if stage == "advanced":
+        logger.info("[Codex][Browser] TOTP 验证已进入后续授权阶段")
+        return False
+    if stage not in {"challenge", "rejected"}:
+        raise RuntimeError("Codex TOTP 页面等待超时，未出现可用验证码表单或后续授权阶段")
+    return True
+
+
 def _handle_totp_challenge(driver, email: str, timeout: int = 30) -> bool:
-    """提交账户已保存的 TOTP；返回是否遇到过 MFA challenge。"""
-    try:
-        current = str(driver.current_url or "").lower()
-    except Exception:
-        current = ""
+    """Submit stored TOTP only to a ready form, retrying with a fresh time step."""
+    current = str(getattr(driver, "current_url", "") or "").lower()
     if "/mfa-challenge" not in current:
         return False
 
     from core import db
+    from core.account_export import _totp_code_with_margin
 
     account = db.get_account_by_email(email) or {}
     secret = str(account.get("totp_secret") or "").strip()
@@ -1332,49 +1403,36 @@ def _handle_totp_challenge(driver, email: str, timeout: int = 30) -> bool:
         raise RuntimeError("Codex 登录需要 TOTP，但账户未保存 2FA 密钥")
 
     totp = pyotp.TOTP(secret)
+    last_step = None
     for attempt in range(1, 3):
-        remaining = totp.interval - (time.time() % totp.interval)
-        if remaining < 4:
-            time.sleep(remaining + 1)
-        code = totp.now()
+        if not _require_totp_form(_wait_totp_stage(driver, timeout)):
+            return True
+        step = int(time.time() // totp.interval)
+        code = _totp_code_with_margin(totp, force_next=step == last_step)
+        last_step = int(time.time() // totp.interval)
+        # Waiting for the next code may outlive a navigation/error transition.
+        if not _require_totp_form(_wait_totp_stage(driver, timeout)):
+            return True
         _clear_otp_inputs(driver)
-        filled = False
         try:
-            filled = bool(driver.execute_script(r"""
-            const code = String(arguments[0] || '');
-            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-              && getComputedStyle(el).visibility !== 'hidden' && !el.disabled && !el.readOnly;
-            const input = [...document.querySelectorAll('input')].find(el => visible(el)
-              && (el.matches('[autocomplete="one-time-code"],[inputmode="numeric"],[type="tel"]')
-                || /otp|totp|code/i.test(`${el.name} ${el.id} ${el.getAttribute('aria-label') || ''}`)));
-            if (!input) return false;
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-            input.focus();
-            if (setter) setter.call(input, code); else input.value = code;
-            input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:code}));
-            input.dispatchEvent(new Event('change', {bubbles:true}));
-            return input.value === code;
-            """, code))
-        except Exception:
-            filled = False
-        if not filled:
+            # Shared input handling supports both one input and six boxes.
             _type_otp(driver, code)
+        except Exception as exc:
+            if not _require_totp_form(_totp_challenge_stage(driver)):
+                return True
+            raise RuntimeError(f"Codex TOTP 输入失败（{type(exc).__name__}）") from None
         logger.info("[Codex][Browser] 已填写 TOTP（第 %s/2 次）", attempt)
         time.sleep(0.2)
         if not _click_if_present(driver, ["button[type='submit']", "//button[contains(., 'Continue')]", "//button[contains(., '继续')]"], timeout=8):
-            raise RuntimeError("Codex TOTP 页面找不到提交按钮")
-
-        end = time.time() + timeout
-        while time.time() < end:
-            current = str(driver.current_url or "").lower()
-            if "/mfa-challenge" not in current:
-                logger.info("[Codex][Browser] TOTP 验证通过")
+            if not _require_totp_form(_totp_challenge_stage(driver)):
                 return True
-            time.sleep(0.5)
-        logger.warning("[Codex][Browser] TOTP 提交后页面未跳转，准备使用下一时段验证码")
-    raise RuntimeError("Codex TOTP 连续两次验证未通过")
-
-
+            raise RuntimeError("Codex TOTP 页面找不到提交按钮")
+        stage = _wait_totp_stage(driver, timeout, after_submit=True)
+        if not _require_totp_form(stage):
+            return True
+        if attempt < 2:
+            logger.warning("[Codex][Browser] TOTP 验证尚未通过（%s），确认表单后使用新时段验证码重试", stage)
+    raise RuntimeError("Codex TOTP 连续两次验证未通过，请检查账户 2FA 密钥与系统时间")
 
 
 def clear_roxy_browser_auth_state(driver) -> None:
@@ -1556,6 +1614,11 @@ def _run_roxy_codex_oauth_once(
         )
         task_succeeded = True
         return result
+    except _TotpAuthorizationRestartRequired as exc:
+        logger.warning("[Codex][Browser] %s", exc)
+        result = proto._codex_result(status="failed", email=email, message=str(exc))
+        result["retry_reason"] = "totp_auth_error"
+        return result
     except AccountUnusableError as exc:
         logger.warning("[Codex][Browser] 账号已废：%s，%s", email, exc.error_code)
         return proto._codex_result(
@@ -1596,15 +1659,17 @@ def run_roxy_codex_oauth(
     clear_existing_state: bool = True,
     headless_override: bool | None = None,
 ) -> dict:
-    """指纹浏览器 Codex OAuth 入口；CPA callback 409 timeout 时重新开启一轮授权。"""
+    """CPA callback 超时或 TOTP 授权错误页时，最多重新建立一轮授权。"""
     from core import codex_oauth as proto
 
     max_rounds = 2
     last_result = None
+    retry_reason = ""
     for round_no in range(1, max_rounds + 1):
         if round_no > 1:
             logger.warning(
-                "[Codex][Browser] CPA callback 返回 Timeout waiting for OAuth callback，重新开启第 %s/%s 轮 Codex 授权：%s",
+                "[Codex][Browser] %s，重新开启第 %s/%s 轮 Codex 授权：%s",
+                "TOTP 授权页面错误" if retry_reason == "totp_auth_error" else "CPA callback 超时",
                 round_no, max_rounds, email,
             )
         result = _run_roxy_codex_oauth_once(
@@ -1615,17 +1680,22 @@ def run_roxy_codex_oauth(
             existing_driver=existing_driver,
             existing_opened=existing_opened,
             reuse_existing_profile=reuse_existing_profile,
-            clear_existing_state=clear_existing_state,
+            clear_existing_state=clear_existing_state or retry_reason == "totp_auth_error",
             headless_override=headless_override,
         )
         last_result = result
         if result.get("ok"):
             return result
         msg = result.get("message") or result.get("error") or ""
-        if not proto._is_cpa_callback_reauth_error(msg):
+        if result.get("retry_reason") == "totp_auth_error":
+            retry_reason = "totp_auth_error"
+        elif proto._is_cpa_callback_reauth_error(msg):
+            retry_reason = "cpa_callback_timeout"
+        else:
             return result
     if last_result:
         last_result = dict(last_result)
-        last_result["message"] = f"CPA callback 超时，已重新授权 {max_rounds} 轮仍失败：{last_result.get('message') or ''}"
+        reason = "TOTP 授权页面错误" if retry_reason == "totp_auth_error" else "CPA callback 超时"
+        last_result["message"] = f"{reason}，已重新授权 {max_rounds} 轮仍失败：{last_result.get('message') or ''}"
         return last_result
     return proto._codex_result(status="failed", email=email, message="CPA callback 超时，重新授权失败")
