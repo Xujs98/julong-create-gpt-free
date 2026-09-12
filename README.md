@@ -533,7 +533,9 @@ API 代理模式可使用 CliProxy 白名单接口。每个注册任务都会按
 
 ```dotenv
 PROXY_MODE=api
+# 旧版单 API 兼容字段；多 API 请在 WebUI 的 API管理中维护
 PROXY_API_URL=https://api.cliproxy.io/white/api?region=Rand&num=1&time=10&format=n&type=json
+PROXY_API_SOURCES_JSON=
 PROXY_API_REGION=JP
 PROXY_API_FORMAT=n
 PROXY_API_SESSION_TYPE=sticky
@@ -543,6 +545,14 @@ PROXY_API_NUM=1
 PROXY_API_TIMEOUT=8
 PROXY_API_MAX_ATTEMPTS=3
 ```
+
+自 2026.09.13.3 起，配置 → 代理池 → API代理中的 **API管理** 支持添加、编辑、删除、复制和打开多个 API。选中一个使用该项，选中多个时每次获取（含健康检查重试）随机选择一个；未选中时提示选择来源，不回退到旧 API。API列表在弹窗单独保存并热加载，共用参数仍在配置页保存。
+
+- 未保存 API 管理列表时自动读取原 `PROXY_API_URL`，保留旧 CliProxy 配置；保存后的地址与选中状态仅存入本地 `.env` 的 `PROXY_API_SOURCES_JSON`，无需编辑源码。
+- CliProxy 映射 `region/num/time/format/type`；轮换模式省略 `time`。b2proxy 映射 `region/count/stype/split/sessType`，保留原链接的 `zone/ptype/proto` 和其他自定义参数，时长由供应商套餐决定。全球混播不向 b2proxy 发送 `region=Rand`。
+- 所有 API 共用数量（1–20）、格式、分隔符、超时和健康检查总尝试次数；查活仅覆盖自己的地区。健康检查关闭时获取成功即返回；开启时检查一个出口，通过即停止，切换 API 不重置预算。
+- API 请求成功仅代表提取成功；出口连通性、白名单、套餐余额及目标站点健康度以实际检查为准。链接中的密钥和返回代理凭证应保留在本地配置。
+
 
 WebUI 会提供完整 ISO 国家/地区列表，可按代码或中文名称搜索（例如 `JP 日本`），并实时生成 API 链接。API 模式下「代理池(每行一个)」自动禁用；查活同样跟随此处的代理模式和全部 API 参数，仅地区在「配置 → 账号查活 → 查活代理地区」单独设置（默认跟随账号注册地区，也可指定国家或随机地区）。旧查活 API 开关、地址与超时配置已移除，旧 `.env` 对应键不再读取。
 

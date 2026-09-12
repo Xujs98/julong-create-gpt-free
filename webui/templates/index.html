@@ -4483,6 +4483,7 @@ try {
   </div>
 </div>
 
+{% include "_proxy_api_manager.html" %}
 {% include "_app_dialog.html" %}
 <script>
 const $ = (s) => document.querySelector(s);
@@ -4669,7 +4670,9 @@ function openCommercialSelectV3(select) {
 }
 
 function enhanceCommercialSelectV3(select) {
-  if (!select || select.multiple || select.dataset.uiSelectEnhancedV3 === '1') return;
+  // Native dialog controls stay in the browser's top layer; the global menu
+  // portal lives on document.body and would be inert behind the dialog.
+  if (!select || select.multiple || select.dataset.uiNative === 'true' || select.dataset.uiSelectEnhancedV3 === '1') return;
   select.dataset.uiSelectEnhancedV3 = '1';
   select.classList.add('ui-select-native-v3');
   select.setAttribute('aria-hidden', 'true');
@@ -5032,7 +5035,7 @@ async function copyText(text, notify=true) {
   if (!text) return false;
   try {
     if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
-    else { const a=document.createElement('textarea'); a.value=text; a.style.position='fixed'; a.style.opacity='0'; document.body.appendChild(a); a.select(); document.execCommand('copy'); a.remove(); }
+    else { const a=document.createElement('textarea'); a.value=text; a.style.position='fixed'; a.style.opacity='0'; (document.querySelector('dialog[open]') || document.body).appendChild(a); a.select(); const copied=document.execCommand('copy'); a.remove(); if (!copied) throw new Error('copy failed'); }
     if (notify) showToast('已复制');
     return true;
   } catch(e) {
@@ -10943,26 +10946,6 @@ function proxyApiSelectV2(field, options, labels = {}, searchable = false) {
   const rendered = options.map(value => `<option value="${attrEsc(value)}"${String(value) === current ? ' selected' : ''}>${esc(labels[value] || value)}</option>`).join('');
   return `<select data-key="${attrEsc(field.key)}"${searchable ? ' data-searchable="true"' : ''}>${rendered}</select>`;
 }
-function proxyApiLinkV2() {
-  const raw = String(proxyApiValueV2('PROXY_API_URL', '') || '').trim() || 'https://api.cliproxy.io/white/api?region=Rand&num=1&time=10&format=n&type=json';
-  const region = String(proxyApiValueV2('PROXY_API_REGION', 'Rand') || 'Rand').trim() || 'Rand';
-  const count = Math.max(1, Math.min(20, Number(proxyApiValueV2('PROXY_API_NUM', 1)) || 1));
-  const duration = Math.max(1, Math.min(360, Number(proxyApiValueV2('PROXY_API_TIME', 10)) || 10));
-  const sessionType = String(proxyApiValueV2('PROXY_API_SESSION_TYPE', 'sticky') || 'sticky').toLowerCase();
-  const delimiter = String(proxyApiValueV2('PROXY_API_FORMAT', 'n') || 'n');
-  const dataType = String(proxyApiValueV2('PROXY_API_TYPE', 'json') || 'json');
-  try {
-    const url = new URL(raw.replace(/\{(?:region|country|country_code)\}/gi, encodeURIComponent(region)), window.location.href);
-    const params = url.searchParams;
-    ['region', 'num', 'time', 'format', 'type'].forEach(key => params.delete(key));
-    params.set('region', region); params.set('num', String(count));
-    if (sessionType !== 'rotating') params.set('time', String(duration));
-    params.set('format', delimiter); params.set('type', dataType);
-    return url.toString();
-  } catch (_) {
-    return raw;
-  }
-}
 function proxyApiTimeChoicesV2() {
   return ['1', '3', '5', '10', '15', '30', '60', '120', '360'];
 }
@@ -10982,11 +10965,11 @@ function syncProxyModeV2() {
   const sessionType = String(proxyApiValueV2('PROXY_API_SESSION_TYPE', 'sticky') || 'sticky').toLowerCase();
   const apiTimeField = section.querySelector('[data-proxy-api-field="PROXY_API_TIME"]');
   if (apiTimeField) apiTimeField.hidden = sessionType === 'rotating';
-  const link = section.querySelector('[data-proxy-api-link]');
-  const hidden = section.querySelector('input[data-key="PROXY_API_URL"]');
-  const value = proxyApiLinkV2();
-  if (link) link.value = value;
-  if (hidden) hidden.value = value;
+  const summary = section.querySelector('[data-proxy-api-summary]');
+  if (summary) {
+    try { summary.textContent = proxyApiSummaryV2(proxyApiEntriesV2()); }
+    catch (_) { summary.textContent = 'API配置格式错误，请检查本地配置'; }
+  }
   const warmup = document.getElementById('btnWarmupProxyV2');
   if (warmup) warmup.disabled = mode === 'api';
   const warmupHint = document.getElementById('proxyWarmupStatusV2');
@@ -11010,10 +10993,9 @@ function renderProxyPoolSectionV2(fields) {
   const regionLabels = regionField.choice_labels || {};
   const poolField = fields.find(field => field.key === 'PROXY_POOL');
   const poolHtml = poolField ? `<div class="proxy-pool-editor-v2">${renderConfigPlainFieldV2(poolField)}</div>` : '';
-  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_MAX_ATTEMPTS', 'PROXY_API_URL'].includes(field.key));
+  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_MAX_ATTEMPTS', 'PROXY_API_URL', 'PROXY_API_SOURCES_JSON'].includes(field.key));
   const otherSwitches = otherFields.filter(field => field.type === 'bool');
   const otherInputs = otherFields.filter(field => field.type !== 'bool');
-  const apiUrl = proxyApiLinkV2();
   return `<section class="config-section-v2" id="${esc(configGroupSlug('代理池'))}" data-config-section="代理池">
     ${renderConfigSectionHead('代理池', '代理池与 API 代理二选一；所有任务共用 API 配置，查活地区在账号查活中单独设置。')}
     <div class="config-mode-v2" role="group" aria-label="代理来源">
@@ -11032,12 +11014,11 @@ function renderProxyPoolSectionV2(fields) {
         ${renderProxyApiFieldV2(timeoutField, '请求超时(秒)', `<input type="number" min="0.5" max="60" step="0.5" data-key="${attrEsc(timeoutField.key)}" value="${attrEsc(proxyApiValueV2(timeoutField.key, timeoutField.value || 10))}">`)}
         ${renderProxyApiFieldV2(attemptsField, '健康检查尝试次数', `<input type="number" min="1" max="20" step="1" data-key="${attrEsc(attemptsField.key)}" value="${attrEsc(proxyApiValueV2(attemptsField.key, attemptsField.value || 3))}">`)}
       </div>
-      <div class="proxy-api-link-v2">
-        <label><span>API链接</span><input type="text" readonly data-proxy-api-link value="${attrEsc(apiUrl)}"><input type="hidden" data-key="PROXY_API_URL" value="${attrEsc(apiUrl)}"></label>
-        <button type="button" data-proxy-api-copy title="复制 API 链接">复制链接</button>
-        <button type="button" class="primary" data-proxy-api-open title="打开 API 链接">打开链接</button>
+      <div class="proxy-api-management-v2" style="display:flex;gap:16px;align-items:center;">
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" data-proxy-api-manage>API管理</button>
+        <span class="proxy-api-manager-summary" data-proxy-api-summary></span>
       </div>
-      <div class="proxy-api-hint-v2">Sticky IP 会在时长内保持出口；Rotating IP 在每个注册任务重新请求。健康检查尝试次数（含首次）由所有 API 代理任务共用：每次重新获取并检查一个 IP，通过即停止；获取失败也计次。关闭健康检查时仅重试获取代理，保存后下一次代理选择生效。</div>
+      <div class="proxy-api-hint-v2">CliProxy 的 Sticky IP 使用时长；b2proxy 使用 sessType，时长以供应商套餐为准。共用参数在本页保存，API列表在弹窗保存。多选时每次尝试随机选中一个 API。健康检查尝试次数（含首次）由所有 API 代理任务共用：每次重新获取并检查一个 IP，通过即停止；获取失败也计次。关闭健康检查时仅重试获取代理，保存后下一次代理选择生效。</div>
     </div>
     <div class="proxy-pool-panel-v2" data-proxy-pool-panel${mode === 'api' ? ' hidden' : ''}>${poolHtml}</div>
     ${otherSwitches.length ? `<div class="config-switches-v2">${otherSwitches.map(field => renderFeatureSwitchField(field, { withIcon: false })).join('')}</div>` : ''}
@@ -11893,17 +11874,9 @@ function bindConfigLayoutV2() {
         syncConfigDirtyIndicatorsV2();
         return;
       }
-      const proxyCopy = e.target.closest('[data-proxy-api-copy]');
-      if (proxyCopy) {
+      if (e.target.closest('[data-proxy-api-manage]')) {
         e.preventDefault();
-        copyText(document.querySelector('[data-proxy-api-link]')?.value || '');
-        return;
-      }
-      const proxyOpen = e.target.closest('[data-proxy-api-open]');
-      if (proxyOpen) {
-        e.preventDefault();
-        const value = document.querySelector('[data-proxy-api-link]')?.value || '';
-        if (value) window.open(value, '_blank', 'noopener,noreferrer');
+        openProxyApiManagerV2();
         return;
       }
     });
@@ -12015,7 +11988,7 @@ function trackConfigFieldChange(e) {
   if (!f) return;
   setConfigPendingValueV2(f.key, readConfigElementValue(el, f));
   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
-  if (['PROXY_MODE', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_MAX_ATTEMPTS', 'PROXY_API_URL'].includes(f.key)) syncProxyModeV2();
+  if (['PROXY_MODE', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_MAX_ATTEMPTS', 'PROXY_API_URL', 'PROXY_API_SOURCES_JSON'].includes(f.key)) syncProxyModeV2();
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
   if (f.key === 'ACCOUNT_LOG_AUTO_CLEANUP') syncAccountLogManagementControlsV2();
   if (f.key === 'REGISTRATION_TRAFFIC_MODE') syncRegistrationModeCardV2();

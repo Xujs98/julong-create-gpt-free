@@ -126,8 +126,14 @@ def read_env_file() -> dict[str, str]:
         if not key:
             continue
         if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            quote_char = val[0]
             val = val[1:-1]
-            val = val.replace("\\n", "\n").replace("\\\"", '"').replace("\\\\", "\\")
+            # Decode once: chained replacements turn a literal \\n in JSON
+            # (for example a provider separator) into a real newline.
+            escapes = {"\\": "\\", '"': '"', "'": "'", "n": "\n", "r": "\r",
+                       "t": "\t", "a": "\a", "b": "\b", "f": "\f", "v": "\v"}
+            pattern = r"\\([\\'\"])" if quote_char == "'" else r"\\([\\'\"nrtabfv])"
+            val = re.sub(pattern, lambda match: escapes[match.group(1)], val)
         out[key] = val
     return out
 

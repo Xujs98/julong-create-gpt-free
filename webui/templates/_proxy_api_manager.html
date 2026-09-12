@@ -1,0 +1,151 @@
+<style>
+  #proxyApiManager { width: min(1060px, calc(100vw - 96px)); max-height: calc(100vh - 96px); padding: 0; border: 1px solid var(--border, #dfe4ec); border-radius: 16px; background: var(--card, #fff); color: var(--text, #273348); box-shadow: 0 24px 80px #0f172a40; }
+  #proxyApiManager::backdrop { background: #0f172a70; }
+  .proxy-api-manager-body { padding: 20px 24px; overflow: auto; max-height: calc(100vh - 350px); display: grid; gap: 14px; }
+  .proxy-api-manager-body > .hint { font-size: 12px; line-height: 1.7; color: var(--muted, #68758b); }
+  .proxy-api-entry { border: 1px solid var(--border, #dfe4ec); border-radius: 10px; padding: 14px; display: grid; gap: 10px; }
+  .proxy-api-entry-head { display: grid; grid-template-columns: 60px minmax(140px, 1fr) 150px auto; gap: 12px; align-items: end; }
+  .proxy-api-entry label { display: grid; gap: 6px; font-size: 12px; }
+  .proxy-api-entry input:not([type=checkbox]), .proxy-api-entry select { box-sizing: border-box; width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--border, #dfe4ec); border-radius: 8px; background: var(--bg, #fff); color: inherit; }
+  .proxy-api-entry input[type=checkbox] { width: 18px; height: 18px; }
+  .proxy-api-entry-actions { display: flex; gap: 8px; }
+  .proxy-api-manager-summary { color: var(--muted, #68758b); font-size: 13px; }
+  #proxyApiManagerError { color: var(--red, #dc3545); padding: 0 24px; min-height: 20px; }
+</style>
+<dialog id="proxyApiManager" aria-labelledby="proxyApiManagerTitle">
+  <div class="outlook-import-head">
+    <div class="outlook-import-head-main"><h3 id="proxyApiManagerTitle">API管理</h3><p>选中一个即使用该 API；选中多个时，每次获取随机选择。地址仅保存在本地 .env。</p></div>
+    <button type="button" class="outlook-import-close" data-api-manager-close aria-label="关闭 API管理">×</button>
+  </div>
+  <div class="proxy-api-manager-body">
+    <div class="hint">地区、数量、格式、分隔符共用代理池设置；查活只覆盖地区。CliProxy 使用时长，b2proxy 使用 sessType，保留地址中的 zone / ptype / proto。复制和打开使用按当前表单参数生成的链接；打开会实际请求一次 API。</div>
+    <div id="proxyApiEntries" style="display:grid;gap:14px;"></div>
+    <button type="button" class="jobs-tb-btn" id="proxyApiAdd">＋ 添加 API</button>
+  </div>
+  <div id="proxyApiManagerError" role="status"></div>
+  <div class="outlook-import-foot"><span class="proxy-api-manager-summary" id="proxyApiDraftSummary"></span><button type="button" class="jobs-tb-btn" data-api-manager-close>取消</button><button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="proxyApiSave">保存 API</button></div>
+</dialog>
+<script>
+function proxyApiEntriesV2() {
+  const raw = String(proxyApiValueV2('PROXY_API_SOURCES_JSON', '') || '').trim();
+  if (raw) return JSON.parse(raw);
+  const url = String(proxyApiValueV2('PROXY_API_URL', '') || 'https://api.cliproxy.io/white/api');
+  return [{id:'legacy', name:'原有 API', url, provider:proxyApiDetectProviderV2(url), enabled:true}];
+}
+function proxyApiDetectProviderV2(raw) {
+  try {
+    const u = new URL(raw);
+    return ((u.searchParams.has('zone') && u.searchParams.has('ptype')) || u.hostname === 'bestgo.work' || u.hostname.endsWith('.bestgo.work')) ? 'b2proxy' : 'cliproxy';
+  } catch (_) { return 'cliproxy'; }
+}
+function proxyApiEffectiveLinkV2(entry) {
+  const region = String(proxyApiValueV2('PROXY_API_REGION', 'Rand') || 'Rand').trim() || 'Rand';
+  const url = new URL(entry.url.replace(/\{(?:region|country|country_code)\}/g, encodeURIComponent(region)));
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('API地址需为 HTTP/HTTPS URL');
+  const count = String(Math.max(1, Math.min(20, Number(proxyApiValueV2('PROXY_API_NUM', 1)) || 1)));
+  const duration = String(Math.max(1, Math.min(360, Number(proxyApiValueV2('PROXY_API_TIME', 10)) || 10)));
+  const session = String(proxyApiValueV2('PROXY_API_SESSION_TYPE', 'sticky') || 'sticky').toLowerCase();
+  const delimiter = String(proxyApiValueV2('PROXY_API_FORMAT', 'n') || 'n');
+  const type = String(proxyApiValueV2('PROXY_API_TYPE', 'json') || 'json');
+  const b2 = entry.provider === 'b2proxy';
+  const replace = b2 ? ['region','count','stype','split','sesstype'] : ['region','num','time','format','type'];
+  for (const key of [...url.searchParams.keys()]) if (replace.includes(key.toLowerCase())) url.searchParams.delete(key);
+  if (!b2 || region.toLowerCase() !== 'rand') url.searchParams.set('region', region);
+  if (b2) {
+    url.searchParams.set('count', count); url.searchParams.set('stype', type);
+    url.searchParams.set('split', delimiter === 'rn' ? '\\r\\n' : '\\n');
+    url.searchParams.set('sessType', session);
+    if (!url.searchParams.has('proto')) url.searchParams.set('proto', 'http');
+  } else {
+    url.searchParams.set('num', count);
+    if (session !== 'rotating') url.searchParams.set('time', duration);
+    url.searchParams.set('format', delimiter); url.searchParams.set('type', type);
+  }
+  return url.toString();
+}
+function proxyApiSummaryV2(entries) {
+  const count = entries.filter(x => x.enabled).length;
+  return `共 ${entries.length} 个 API，已选 ${count} 个${count > 1 ? ' · 每次尝试随机选择' : count ? '' : ' · API任务将提示选择来源'}`;
+}
+function renderProxyApiRowV2(entry) {
+  const node = document.createElement('div');
+  node.className = 'proxy-api-entry'; node.dataset.apiId = entry.id;
+  node.innerHTML = `<div class="proxy-api-entry-head">
+    <label>选中<input type="checkbox" data-api-field="enabled"${entry.enabled ? ' checked' : ''}></label>
+    <label>名称<input data-api-field="name" maxlength="80" value="${attrEsc(entry.name)}" placeholder="API名称"></label>
+    <label>供应商<select data-api-field="provider" data-ui-native="true"><option value="cliproxy"${entry.provider === 'cliproxy' ? ' selected' : ''}>CliProxy</option><option value="b2proxy"${entry.provider === 'b2proxy' ? ' selected' : ''}>b2proxy</option></select></label>
+    <div class="proxy-api-entry-actions"><button type="button" class="jobs-tb-btn" data-api-action="copy">复制</button><button type="button" class="jobs-tb-btn" data-api-action="open">打开</button><button type="button" class="jobs-tb-btn" data-api-action="delete">删除</button></div>
+    </div><label>API地址<input type="url" data-api-field="url" maxlength="4096" spellcheck="false" autocomplete="off" value="${attrEsc(entry.url)}" placeholder="粘贴供应商生成的完整 API 链接"></label>`;
+  document.getElementById('proxyApiEntries').appendChild(node);
+}
+function readProxyApiDraftV2() {
+  return [...document.querySelectorAll('#proxyApiEntries .proxy-api-entry')].map(row => ({
+    id:row.dataset.apiId, name:row.querySelector('[data-api-field=name]').value.trim(),
+    provider:row.querySelector('[data-api-field=provider]').value,
+    url:row.querySelector('[data-api-field=url]').value.trim(),
+    enabled:row.querySelector('[data-api-field=enabled]').checked,
+  }));
+}
+function syncProxyApiDraftV2() {
+  document.getElementById('proxyApiDraftSummary').textContent = proxyApiSummaryV2(readProxyApiDraftV2());
+}
+function openProxyApiManagerV2() {
+  try {
+    const entries = proxyApiEntriesV2();
+    document.getElementById('proxyApiEntries').replaceChildren();
+    entries.forEach(renderProxyApiRowV2);
+    document.getElementById('proxyApiManagerError').textContent = '';
+    syncProxyApiDraftV2();
+    document.getElementById('proxyApiManager').showModal();
+  } catch (error) { showToast(`API管理配置读取失败：${error.message}`); }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const dialog = document.getElementById('proxyApiManager');
+  dialog.querySelectorAll('[data-api-manager-close]').forEach(button => button.addEventListener('click', () => dialog.close()));
+  dialog.addEventListener('input', syncProxyApiDraftV2);
+  dialog.addEventListener('change', event => {
+    if (event.target.matches('[data-api-field=url]')) {
+      event.target.closest('.proxy-api-entry').querySelector('[data-api-field=provider]').value = proxyApiDetectProviderV2(event.target.value);
+    }
+  });
+  document.getElementById('proxyApiAdd').addEventListener('click', () => {
+    if (readProxyApiDraftV2().length >= 50) { showToast('最多添加 50 个 API'); return; }
+    renderProxyApiRowV2({id:crypto.randomUUID ? crypto.randomUUID() : `api-${Date.now()}-${Math.random().toString(16).slice(2)}`, name:'', url:'', provider:'cliproxy', enabled:true});
+    syncProxyApiDraftV2();
+    dialog.querySelector('.proxy-api-entry:last-child [data-api-field=name]').focus();
+  });
+  document.getElementById('proxyApiEntries').addEventListener('click', async event => {
+    const button = event.target.closest('[data-api-action]');
+    if (!button) return;
+    const row = button.closest('.proxy-api-entry');
+    if (button.dataset.apiAction === 'delete') { row.remove(); syncProxyApiDraftV2(); return; }
+    try {
+      const entry = readProxyApiDraftV2().find(x => x.id === row.dataset.apiId);
+      const link = proxyApiEffectiveLinkV2(entry);
+      if (button.dataset.apiAction === 'copy') {
+        const copied = await copyText(link, false);
+        document.getElementById('proxyApiManagerError').textContent = copied ? '已复制当前请求链接' : '复制失败，请重试';
+      }
+      else window.open(link, '_blank', 'noopener,noreferrer');
+    } catch (_) { document.getElementById('proxyApiManagerError').textContent = '请填写有效 HTTP/HTTPS API地址'; }
+  });
+  document.getElementById('proxyApiSave').addEventListener('click', async event => {
+    const draft = JSON.stringify(readProxyApiDraftV2());
+    const controls = [...dialog.querySelectorAll('input,select,button')];
+    controls.forEach(control => control.disabled = true);
+    const preventCancel = event => event.preventDefault();
+    dialog.addEventListener('cancel', preventCancel);
+    document.getElementById('proxyApiManagerError').textContent = '正在保存…';
+    try {
+      const result = await api('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({updates:{PROXY_API_SOURCES_JSON:draft}})});
+      const field = CONFIG.find(f => f.key === 'PROXY_API_SOURCES_JSON');
+      if (field) field.value = draft;
+      delete CONFIG_PENDING_UPDATES.PROXY_API_SOURCES_JSON;
+      syncProxyModeV2(); syncConfigDirtyIndicatorsV2();
+      if (result.reloaded === false) { document.getElementById('proxyApiManagerError').textContent = result.note; return; }
+      dialog.close(); showToast('API管理已保存，下一次获取代理生效');
+    } catch (error) { document.getElementById('proxyApiManagerError').textContent = error.message; }
+    finally { controls.forEach(control => control.disabled = false); dialog.removeEventListener('cancel', preventCancel); }
+  });
+});
+</script>

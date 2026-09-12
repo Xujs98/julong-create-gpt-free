@@ -93,7 +93,6 @@ def _live_check_routes(
             try:
                 api_proxies = fetch_available_proxy_api(
                     region,
-                    api_url=proxy_cfg.build_proxy_api_request_url(region=region),
                     timeout=max(0.5, float(proxy_cfg.PROXY_API_TIMEOUT or 8.0)),
                     log=log,
                 )

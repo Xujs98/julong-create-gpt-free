@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import requests
 
 from core.proxy_utils import normalize_proxy_url
+from config.proxy_api import detect_provider
 
 
 logger = logging.getLogger(__name__)
@@ -30,17 +31,18 @@ def build_proxy_api_url(template: str | None, region: str) -> str:
     raw = raw.replace("{region}", encoded).replace("{country}", encoded).replace("{country_code}", encoded)
     parsed = urlsplit(raw)
     query = [(key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() != "region"]
-    query.insert(0, ("region", value))
+    if detect_provider(raw) != "b2proxy" or value.lower() != "rand":
+        query.insert(0, ("region", value))
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 
-def _values(payload: Any) -> list[Any]:
+def _values(payload: Any, separator: str = "") -> list[Any]:
     if payload is None:
         return []
     if isinstance(payload, (list, tuple, set)):
         out: list[Any] = []
         for item in payload:
-            out.extend(_values(item))
+            out.extend(_values(item, separator))
         return out
     if isinstance(payload, dict):
         host = payload.get("host") or payload.get("hostname") or payload.get("ip")
@@ -54,7 +56,7 @@ def _values(payload: Any) -> list[Any]:
         out: list[Any] = []
         for key in ("data", "proxies", "proxy", "list", "result", "items", "ips"):
             if key in payload:
-                out.extend(_values(payload.get(key)))
+                out.extend(_values(payload.get(key), separator))
         return out
     if isinstance(payload, str):
         text = payload.strip()
@@ -63,21 +65,23 @@ def _values(payload: Any) -> list[Any]:
         try:
             decoded = json.loads(text)
         except (TypeError, ValueError, json.JSONDecodeError):
-            return [line.strip() for line in text.replace(",", "\n").splitlines() if line.strip()]
-        return _values(decoded)
+            if separator:
+                text = text.replace(separator, "\n")
+            return [line.strip() for line in text.replace("\t", "\n").replace(",", "\n").splitlines() if line.strip()]
+        return _values(decoded, separator)
     return [str(payload)]
 
 
-def parse_proxy_api_response(payload: Any) -> list[str]:
+def parse_proxy_api_response(payload: Any, *, default_scheme: str = "auto", separator: str = "") -> list[str]:
     """提取并标准化 API 返回的代理地址，去重后保留原顺序。"""
     result: list[str] = []
     seen: set[str] = set()
-    for raw in _values(payload):
+    for raw in _values(payload, separator):
         value = str(raw or "").strip().strip('"').strip("'")
         if not value or "***" in value:
             continue
         try:
-            normalized = normalize_proxy_url(value, default_scheme="auto")
+            normalized = normalize_proxy_url(value, default_scheme=default_scheme)
         except (TypeError, ValueError):
             continue
         if normalized and normalized not in seen:
@@ -95,7 +99,17 @@ def fetch_proxy_api(region: str, *, api_url: str | None = None, timeout: float =
         payload = response.json()
     except (TypeError, ValueError, json.JSONDecodeError):
         payload = response.text
-    proxies = parse_proxy_api_response(payload)
+    query = dict(parse_qsl(urlsplit(url).query))
+    b2 = detect_provider(url) == "b2proxy"
+    if b2 and isinstance(payload, dict) and str(payload.get("code", 200)) != "200":
+        raise ValueError("b2proxy API 返回业务错误，请检查套餐和 IP 白名单")
+    separator = query.get("split", "") if b2 else ""
+    for escaped, actual in ((r"\r", "\r"), (r"\n", "\n"), (r"\t", "\t")):
+        separator = separator.replace(escaped, actual)
+    scheme = query.get("proto", "http").lower() if b2 else "auto"
+    if scheme == "socks5":
+        scheme = "socks5h"
+    proxies = parse_proxy_api_response(payload, default_scheme=scheme, separator=separator)
     if not proxies:
         raise ValueError("代理 API 返回为空或代理格式无法识别")
     return proxies
@@ -133,10 +147,13 @@ def fetch_available_proxy_api(
     excluded = {_api_proxy_identity(value) for value in (excluded_proxies or set())}
     emit = log if log is not None else logger.info
     last_error = "代理 API 返回空代理"
+    if api_url is None and not any(item["enabled"] for item in proxy_cfg.proxy_api_entries()):
+        raise ValueError("请在配置 → 代理池 → API管理中至少选中一个 API")
     for attempt in range(1, attempts + 1):
         emit(f"API代理尝试 {attempt}/{attempts}：获取动态出口")
         try:
-            proxies = fetch_proxy_api(region, api_url=api_url, timeout=timeout)
+            request_url = api_url if api_url is not None else proxy_cfg.build_proxy_api_request_url(region=region)
+            proxies = fetch_proxy_api(region, api_url=request_url, timeout=timeout)
         except Exception as exc:
             # Request exceptions may contain API credentials in their URL.
             last_error = f"代理 API 获取失败（{type(exc).__name__}）"

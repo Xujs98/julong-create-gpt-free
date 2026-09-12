@@ -10,7 +10,7 @@
     - socks5h://           SOCKS5（DNS 在代理端解析，推荐，避免 DNS-IP 错配）
 """
 import random
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from config.proxy_api import build_request_url, load_api_entries
 
 from config.env_loader import apply_env_overrides
 
@@ -25,8 +25,9 @@ PROXY_POOL = [
 # API 模式不会清空或改写 PROXY_POOL，切回 pool 后原列表仍然可用。
 PROXY_MODE = "pool"
 
-# CliProxy 白名单 API 配置。PROXY_API_URL 保留完整链接，WebUI 会根据下面的
-# 参数实时重建 query；自定义 API 只要兼容 region/num/time/format/type 参数即可。
+# 兼容旧版单 API 配置；API 管理保存后由 JSON 列表中的选中项决定来源。
+# 地址可包含密钥，仅写入本地 .env。空字符串迁移旧 API，显式 [] 表示无 API。
+PROXY_API_SOURCES_JSON = ""
 PROXY_API_URL = (
     "https://api.cliproxy.io/white/api?region=Rand&num=1&time=10&format=n&type=json"
 )
@@ -355,34 +356,24 @@ PLAN_CHECK_MIN_INTERVAL = 0.4
 PLAN_CHECK_JITTER = 0.3
 
 
-def build_proxy_api_request_url(region: str | None = None) -> str:
-    """根据 API 代理参数生成当前请求链接，保留自定义 query 参数。"""
-    raw_url = str(PROXY_API_URL or "").strip() or (
-        "https://api.cliproxy.io/white/api?region={region}&num={num}"
-        "&time={time}&format={format}&type={type}"
+def proxy_api_entries() -> list[dict]:
+    return load_api_entries(PROXY_API_SOURCES_JSON, PROXY_API_URL)
+
+
+def build_proxy_api_request_url(region: str | None = None, *, entry: dict | None = None) -> str:
+    """Choose one selected API and apply shared settings with its provider adapter."""
+    if entry is None:
+        selected = [item for item in proxy_api_entries() if item["enabled"]]
+        if not selected:
+            raise ValueError("请在配置 → 代理池 → API管理中至少选中一个 API")
+        entry = random.choice(selected)
+    return build_request_url(
+        entry, region=str((PROXY_API_REGION if region is None else region) or "Rand").strip() or "Rand",
+        count=max(1, min(20, int(PROXY_API_NUM or 1))),
+        duration=max(1, min(360, int(PROXY_API_TIME or 10))),
+        delimiter=str(PROXY_API_FORMAT or "n"), data_type=str(PROXY_API_TYPE or "json"),
+        session_type=str(PROXY_API_SESSION_TYPE or "sticky").strip().lower(),
     )
-    region = str((PROXY_API_REGION if region is None else region) or "Rand").strip() or "Rand"
-    parsed = urlsplit(raw_url)
-    query = [
-        (key, value)
-        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.lower() not in {"region", "num", "time", "format", "type"}
-    ]
-    generated = [
-        ("region", region),
-        ("num", str(max(1, int(PROXY_API_NUM or 1)))),
-    ]
-    # Rotating IP does not reserve a sticky session, so the provider's
-    # duration parameter must be omitted. Sticky IP keeps the configured
-    # lease duration in the request.
-    if str(PROXY_API_SESSION_TYPE or "sticky").strip().lower() != "rotating":
-        generated.append(("time", str(max(1, int(PROXY_API_TIME or 10)))))
-    generated.extend([
-        ("format", str(PROXY_API_FORMAT or "n")),
-        ("type", str(PROXY_API_TYPE or "json")),
-    ])
-    query[:0] = generated
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 
 def pick_proxy(*, excluded_proxies=None, log=None) -> str:
@@ -393,10 +384,8 @@ def pick_proxy(*, excluded_proxies=None, log=None) -> str:
     if str(PROXY_MODE or "pool").strip().lower() == "api":
         from core.live_check_proxy import fetch_available_proxy_api
 
-        api_url = build_proxy_api_request_url()
         proxies = fetch_available_proxy_api(
             str(PROXY_API_REGION or "Rand").strip() or "Rand",
-            api_url=api_url,
             timeout=max(0.5, float(PROXY_API_TIMEOUT or 8.0)),
             excluded_proxies=excluded_proxies,
             log=log,
@@ -415,6 +404,7 @@ apply_env_overrides(globals(), {
     'PROXY_POOL': 'list_str_multiline',
     'PROXY_MODE': 'str',
     'PROXY_API_URL': 'str',
+    'PROXY_API_SOURCES_JSON': 'str',
     'PROXY_API_REGION': 'str',
     'PROXY_API_FORMAT': 'str',
     'PROXY_API_SESSION_TYPE': 'str',

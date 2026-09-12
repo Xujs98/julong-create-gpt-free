@@ -10,6 +10,7 @@
     4. 读取时优先 `.env`，缺失时回退解析 `config/*.py` 默认值。
 """
 import ast
+import json
 import os
 import re
 from pathlib import Path
@@ -844,6 +845,10 @@ EDITABLE_FIELDS = [
         "min": 1, "max": 20,
     },
     {
+        "key": "PROXY_API_SOURCES_JSON", "file": "proxy.py", "type": "str", "group": "代理池",
+        "label": "API管理", "help": "多个 API 地址和选中状态；多选时每次尝试随机选择，仅保存在 .env。",
+    },
+    {
         "key": "PROXY_API_URL", "file": "proxy.py", "type": "str", "group": "代理池",
         "label": "API链接", "help": "根据上方参数生成；也可保留自定义 API 的域名和路径，query 参数会自动同步",
         "readonly": True,
@@ -1501,6 +1506,9 @@ def _validate_config_value(key: str, value, field: dict) -> object:
         if not canonical:
             raise ValueError("ROXY_API_BASE 不是有效 HTTP 地址")
         return canonical
+    if key == "PROXY_API_SOURCES_JSON":
+        from config.proxy_api import validate_api_entries
+        return json.dumps(validate_api_entries(value), ensure_ascii=False, separators=(",", ":"))
     vtype = field.get("type")
     if vtype != "int":
         return value

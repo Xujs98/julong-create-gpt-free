@@ -61,7 +61,11 @@ def test_proxy_switches_and_rotating_duration_have_native_controls() -> None:
     assert "otherSwitches.map(field => renderFeatureSwitchField" in html
     assert 'data-proxy-api-field="${attrEsc(field.key)}"' in html
     assert "apiTimeField.hidden = sessionType === 'rotating';" in html
-    assert "if (sessionType !== 'rotating') params.set('time', String(duration));" in html
+    manager = TEMPLATE.with_name("_proxy_api_manager.html").read_text(encoding="utf-8")
+    assert "if (session !== 'rotating') url.searchParams.set('time', duration);" in manager
+    assert 'data-proxy-api-manage' in html
+    assert 'data-proxy-api-link' not in html
+    assert 'data-ui-native="true"' in manager
 
 
 def test_config_unsaved_changes_can_be_tracked_and_discarded() -> None:
