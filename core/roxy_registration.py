@@ -60,7 +60,6 @@ def _build_driver(opened: RoxyOpenResult):
             options.add_experimental_option("debuggerAddress", opened.debugger_address)
         driver = RemoteWebDriver(command_executor=opened.webdriver_url, options=options)
         _apply_browser_automation_mask(driver)
-        _install_registration_traffic_optimization(driver)
         from core.traffic import install_selenium_traffic_meter
         install_selenium_traffic_meter(driver)
         return driver
@@ -76,7 +75,6 @@ def _build_driver(opened: RoxyOpenResult):
         logger.info("[Roxy] 使用 Chromedriver=%s", driver_path)
         driver = webdriver.Chrome(service=Service(executable_path=driver_path), options=options)
         _apply_browser_automation_mask(driver)
-        _install_registration_traffic_optimization(driver)
         from core.traffic import install_selenium_traffic_meter
         install_selenium_traffic_meter(driver)
         return driver
@@ -455,13 +453,11 @@ def _cloudflare_challenge_state(driver) -> dict:
           '#challenge-stage', '#challenge-running'
         ];
         const markers = selectors.filter(sel => [...document.querySelectorAll(sel)].some(visible));
-        const html = String(document.documentElement?.innerHTML || '').slice(0, 200000).toLowerCase();
         const textChallenge = /正在进行安全验证|请验证您是真人|验证您不是自动程序|verify you are human|performing security verification|checking your browser/i.test(visibleText);
         const strongChallenge = textChallenge
           || /just a moment/i.test(title)
           || /__cf_chl_|\/cdn-cgi\/challenge-platform/i.test(url)
-          || markers.length > 0
-          || html.includes('/cdn-cgi/challenge-platform/');
+          || markers.length > 0;
         // 邮箱验证码/密码页与资料填写页优先级高于残留 iframe 标记；只有
         // 明确挑战文案、挑战 URL 或“Just a moment”标题才继续进入验证等待。
         const explicitChallenge = textChallenge
@@ -535,8 +531,14 @@ def _cloudflare_challenge_state(driver) -> dict:
             state["routeErrorMessage"] = re.sub(
                 r"\s+", " ", marker_text
             ).strip()[:600]
-        if normal_workflow_page:
-            state["challenge"] = False
+        # Do not trust a bare ``challenge`` boolean from an older/serialized
+        # detector.  A challenge-platform preload in HTML is not evidence that
+        # the visible page is blocked; require explicit page evidence or a
+        # currently visible challenge component.
+        visible_markers = bool(state.get("markers"))
+        supported_challenge = bool(explicit_challenge or visible_markers)
+        state["strongChallenge"] = supported_challenge
+        state["challenge"] = bool(supported_challenge and not normal_workflow_page)
         return state
     except Exception as exc:
         return {
@@ -567,7 +569,38 @@ def _wait_for_cloudflare_challenge(driver, *, timeout: int = 300, headless: bool
             )
         return False
     if headless:
-        message = "检测到 Cloudflare 人机验证；请关闭 Cloak无头 后重试，并在打开的浏览器中完成验证"
+        # Auth SPA transitions can briefly retain a challenge iframe or title
+        # after the next form has started rendering.  A single sample used to
+        # abort every headless run; require eight consecutive seconds instead.
+        confirmation_seconds = 8
+        logger.info(
+            "%s 检测到一次 Cloudflare 标记，无头模式持续确认 %ss",
+            _log_prefix(driver), confirmation_seconds,
+        )
+        for _ in range(confirmation_seconds):
+            _check_manual_stop()
+            time.sleep(1.0)
+            state = _cloudflare_challenge_state(driver)
+            if state.get("authRouteError"):
+                detail = str(
+                    state.get("routeErrorMessage")
+                    or state.get("visibleText")
+                    or state.get("title")
+                    or "Auth 页面错误"
+                )
+                marker = "DockerRoxyRouteError" if _is_docker_roxy_session(driver) else "AuthRouteError"
+                raise RuntimeError(f"{marker}: {detail[:600]}")
+            if not state.get("challenge"):
+                logger.info("%s Cloudflare 标记已在确认窗口内消失，继续注册", _log_prefix(driver))
+                return True
+        safe_url = str(state.get("url") or "").split("?", 1)[0].split("#", 1)[0]
+        safe_title = re.sub(r"\s+", " ", str(state.get("title") or "-")).strip()[:160]
+        markers = ",".join(str(item)[:80] for item in (state.get("markers") or [])[:5]) or "-"
+        diagnostic = (
+            f"url={safe_url or '-'} title={safe_title or '-'} "
+            f"markers={markers} textChallenge={bool(state.get('textChallenge'))}"
+        )
+        message = f"持续检测到 Cloudflare 人机验证（无头确认 {confirmation_seconds}s）：{diagnostic}"
         if _is_docker_roxy_session(driver):
             message = f"BrowserProxyChallenge: {message}"
         raise RuntimeError(message)
@@ -1354,11 +1387,6 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     authorize_diagnostic = None
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
-        if _wait_for_runtime_challenge_if_present(driver):
-            # 完成人机验证后重新给授权页面一个完整观察窗口。
-            end = max(end, time.time() + timeout)
-            cleared_seen_at = None
-            continue
         if _has_access_token(driver):
             return "logged_in"
         try:
@@ -1385,6 +1413,12 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
             return "otp"
         if _is_signup_password_page(driver):
             return "password"
+        if _wait_for_runtime_challenge_if_present(driver):
+            # 完成人机验证后重新给授权页面一个完整观察窗口。目标表单和
+            # 登录态必须先判断，避免过渡 DOM 中的残留标记抢占真实状态。
+            end = max(end, time.time() + timeout)
+            cleared_seen_at = None
+            continue
         state = _email_input_value_state(driver)
         last = state
         inputs = state.get("inputs") or []

@@ -49,6 +49,23 @@ class CloudflareChallengeWaitTests(unittest.TestCase):
         self.assertFalse(state["textChallenge"])
         self.assertTrue(state["markers"])
 
+    def test_hidden_challenge_platform_script_is_not_a_challenge(self):
+        """A preload/script URL in HTML alone must not abort headless auth."""
+        driver = Mock()
+        driver.execute_script.return_value = {
+            "challenge": True,  # Result produced by the previous broad detector.
+            "strongChallenge": True,
+            "title": "Create your account",
+            "url": "https://auth.openai.com/create-account",
+            "markers": [],
+            "textChallenge": False,
+        }
+
+        state = _cloudflare_challenge_state(driver)
+
+        self.assertFalse(state["challenge"])
+        self.assertFalse(state["strongChallenge"])
+
     def test_email_verification_page_is_not_cloudflare_wait(self):
         """正常邮箱验证码页不得被误判为 Cloudflare 验证页。"""
         driver = Mock()
@@ -145,18 +162,48 @@ class CloudflareChallengeWaitTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "AuthRouteError.*Invalid content type"):
             _wait_for_cloudflare_challenge(driver, timeout=30, headless=False)
 
-    def test_headless_mode_fails_with_actionable_message(self):
+    @patch("core.roxy_registration.time.sleep")
+    def test_headless_mode_fails_only_after_confirmation_window(self, sleep):
         driver = Mock()
-        driver.execute_script.return_value = {"challenge": True, "title": "Just a moment..."}
-        with self.assertRaisesRegex(RuntimeError, "关闭 Cloak无头"):
+        driver.execute_script.return_value = {
+            "challenge": True,
+            "title": "Just a moment...",
+            "url": "https://auth.openai.com/cdn-cgi/challenge-platform/",
+        }
+        with self.assertRaisesRegex(RuntimeError, "持续检测到 Cloudflare.*无头确认 8s"):
             _wait_for_cloudflare_challenge(driver, headless=True)
+        self.assertEqual(driver.execute_script.call_count, 9)
+        self.assertEqual(sleep.call_count, 8)
 
-    def test_docker_roxy_headless_challenge_has_proxy_marker(self):
+    @patch("core.roxy_registration.time.sleep")
+    def test_headless_mode_continues_when_transient_marker_clears(self, sleep):
+        driver = Mock()
+        driver.execute_script.side_effect = [
+            {"challenge": True, "title": "Just a moment..."},
+            {"challenge": True, "title": "Just a moment..."},
+            {
+                "challenge": False,
+                "title": "Check your inbox",
+                "url": "https://auth.openai.com/email-verification",
+                "authFlow": True,
+                "otpOrPasswordForm": True,
+            },
+        ]
+
+        self.assertTrue(_wait_for_cloudflare_challenge(driver, headless=True))
+        self.assertEqual(driver.execute_script.call_count, 3)
+
+    @patch("core.roxy_registration.time.sleep")
+    def test_docker_roxy_headless_challenge_has_proxy_marker(self, sleep):
         driver = Mock()
         driver._registration_log_prefix = "[Roxy注册]"
-        driver.execute_script.return_value = {"challenge": True, "title": "Just a moment..."}
+        driver.execute_script.return_value = {
+            "challenge": True,
+            "title": "Just a moment...",
+            "url": "https://auth.openai.com/cdn-cgi/challenge-platform/",
+        }
         with patch("core.roxy_selenium._running_in_container", return_value=True), self.assertRaisesRegex(
-            RuntimeError, "BrowserProxyChallenge.*关闭 Cloak无头"
+            RuntimeError, "BrowserProxyChallenge.*持续检测到 Cloudflare"
         ):
             _wait_for_cloudflare_challenge(driver, headless=True)
 

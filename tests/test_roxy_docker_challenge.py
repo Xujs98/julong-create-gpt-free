@@ -5,7 +5,7 @@ from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
 import core.roxybrowser_client as roxy_client_module
 
 
-def test_docker_roxy_installs_same_safe_traffic_rules_as_native():
+def test_traffic_optimizer_helper_remains_available_for_post_auth_use():
     driver = object()
     with patch("core.roxy_selenium._running_in_container", return_value=True), patch(
         "core.traffic_optimizer.install_selenium_network_optimization"
@@ -116,13 +116,14 @@ def test_docker_bridge_driver_enables_performance_log_before_connecting():
     driver.get_log.return_value = []
     with patch("selenium.webdriver.remote.webdriver.WebDriver", return_value=driver) as remote, patch(
         "core.roxy_registration._apply_browser_automation_mask"
-    ), patch("core.roxy_registration._install_registration_traffic_optimization"):
+    ), patch("core.roxy_registration._install_registration_traffic_optimization") as install:
         result = roxy_registration._build_driver(opened)
 
     options = remote.call_args.kwargs["options"]
     assert options.capabilities["goog:loggingPrefs"] == {"performance": "ALL"}
     assert result._registration_traffic_meter.source == "selenium_performance"
     driver.get_log.assert_called_once_with("performance")
+    install.assert_not_called()
 
 
 def test_native_driver_enables_performance_log_before_connecting():
@@ -133,7 +134,7 @@ def test_native_driver_enables_performance_log_before_connecting():
         "core.roxy_selenium.resolve_chromedriver", return_value="/tmp/chromedriver"
     ), patch("core.roxy_registration._apply_browser_automation_mask"), patch(
         "core.roxy_registration._install_registration_traffic_optimization"
-    ):
+    ) as install:
         result = roxy_registration._build_driver(opened)
 
     options = chrome.call_args.kwargs["options"]
@@ -141,3 +142,4 @@ def test_native_driver_enables_performance_log_before_connecting():
     assert options.experimental_options["debuggerAddress"] == "127.0.0.1:61234"
     assert result._registration_traffic_meter.source == "selenium_performance"
     driver.get_log.assert_called_once_with("performance")
+    install.assert_not_called()

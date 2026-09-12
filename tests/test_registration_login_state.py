@@ -117,6 +117,21 @@ class RegistrationLoginStateTests(unittest.TestCase):
         self.assertEqual(result, "network_error")
         self.assertEqual(driver._last_email_submit_diagnostic["kind"], "browser_network_error")
 
+    @patch("core.roxy_registration._wait_for_runtime_challenge_if_present")
+    @patch("core.roxy_registration._is_signup_password_page", return_value=False)
+    @patch("core.roxy_registration._is_email_verification_page", return_value=True)
+    @patch("core.roxy_registration._is_login_password_page", return_value=False)
+    @patch("core.roxy_registration._has_access_token", return_value=False)
+    def test_email_submit_prefers_otp_form_over_residual_challenge(
+        self, has_token, login_password, email_verification, signup_password, challenge
+    ):
+        from core.roxy_registration import _wait_email_submit_next_state
+
+        result = _wait_email_submit_next_state(Mock(), "user@example.test", timeout=1)
+
+        self.assertEqual(result, "otp")
+        challenge.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
