@@ -393,7 +393,19 @@ def pick_proxy(*, excluded_proxies=None, log=None) -> str:
         if not proxies:
             raise RuntimeError("代理 API 未返回可用代理")
         return str(proxies[0])
-    return random.choice(PROXY_POOL) if PROXY_POOL else ""
+    pool = list(PROXY_POOL or [])
+    if excluded_proxies:
+        from core.proxy_utils import normalize_proxy_url
+        def identity(value):
+            try:
+                return str(normalize_proxy_url(value) or "").replace("socks5://", "socks5h://", 1)
+            except ValueError:
+                return str(value or "")
+        excluded = {identity(value) for value in excluded_proxies}
+        pool = [value for value in pool if identity(value) not in excluded]
+        if PROXY_POOL and not pool:
+            raise RuntimeError("代理池中没有排除历史/隔离出口后的可用代理")
+    return random.choice(pool) if pool else ""
 
 
 # 兼容入口：固定池模式保留启动时的随机值；API 模式避免导入阶段请求网络。

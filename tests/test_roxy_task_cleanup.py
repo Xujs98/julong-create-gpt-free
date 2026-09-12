@@ -64,8 +64,6 @@ def test_persistent_registration_reuses_binding_and_refreshes_state():
         )
 
     assert result["success"] is False
-    client.clear_profile_state.assert_called_once_with("PROFILE", cloud=False)
-    client.randomize_profile.assert_called_once_with("PROFILE")
-    client.update_profile_proxy.assert_called_once_with("PROFILE", "socks5h://user:pass@proxy.test:3010")
-    client.open_profile.assert_called_once_with(profile_id="PROFILE", proxy="socks5h://user:pass@proxy.test:3010")
+    client.create_profile.assert_not_called()
+    client.open_profile.assert_called_once_with(proxy="socks5h://user:pass@proxy.test:3010", proxy_is_fresh=True, task_kind="registration")
     client.cleanup_profile.assert_called_once_with(opened, force=True)

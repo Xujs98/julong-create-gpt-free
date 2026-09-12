@@ -14,6 +14,7 @@ from curl_cffi.requests import Session
 
 from config import browser as _browser_cfg
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
+from core.proxy_http_compat import compatible_get, close_diagnostic_session, safe_transport_error
 
 __test__ = False
 
@@ -122,37 +123,40 @@ def test_proxy(proxy_url: str, timeout: float | None = None) -> dict:
     for candidate in candidates:
         session = Session(impersonate=getattr(_browser_cfg, "IMPERSONATE", "chrome"))
         session.proxies = {"http": candidate, "https": candidate}
-        for endpoint in endpoints:
-            endpoint_retried = False
-            while True:
-                try:
-                    response = session.get(endpoint, headers=headers, timeout=timeout)
-                    if response.status_code != 200:
-                        errors.append(f"{endpoint}: HTTP {response.status_code}")
+        try:
+            for endpoint in endpoints:
+                endpoint_retried = False
+                while True:
+                    try:
+                        response = compatible_get(session, endpoint, headers=headers, timeout=timeout)
+                        if response.status_code != 200:
+                            errors.append(f"{endpoint}: HTTP {response.status_code}")
+                            break
+                        payload = response.json()
+                        if not isinstance(payload, dict):
+                            errors.append(f"{endpoint}: 响应不是 JSON 对象")
+                            break
+                        geo = _normalize_geo(payload)
+                        if not geo.get("ip"):
+                            errors.append(f"{endpoint}: 响应缺少 IP")
+                            break
+                        return {
+                            "ok": True,
+                            "proxy": _masked_proxy(candidate),
+                            "endpoint": endpoint,
+                            "dns_mode": "proxy" if urlsplit(candidate).scheme.lower() == "socks5h" else "default",
+                            **geo,
+                        }
+                    except Exception as exc:
+                        errors.append(f"{urlsplit(endpoint).hostname}: {safe_transport_error(exc)}")
+                        if not endpoint_retried and retry_budget > 0 and _geo_error_retryable(exc):
+                            endpoint_retried = True
+                            retry_budget -= 1
+                            time.sleep(0.2)
+                            continue
                         break
-                    payload = response.json()
-                    if not isinstance(payload, dict):
-                        errors.append(f"{endpoint}: 响应不是 JSON 对象")
-                        break
-                    geo = _normalize_geo(payload)
-                    if not geo.get("ip"):
-                        errors.append(f"{endpoint}: 响应缺少 IP")
-                        break
-                    return {
-                        "ok": True,
-                        "proxy": _masked_proxy(candidate),
-                        "endpoint": endpoint,
-                        "dns_mode": "proxy" if urlsplit(candidate).scheme.lower() == "socks5h" else "default",
-                        **geo,
-                    }
-                except Exception as exc:
-                    errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
-                    if not endpoint_retried and retry_budget > 0 and _geo_error_retryable(exc):
-                        endpoint_retried = True
-                        retry_budget -= 1
-                        time.sleep(0.2)
-                        continue
-                    break
+        finally:
+            close_diagnostic_session(session)
     raise ProxyTestError("代理测试失败；" + " | ".join(errors[-3:]))
 
 
@@ -270,7 +274,7 @@ def _challenge_evidence(response) -> tuple[bool, list[str]]:
 def _request_json(session: Session, url: str, *, timeout: float) -> tuple[dict, float]:
     """请求 JSON 接口，并返回对象与耗时。"""
     started = time.monotonic()
-    response = session.get(
+    response = compatible_get(session,
         url,
         headers={"Accept": "application/json", "User-Agent": getattr(_browser_cfg, "USER_AGENT", "Mozilla/5.0")},
         timeout=timeout,
@@ -387,7 +391,10 @@ def test_proxy_health(
     clean_threshold = max(0, min(100, int(min_clean_score if min_clean_score is not None else 80)))
     latency_limit = max(0.0, float(max_latency if max_latency is not None else 8.0))
     sample_count = max(1, min(5, int(exit_samples if exit_samples is not None else 3)))
-    geo, sampled_exit_ips = _sample_proxy_exits(proxy_url, timeout=timeout, samples=sample_count)
+    try:
+        geo, sampled_exit_ips = _sample_proxy_exits(proxy_url, timeout=timeout, samples=sample_count)
+    except Exception as exc:
+        raise ProxyTestError(f"出口IP检测失败：{safe_transport_error(exc)}") from exc
     stable_exit = len(set(sampled_exit_ips)) == 1
     normalized = normalize_proxy_url(proxy_url, default_scheme="auto")
     parsed = urlsplit(normalized or "")
@@ -460,7 +467,7 @@ def test_proxy_health(
                 steps.append({"name": "代理匿名性检查", "ok": False, "detail": f"{len(anonymity_endpoints)} 个匿名性接口均请求失败"})
 
             started = time.monotonic()
-            response = session.get(endpoint, headers=headers, timeout=timeout, allow_redirects=True)
+            response = compatible_get(session, endpoint, headers=headers, timeout=timeout, allow_redirects=True)
             latency = max(0.0, time.monotonic() - started)
             challenge, markers = _challenge_evidence(response)
             status = int(response.status_code or 0)
@@ -550,10 +557,10 @@ def test_proxy_health(
                 "steps": steps,
             }
         except Exception as exc:
-            errors.append(f"{type(exc).__name__}: {str(exc)[:120]}")
+            errors.append(safe_transport_error(exc))
         finally:
             try:
-                session.close()
+                close_diagnostic_session(session)
             except Exception:
                 pass
     raise ProxyTestError("代理健康检查失败；" + " | ".join(errors[-3:]))
@@ -726,7 +733,7 @@ def warmup_proxy_pool(
                     "removable": True,
                     "inconclusive": False,
                     "proxy": _masked_proxy(proxy),
-                    "reason": f"{type(exc).__name__}: 代理多维检查失败",
+                    "reason": f"出口健康检查失败：{safe_transport_error(exc)}",
                     "challenge_detected": False,
                     "steps": [{"name": "代理多维检查", "ok": False, "detail": "出口连接或检测请求失败"}],
                 }
@@ -829,7 +836,7 @@ def choose_healthy_proxy(
                 exit_samples=exit_samples,
             )
         except Exception as exc:
-            result = {"ok": False, "healthy": False, "removable": True, "proxy": _masked_proxy(proxy), "reason": f"{type(exc).__name__}: 代理多维检查失败"}
+            result = {"ok": False, "healthy": False, "removable": True, "proxy": _masked_proxy(proxy), "reason": f"出口健康检查失败：{safe_transport_error(exc)}"}
         result["proxy_url"] = proxy
         checked.append(result)
         if result.get("healthy"):

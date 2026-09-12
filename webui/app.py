@@ -4182,6 +4182,40 @@ def create_app(auth_code: str | None = None) -> Flask:
             logger.warning("代理测试失败: %s: %s", type(exc).__name__, exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    proxy_source_test_slots = threading.BoundedSemaphore(3)
+
+    @app.post("/api/proxy/source-test")
+    def api_proxy_source_test():
+        if not proxy_source_test_slots.acquire(blocking=False):
+            return jsonify({"ok": False, "error": "已有 3 个出口检测正在执行，请稍后重试"}), 429
+        try:
+            return _test_proxy_source()
+        finally:
+            proxy_source_test_slots.release()
+
+    def _test_proxy_source():
+        from config.proxy_api import validate_api_entries
+        from core.live_check_proxy import fetch_proxy_api
+        from core.proxy_test import test_proxy
+        from core.proxy_http_compat import safe_transport_error
+        data = request.get_json(silent=True) or {}
+        try:
+            entry = validate_api_entries([data.get("entry")])[0]
+            region = str(data.get("region") or "Rand").strip()
+            proxies = fetch_proxy_api(region, api_url=entry["url"], timeout=8)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({"ok": True, "extracted": False, "exit_ok": False,
+                            "message": "API提取失败：" + safe_transport_error(exc)})
+        try:
+            result = test_proxy(proxies[0], timeout=5)
+            return jsonify({"ok": True, "extracted": True, "exit_ok": True,
+                            "message": f"提取成功（{len(proxies)} 个） · 出口连通验证成功 · {result.get('country_code') or '地区未知'}。任务仍按配置执行完整健康检查。"})
+        except Exception as exc:
+            return jsonify({"ok": True, "extracted": True, "exit_ok": False,
+                            "message": f"提取成功（{len(proxies)} 个） · 出口检测失败：{safe_transport_error(exc)}"})
+
     @app.get("/api/proxy/api-preview")
     def api_proxy_api_preview():
         """按已保存的 API 代理配置获取一个临时出口供 WebUI 测试。"""

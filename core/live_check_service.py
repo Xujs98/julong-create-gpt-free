@@ -67,13 +67,17 @@ def _live_check_routes(
     from config import live_check as live_cfg
     from config import proxy as proxy_cfg
 
+    from config import roxybrowser as roxy_cfg
+    persistent_roxy = bool(getattr(roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False))
+    if persistent_roxy and explicit_proxy == account.get("proxy_used"):
+        explicit_proxy = None
     if explicit_proxy is not None:
         route = resolve_plan_check_route(explicit_proxy=explicit_proxy)
         route["source"] = "request"
         return [route]
 
     routes: list[dict] = []
-    if bool(getattr(live_cfg, "LIVE_CHECK_USE_REGISTRATION_PROXY", True)):
+    if not persistent_roxy and bool(getattr(live_cfg, "LIVE_CHECK_USE_REGISTRATION_PROXY", True)):
         saved = _saved_registration_proxy(account)
         if saved:
             routes.append({

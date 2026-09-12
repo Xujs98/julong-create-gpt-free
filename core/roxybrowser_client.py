@@ -43,6 +43,8 @@ class RoxyOpenResult:
     ws_endpoint: str | None = None
     created_by_run: bool = False
     docker_bridge: bool = False
+    lease: object | None = None
+    fingerprint: dict | None = None
 
 
 def _strip_slashes(value: str) -> str:
@@ -504,7 +506,68 @@ class RoxyBrowserClient:
 
         return {"ok": False, "items": [], "errors": errors}
 
+    def list_profiles(self) -> list[dict]:
+        """Read every page; only explicit closed states are eligible for reuse."""
+        rows, seen = [], set()
+        for page in range(1, 1001):
+            params = {"workspaceId": _workspace_id_value(), "page_index": page, "page_size": 100}
+            project = _project_id_value()
+            if project:
+                params["projectIds"] = str(project)
+            result = self.request("GET", str(getattr(_cfg, "ROXY_PROFILE_LIST_PATH", "/browser/list")), params=params)
+            data = result.get("data")
+            if not isinstance(data, dict) or not isinstance(data.get("rows"), list):
+                raise RuntimeError("Roxy 环境列表响应缺少 data.rows，停止复用")
+            batch = data["rows"]
+            added = 0
+            for row in batch:
+                if not isinstance(row, dict) or not row.get("dirId"):
+                    continue
+                pid = str(row["dirId"])
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                added += 1
+                if project and str(row.get("projectId") or "") != str(project):
+                    continue
+                rows.append(row)
+            total = data.get("total")
+            if not batch or (total is not None and len(seen) >= int(total)) or (total is None and len(batch) < 100):
+                return rows
+            if not added:
+                raise RuntimeError("Roxy 环境分页未前进，停止复用")
+        raise RuntimeError("Roxy 环境列表超出分页上限")
+
+    def profile_detail(self, profile_id: str) -> dict:
+        result = self.request("GET", "/browser/detail", params={
+            "workspaceId": _workspace_id_value(), "dirId": str(profile_id),
+        })
+        data = result.get("data")
+        if isinstance(data, dict) and isinstance(data.get("rows"), list):
+            data = next((row for row in data["rows"] if str(row.get("dirId")) == str(profile_id)), None)
+        if not isinstance(data, dict) or not data.get("dirId"):
+            raise RuntimeError("Roxy 环境详情响应缺少匹配窗口")
+        return data
+
+    def restore_profile_fingerprint(self, profile_id: str, snapshot: dict) -> None:
+        from core.roxy_profile_pool import fingerprint_snapshot
+        body = fingerprint_snapshot(snapshot)
+        body.update(workspaceId=_workspace_id_value(), dirId=str(profile_id))
+        self.request("POST", _cfg.ROXY_MDF_PATH, json_body=body)
+
+    def prepare_profile_start(self, profile_id: str) -> None:
+        from core.roxy_profile_pool import CLEAN_START, fingerprint_snapshot
+        finger = fingerprint_snapshot(self.profile_detail(profile_id)).get("fingerInfo", {})
+        finger.update(CLEAN_START)
+        self.request("POST", _cfg.ROXY_MDF_PATH, json_body={
+            "workspaceId": _workspace_id_value(), "dirId": str(profile_id),
+            "cookie": [], "defaultOpenUrl": ["about:blank"], "windowPlatformList": [],
+            "fingerInfo": finger,
+        })
+
     def create_profile(self, payload: dict | None = None, proxy: str | None = None) -> str:
+        if bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+            raise RuntimeError("持久环境模式使用关闭环境，请通过 open_profile 获取；不创建新窗口")
         body = dict(getattr(_cfg, "ROXY_PROFILE_CREATE_PAYLOAD", {}) or {})
         self.last_proxy_url = None
         random_name_enabled = bool(getattr(_cfg, "ROXY_RANDOM_PROFILE_NAME_ON_CREATE", True))
@@ -649,6 +712,10 @@ class RoxyBrowserClient:
         *,
         headless: bool | None = None,
         proxy: str | None = None,
+        proxy_is_fresh: bool = False,
+        account: dict | None = None,
+        account_key: str = "",
+        task_kind: str = "task",
     ) -> RoxyOpenResult:
         """打开 Roxy 环境；headless 显式传值时仅覆盖本次调用。"""
         one_profile = bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
@@ -662,7 +729,15 @@ class RoxyBrowserClient:
 
         pid = configured_pid
         created_by_run = False
-        if not pid:
+        lease = None
+        fingerprint = None
+        if persistent:
+            from core.roxy_profile_pool import prepare_idle_profile
+            pid, lease, fingerprint = prepare_idle_profile(
+                self, proxy=proxy, proxy_is_fresh=proxy_is_fresh, account=account,
+                account_key=account_key, task_kind=task_kind,
+            )
+        elif not pid:
             pid = self.create_profile(proxy=proxy)
             created_by_run = True
             logger.info("[Roxy] 已创建临时环境：%s", pid)
@@ -677,7 +752,7 @@ class RoxyBrowserClient:
         params.setdefault("workspaceId", _workspace_id_value())
         params.setdefault("dirId", int(pid) if str(pid).isdigit() else pid)
         params.setdefault("args", [])
-        params.setdefault("forceOpen", True)
+        params["forceOpen"] = False if persistent else params.get("forceOpen", True)
         # ROXY_OPEN_HEADLESS 是显式开关，优先级应高于 ROXY_OPEN_EXTRA_PARAMS，
         # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
         params["headless"] = bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False)) if headless is None else bool(headless)
@@ -755,6 +830,8 @@ class RoxyBrowserClient:
                 ws_endpoint=ws_endpoint,
                 created_by_run=created_by_run,
                 docker_bridge=use_docker_bridge,
+                lease=lease,
+                fingerprint=fingerprint,
             )
         except Exception as exc:
             logger.error(
@@ -767,6 +844,12 @@ class RoxyBrowserClient:
             )
             # 创建成功但启动、响应解析或调试地址校验失败时立即强制回收临时环境，
             # 即使开启了保留现场配置，也不能留下失败任务的孤儿 Profile。
+            if lease is not None:
+                # Only close when this task actually obtained a debugger. A
+                # rejected non-force open may belong to an external operator.
+                if "raw_debugger_address" in locals() and raw_debugger_address:
+                    self.close_profile(pid)
+                lease.release()
             if created_by_run:
                 self.cleanup_profile(RoxyOpenResult(pid, {}, created_by_run=True), force=True)
             raise
@@ -814,11 +897,15 @@ class RoxyBrowserClient:
         """任务结束清理；持久环境模式只关闭并保留绑定的 Profile。"""
         if not opened or not opened.profile_id:
             return
-        if bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+        if opened.lease is not None or bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
             # This branch intentionally takes precedence over the historical
             # keep-open/delete switches: the new mode guarantees a reusable
             # account environment while preserving the old path when disabled.
-            self.close_profile(opened.profile_id)
+            try:
+                self.close_profile(opened.profile_id)
+            finally:
+                if opened.lease is not None:
+                    opened.lease.release()
             logger.info("[Roxy] 持久环境模式保留环境（仅关闭）：%s", opened.profile_id)
             return
         keep_open = bool(getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))

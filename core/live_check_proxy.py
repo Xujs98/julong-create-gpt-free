@@ -11,6 +11,7 @@ import requests
 
 from core.proxy_utils import normalize_proxy_url
 from config.proxy_api import detect_provider
+from core.proxy_http_compat import safe_transport_error
 
 
 logger = logging.getLogger(__name__)
@@ -153,10 +154,12 @@ def fetch_available_proxy_api(
         emit(f"API代理尝试 {attempt}/{attempts}：获取动态出口")
         try:
             request_url = api_url if api_url is not None else proxy_cfg.build_proxy_api_request_url(region=region)
+            provider = detect_provider(request_url)
             proxies = fetch_proxy_api(region, api_url=request_url, timeout=timeout)
+            emit(f"API代理尝试 {attempt}/{attempts}：{provider} 提取成功，返回 {len(proxies)} 个出口，开始健康检查" if health_enabled else f"API代理尝试 {attempt}/{attempts}：{provider} 提取成功，返回 {len(proxies)} 个出口")
         except Exception as exc:
             # Request exceptions may contain API credentials in their URL.
-            last_error = f"代理 API 获取失败（{type(exc).__name__}）"
+            last_error = f"代理 API 提取失败（{safe_transport_error(exc)}）"
         else:
             candidates = [
                 str(value).strip() for value in proxies

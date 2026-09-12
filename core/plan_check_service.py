@@ -76,7 +76,11 @@ def _check_plan_with_account_context(
     # 避免“Cookie 来自出口 A、Checkout 从出口 B 发出”而返回 unusual activity。
     effective_proxy = proxy
     preserve_proxy_session = False
-    if (check_oaics or check_country_qualification) and effective_proxy is None:
+    from config import roxybrowser as roxy_cfg
+    persistent_roxy = bool(getattr(roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False))
+    if persistent_roxy and effective_proxy is None:
+        effective_proxy = proxy_cfg.pick_proxy()
+    if not persistent_roxy and (check_oaics or check_country_qualification) and effective_proxy is None:
         saved_proxy = str(account.get("proxy_used") or "").strip()
         if saved_proxy:
             effective_proxy = saved_proxy

@@ -859,14 +859,18 @@ def _open_cloak(proxy: str | None, headless: bool) -> tuple[Any, str | None, Cal
     return driver, getattr(driver, "upstream_proxy_url", None) or proxy, _close
 
 
-def _open_roxy(proxy: str | None, headless: bool) -> tuple[Any, str | None, Callable[..., None]]:
+def _open_roxy(proxy: str | None, headless: bool, *, account: dict | None = None, task_kind: str = "task") -> tuple[Any, str | None, Callable[..., None]]:
     """启动查活专用 RoxyBrowser，并使用本次独立无头参数。"""
     from config import roxybrowser as roxy_cfg
     from core.roxy_registration import _build_driver
     from core.roxybrowser_client import RoxyBrowserClient
 
     client = RoxyBrowserClient()
-    opened = client.open_profile(headless=headless, proxy=proxy)
+    if bool(getattr(roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+        opened = client.open_profile(headless=headless, proxy=proxy, proxy_is_fresh=bool(proxy) and task_kind == "live_check",
+                                     account=account, task_kind=task_kind)
+    else:
+        opened = client.open_profile(headless=headless, proxy=proxy)
     try:
         driver = _build_driver(opened)
     except Exception:
@@ -910,7 +914,11 @@ def check_account_liveness_browser(
     task_succeeded = False
     try:
         logger.info("[查活] 使用 %s 指纹浏览器，headless=%s", selected, bool(headless))
-        driver, proxy_used, closer = opener(proxy, bool(headless))
+        from config import roxybrowser as roxy_cfg
+        if selected == "roxy" and bool(getattr(roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+            driver, proxy_used, closer = opener(proxy, bool(headless), account=account, task_kind="live_check")
+        else:
+            driver, proxy_used, closer = opener(proxy, bool(headless))
         if force_fresh_login:
             logger.info("[查活][浏览器] 现有 AT 已明确失效，本次跳过所有保存 Session/Cookie")
         session_info = _browser_login(

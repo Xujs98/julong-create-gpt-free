@@ -259,7 +259,7 @@ def test_persistent_mode_allows_opening_account_bound_profile():
     client.request = Mock(return_value={"code": 0, "data": {"debuggerAddress": "127.0.0.1:9222"}})
     with patch("core.roxybrowser_client._cfg.ROXY_ONE_PROFILE_PER_ACCOUNT", True), patch(
         "core.roxybrowser_client._cfg.ROXY_PERSIST_PROFILE_PER_ACCOUNT", True
-    ):
+    ), patch("core.roxy_profile_pool.prepare_idle_profile", return_value=("PROFILE", Mock(), {})):
         opened = client.open_profile(profile_id="PROFILE")
     assert opened.profile_id == "PROFILE"
     assert opened.created_by_run is False

@@ -1507,7 +1507,13 @@ def _run_roxy_codex_oauth_once(
     task_succeeded = False
     try:
         if opened is None and client is not None:
-            opened = client.open_profile(headless=headless_override)
+            if bool(getattr(_roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+                opened = client.open_profile(headless=headless_override, account_key=email, task_kind="codex_retry")
+                proxy = client.last_proxy_url
+                from core.roxy_profile_pool import save_account_snapshot
+                save_account_snapshot(email, opened)
+            else:
+                opened = client.open_profile(headless=headless_override)
         if opened is None:
             raise RuntimeError("Roxy OAuth 缺少浏览器环境")
         browser_kind_token = _CODEX_BROWSER_KIND.set(_detect_browser_kind(opened))
@@ -1634,7 +1640,7 @@ def _run_roxy_codex_oauth_once(
         # 注册后复用窗口时，driver/profile 生命周期由注册流程统一清理，
         # 这里不能 quit/delete，否则会提前销毁注册环境。
         failed = not task_succeeded
-        if owns_driver and driver and (failed or not bool(_roxy_cfg.ROXY_KEEP_BROWSER_OPEN)):
+        if owns_driver and driver and (bool(getattr(_roxy_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)) or failed or not bool(_roxy_cfg.ROXY_KEEP_BROWSER_OPEN)):
             try:
                 driver.quit()
             except Exception:

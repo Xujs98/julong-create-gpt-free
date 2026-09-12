@@ -532,7 +532,15 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "ROXY_PERSIST_PROFILE_PER_ACCOUNT", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
-        "label": "账号持久环境模式", "help": "新增模式：每个账号绑定独立 Roxy 环境；任务结束关闭但不删除，下次开始前清理状态、刷新代理并随机指纹。关闭后保持原有新建/删除流程",
+        "label": "账号持久环境模式", "help": "所有 Roxy 任务复用关闭状态的环境；先清理本地/云端 Cookie、缓存和站点状态，再初始化指纹并分配新代理。补跑/查活/套餐/资格任务优先读取账号指纹；其他任务随机指纹。无空闲环境时等待，不新建；结束关闭不删除。",
+    },
+    {
+        "key": "ROXY_PROFILE_LIST_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
+        "label": "环境列表接口路径", "help": "默认 GET /browser/list；新版本可设 /browser/list_v3，仅复用当前工作区和项目内明确关闭的窗口",
+    },
+    {
+        "key": "ROXY_IDLE_PROFILE_WAIT_TIMEOUT", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
+        "label": "等待空闲环境(秒)", "help": "并发超出关闭环境数量时等待；超时返回明确错误，不创建新窗口。0 表示立即返回。", "min": 0, "max": 3600,
     },
     {
         "key": "ROXY_RANDOM_ENV_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
@@ -544,7 +552,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "ROXY_MDF_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
-        "label": "编辑环境接口路径", "help": "默认 /browser/mdf；持久环境 API 代理模式用于写入新代理",
+        "label": "编辑环境接口路径", "help": "默认 /browser/mdf；持久环境模式写入指纹设置和本次任务新代理",
     },
     {
         "key": "ROXY_DELETE_PROFILE_AFTER_RUN", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
