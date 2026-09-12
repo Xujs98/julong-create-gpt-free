@@ -199,21 +199,13 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "LIVE_CHECK_USE_REGISTRATION_PROXY", "file": "live_check.py", "type": "bool", "group": "账号查活",
-        "label": "查活使用注册代理", "help": "开启后优先使用账号注册时保存的代理；该代理失败后再尝试查活代理 API 和代理池",
+        "label": "查活使用注册代理", "help": "开启后优先使用账号注册时保存的代理；其余出口来源统一跟随配置 → 代理池的代理模式",
     },
     {
-        "key": "LIVE_CHECK_PROXY_API_ENABLED", "file": "live_check.py", "type": "bool", "group": "账号查活",
-        "label": "启用查活代理 API", "help": "开启后按账号保存的国家/地区请求代理 API；注册代理关闭时，查活优先使用 API，再回退代理池",
-    },
-    {
-        "key": "LIVE_CHECK_PROXY_API_URL", "file": "live_check.py", "type": "str", "group": "账号查活",
-        "label": "查活代理 API 地址", "help": "支持 {region}/{country}/{country_code} 占位符；region 参数会自动替换为账号国家码",
-        "placeholder": "https://api.example/white/api?region={region}&num=2&time=10&format=n&type=json",
-    },
-    {
-        "key": "LIVE_CHECK_PROXY_API_TIMEOUT", "file": "live_check.py", "type": "float", "group": "账号查活",
-        "label": "查活代理 API 超时(秒)", "help": "获取代理 API 的最大等待时间，建议 3-15 秒",
-        "min": 0.5, "max": 60,
+        "key": "LIVE_CHECK_PROXY_API_REGION", "file": "live_check.py", "type": "str", "group": "账号查活",
+        "label": "查活代理地区", "help": "默认跟随账号注册地区，也可指定国家或随机地区；API 地址、数量、会话、时长、格式、超时和健康检查尝试次数统一使用配置 → 代理池 → API代理。",
+        "choices": ["account", *PROXY_API_REGION_CHOICES],
+        "choice_labels": {"account": "跟随账号注册地区", **PROXY_API_REGION_LABELS}, "searchable": True,
     },
     {
         "key": "REBIND_LOGIN_DRIVER", "file": "live_check.py", "type": "str", "group": "账号查活",
@@ -847,6 +839,11 @@ EDITABLE_FIELDS = [
         "min": 0.5, "max": 60,
     },
     {
+        "key": "PROXY_API_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "label": "健康检查尝试次数", "help": "所有 API 代理任务共用，包含首次尝试，默认 3 次，范围 1-20。每次重新获取代理并检查一个 IP，通过即停止；获取失败也计次。关闭健康检查时仅重试获取代理。",
+        "min": 1, "max": 20,
+    },
+    {
         "key": "PROXY_API_URL", "file": "proxy.py", "type": "str", "group": "代理池",
         "label": "API链接", "help": "根据上方参数生成；也可保留自定义 API 的域名和路径，query 参数会自动同步",
         "readonly": True,
@@ -897,7 +894,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", "file": "proxy.py", "type": "bool", "group": "代理池",
-        "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前执行多维干净度检查并选择通过项；不会改变注册方式配置",
+        "label": "注册任务检查健康IP", "help": "开启后每个注册任务开始前执行多维干净度检查；所有使用 API 代理的任务（含查活）也共用此检查及 API 健康检查尝试次数。",
     },
     {
         "key": "PROXY_BROWSER_CHALLENGE_AUTO_ROTATE", "file": "proxy.py", "type": "bool", "group": "代理池",

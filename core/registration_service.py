@@ -284,46 +284,12 @@ def _select_registration_proxy(
         getattr(_proxy_cfg, "PROXY_HEALTH_CHECK_BEFORE_REGISTRATION", False)
     )
 
-    # API 模式与固定代理池完全分开：每个注册任务都实时请求一次 API，
-    # 因此不读取、清理或预热 PROXY_POOL。挑战重试时通过 excluded_proxies
-    # 再请求一个新出口，避免在同一 IP 上重复打开注册页。
+    # API 获取和健康检查统一在 pick_proxy 内计次，避免任务层嵌套重试。
     if proxy_mode == "api":
-        excluded = excluded_proxies or set()
-        last_error = ""
-        attempts = max(3, int(getattr(_proxy_cfg, "PROXY_API_NUM", 1) or 1) + 2)
-        for _ in range(attempts):
-            try:
-                selected = str(_proxy_cfg.pick_proxy() or "").strip()
-            except Exception as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                continue
-            if not selected:
-                last_error = "代理 API 返回空代理"
-                continue
-            if _proxy_identity(selected) in {_proxy_identity(item) for item in excluded}:
-                last_error = "代理 API 重复返回已隔离出口"
-                continue
-            if not health_check_enabled:
-                log_logger.info("[Job %s] API代理已获取动态出口", job_id)
-                return selected
-
-            from core.proxy_test import choose_healthy_proxy
-
-            selection = choose_healthy_proxy(
-                [selected],
-                timeout=getattr(_proxy_cfg, "PROXY_WARMUP_TIMEOUT", 12.0),
-                health_url=getattr(_proxy_cfg, "PROXY_WARMUP_HEALTH_URL", ""),
-                reputation_url=getattr(_proxy_cfg, "PROXY_WARMUP_REPUTATION_URL", ""),
-                anonymity_url=getattr(_proxy_cfg, "PROXY_WARMUP_ANONYMITY_URL", ""),
-                min_clean_score=getattr(_proxy_cfg, "PROXY_WARMUP_MIN_CLEAN_SCORE", 80),
-                max_latency=getattr(_proxy_cfg, "PROXY_WARMUP_MAX_LATENCY", 8.0),
-                exit_samples=getattr(_proxy_cfg, "PROXY_WARMUP_EXIT_SAMPLES", 3),
-            )
-            if selection.get("ok") and selection.get("proxy_url"):
-                log_logger.info("[Job %s] API代理健康检查通过", job_id)
-                return str(selection["proxy_url"])
-            last_error = str((selection.get("result") or {}).get("reason") or "API代理健康检查未通过")
-        raise RuntimeError(f"代理 API 未能获取可用出口：{last_error or '未知错误'}")
+        return _proxy_cfg.pick_proxy(
+            excluded_proxies=excluded_proxies,
+            log=lambda message: log_logger.info("[Job %s] %s", job_id, message),
+        )
 
     if not health_check_enabled and not excluded_proxies:
         return None

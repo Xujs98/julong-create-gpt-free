@@ -37,6 +37,9 @@ PROXY_API_TIME = 10
 PROXY_API_TYPE = "json"
 PROXY_API_NUM = 1
 PROXY_API_TIMEOUT = 8.0
+# 所有 API 代理任务共用的获取/健康检查总尝试次数（含首次，范围 1-20）。
+# 每次重新请求 API 并检查一个出口，通过即停止；与 API 返回数量无关。
+PROXY_API_MAX_ATTEMPTS = 3
 
 # ISO 3166-1 alpha-2 regions accepted by the provider. Keeping this list in
 # the runtime config makes the WebUI searchable by either code or Chinese name.
@@ -352,13 +355,13 @@ PLAN_CHECK_MIN_INTERVAL = 0.4
 PLAN_CHECK_JITTER = 0.3
 
 
-def build_proxy_api_request_url() -> str:
+def build_proxy_api_request_url(region: str | None = None) -> str:
     """根据 API 代理参数生成当前请求链接，保留自定义 query 参数。"""
     raw_url = str(PROXY_API_URL or "").strip() or (
         "https://api.cliproxy.io/white/api?region={region}&num={num}"
         "&time={time}&format={format}&type={type}"
     )
-    region = str(PROXY_API_REGION or "Rand").strip() or "Rand"
+    region = str((PROXY_API_REGION if region is None else region) or "Rand").strip() or "Rand"
     parsed = urlsplit(raw_url)
     query = [
         (key, value)
@@ -382,19 +385,21 @@ def build_proxy_api_request_url() -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
 
 
-def pick_proxy() -> str:
+def pick_proxy(*, excluded_proxies=None, log=None) -> str:
     """按代理来源选择一个代理 URL；API 模式每次调用都会请求新出口。
 
     pool 模式从固定列表随机选择；空列表返回空串（即不使用代理）。
     """
     if str(PROXY_MODE or "pool").strip().lower() == "api":
-        from core.live_check_proxy import fetch_proxy_api
+        from core.live_check_proxy import fetch_available_proxy_api
 
         api_url = build_proxy_api_request_url()
-        proxies = fetch_proxy_api(
+        proxies = fetch_available_proxy_api(
             str(PROXY_API_REGION or "Rand").strip() or "Rand",
             api_url=api_url,
             timeout=max(0.5, float(PROXY_API_TIMEOUT or 8.0)),
+            excluded_proxies=excluded_proxies,
+            log=log,
         )
         if not proxies:
             raise RuntimeError("代理 API 未返回可用代理")
@@ -417,6 +422,7 @@ apply_env_overrides(globals(), {
     'PROXY_API_TYPE': 'str',
     'PROXY_API_NUM': 'int',
     'PROXY_API_TIMEOUT': 'float',
+    'PROXY_API_MAX_ATTEMPTS': 'int',
     'PROXY_CHECK_BEFORE_REGISTRATION': 'bool',
     'PROXY_WARMUP_TARGET_CLEAN_IPS': 'int',
     'PROXY_WARMUP_HEALTH_URL': 'str',

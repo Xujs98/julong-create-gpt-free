@@ -27,26 +27,21 @@ def test_live_check_driver_config_is_independent_from_registration_browser_setti
     assert isinstance(live_check.LIVE_CHECK_HEADLESS, bool)
 
 
-def test_live_check_proxy_api_settings_are_exposed_with_registration_priority():
+def test_live_check_only_exposes_region_and_registration_priority():
     source = (ROOT / "config" / "live_check.py").read_text(encoding="utf-8")
     fields = {item["key"]: item for item in EDITABLE_FIELDS}
-
     assert "LIVE_CHECK_USE_REGISTRATION_PROXY: bool = True" in source
-    assert "LIVE_CHECK_PROXY_API_ENABLED: bool = False" in source
-    assert "{region}" in source
-    assert "num=2" in source
+    assert 'LIVE_CHECK_PROXY_API_REGION: str = "account"' in source
     assert fields["LIVE_CHECK_USE_REGISTRATION_PROXY"]["type"] == "bool"
-    assert fields["LIVE_CHECK_PROXY_API_ENABLED"]["type"] == "bool"
-    assert fields["LIVE_CHECK_PROXY_API_URL"]["type"] == "str"
-    assert fields["LIVE_CHECK_PROXY_API_TIMEOUT"]["type"] == "float"
-    assert all(fields[key]["group"] == "账号查活" for key in (
-        "LIVE_CHECK_USE_REGISTRATION_PROXY",
-        "LIVE_CHECK_PROXY_API_ENABLED",
-        "LIVE_CHECK_PROXY_API_URL",
-        "LIVE_CHECK_PROXY_API_TIMEOUT",
-    ))
+    field = fields["LIVE_CHECK_PROXY_API_REGION"]
+    assert field["type"] == "str" and field["group"] == "账号查活"
+    assert {"account", "Rand", "JP"} <= set(field["choices"])
+    assert field["choice_labels"]["account"] == "跟随账号注册地区"
+    for key in ("LIVE_CHECK_PROXY_API_ENABLED", "LIVE_CHECK_PROXY_API_URL", "LIVE_CHECK_PROXY_API_TIMEOUT"):
+        assert key not in fields
+        assert key not in source
     assert isinstance(live_check.LIVE_CHECK_USE_REGISTRATION_PROXY, bool)
-    assert isinstance(live_check.LIVE_CHECK_PROXY_API_ENABLED, bool)
+    assert isinstance(live_check.LIVE_CHECK_PROXY_API_REGION, str)
 
 
 def test_roxy_api_and_open_timeouts_are_separate_editable_settings():

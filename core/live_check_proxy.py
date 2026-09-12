@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import logging
+from typing import Any, Callable
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import requests
 
 from core.proxy_utils import normalize_proxy_url
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_PROXY_API_URL = (
@@ -95,3 +99,82 @@ def fetch_proxy_api(region: str, *, api_url: str | None = None, timeout: float =
     if not proxies:
         raise ValueError("代理 API 返回为空或代理格式无法识别")
     return proxies
+
+
+def _api_proxy_identity(value: str) -> str:
+    """Compare normalized endpoints, including the two SOCKS5 DNS variants."""
+    parsed = urlsplit(str(value or "").strip())
+    scheme = "socks5h" if parsed.scheme.lower() == "socks5" else parsed.scheme.lower()
+    return urlunsplit((scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def fetch_available_proxy_api(
+    region: str,
+    *,
+    api_url: str | None = None,
+    timeout: float = 8.0,
+    excluded_proxies: set[str] | None = None,
+    log: Callable[[str], None] | None = None,
+) -> list[str]:
+    """Shared, bounded API acquisition and optional health check for all tasks.
+
+    Each attempt fetches a fresh batch and checks one eligible endpoint. The
+    provider's batch size never increases the health-check attempt budget.
+    With health checks disabled, retain all eligible routes for liveness tasks.
+    """
+    from config import proxy as proxy_cfg
+
+    try:
+        attempts = int(proxy_cfg.PROXY_API_MAX_ATTEMPTS)
+    except (TypeError, ValueError, OverflowError):
+        attempts = 3
+    attempts = max(1, min(attempts, 20))
+    health_enabled = bool(proxy_cfg.PROXY_HEALTH_CHECK_BEFORE_REGISTRATION)
+    excluded = {_api_proxy_identity(value) for value in (excluded_proxies or set())}
+    emit = log if log is not None else logger.info
+    last_error = "代理 API 返回空代理"
+    for attempt in range(1, attempts + 1):
+        emit(f"API代理尝试 {attempt}/{attempts}：获取动态出口")
+        try:
+            proxies = fetch_proxy_api(region, api_url=api_url, timeout=timeout)
+        except Exception as exc:
+            # Request exceptions may contain API credentials in their URL.
+            last_error = f"代理 API 获取失败（{type(exc).__name__}）"
+        else:
+            candidates = [
+                str(value).strip() for value in proxies
+                if str(value or "").strip() and _api_proxy_identity(value) not in excluded
+            ]
+            if not candidates:
+                last_error = "代理 API 重复返回已隔离出口" if proxies else "代理 API 返回空代理"
+            elif not health_enabled:
+                emit(f"API代理尝试 {attempt}/{attempts}：已获取动态出口（健康检查已关闭）")
+                return candidates
+            else:
+                from core.proxy_test import choose_healthy_proxy
+
+                try:
+                    selection = choose_healthy_proxy(
+                        [candidates[0]],
+                        timeout=proxy_cfg.PROXY_WARMUP_TIMEOUT,
+                        health_url=proxy_cfg.PROXY_WARMUP_HEALTH_URL,
+                        reputation_url=proxy_cfg.PROXY_WARMUP_REPUTATION_URL,
+                        anonymity_url=proxy_cfg.PROXY_WARMUP_ANONYMITY_URL,
+                        min_clean_score=proxy_cfg.PROXY_WARMUP_MIN_CLEAN_SCORE,
+                        max_latency=proxy_cfg.PROXY_WARMUP_MAX_LATENCY,
+                        exit_samples=proxy_cfg.PROXY_WARMUP_EXIT_SAMPLES,
+                    )
+                except Exception as exc:
+                    last_error = f"API代理健康检查异常（{type(exc).__name__}）"
+                else:
+                    if selection.get("ok") and selection.get("proxy_url"):
+                        emit(f"API代理尝试 {attempt}/{attempts}：健康检查通过")
+                        return [str(selection["proxy_url"])]
+                    # choose_healthy_proxy returns result=None on failure; the
+                    # actual health reason is in the last checked entry.
+                    checked = selection.get("checked") or []
+                    result = selection.get("result") or (checked[-1] if checked else {})
+                    last_error = str(result.get("reason") or "API代理健康检查未通过")
+        suffix = "，重新获取代理" if attempt < attempts else "，尝试次数已用尽"
+        emit(f"API代理尝试 {attempt}/{attempts} 失败：{last_error}{suffix}")
+    raise RuntimeError(f"代理 API 未能获取可用出口（已尝试 {attempts}/{attempts} 次）：{last_error}")

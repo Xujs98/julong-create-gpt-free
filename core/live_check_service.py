@@ -7,11 +7,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from core import db
 from core.account_liveness import check_account_liveness, log_path
 from core.chatgpt_plan import check_account_plan, resolve_plan_check_route
-from core.live_check_proxy import fetch_proxy_api
+from core.live_check_proxy import fetch_available_proxy_api
 from core.proxy_utils import masked_proxy_url, normalize_proxy_url
 from core.session_state import extract_saved_session
 
@@ -56,9 +57,15 @@ def _saved_registration_proxy(account: dict) -> str:
         return ""
 
 
-def _live_check_routes(account: dict, explicit_proxy: str | None = None) -> list[dict]:
-    """按注册代理 → API → 代理池顺序构造查活候选出口。"""
+def _live_check_routes(
+    account: dict,
+    explicit_proxy: str | None = None,
+    *,
+    log: Callable[[str], None] | None = None,
+) -> list[dict]:
+    """优先复用注册代理，其余候选统一跟随代理池来源，仅地区由查活指定。"""
     from config import live_check as live_cfg
+    from config import proxy as proxy_cfg
 
     if explicit_proxy is not None:
         route = resolve_plan_check_route(explicit_proxy=explicit_proxy)
@@ -78,14 +85,17 @@ def _live_check_routes(account: dict, explicit_proxy: str | None = None) -> list
                 "proxy_fallback_reason": None,
             })
 
-    if bool(getattr(live_cfg, "LIVE_CHECK_PROXY_API_ENABLED", False)):
-        region = str(account.get("proxy_country_code") or "").strip()
+    if str(proxy_cfg.PROXY_MODE or "pool").strip().lower() == "api":
+        region = str(live_cfg.LIVE_CHECK_PROXY_API_REGION or "account").strip()
+        if region.lower() == "account":
+            region = str(account.get("proxy_country_code") or "").strip()
         if region:
             try:
-                api_proxies = fetch_proxy_api(
+                api_proxies = fetch_available_proxy_api(
                     region,
-                    api_url=str(getattr(live_cfg, "LIVE_CHECK_PROXY_API_URL", "") or ""),
-                    timeout=float(getattr(live_cfg, "LIVE_CHECK_PROXY_API_TIMEOUT", 8.0) or 8.0),
+                    api_url=proxy_cfg.build_proxy_api_request_url(region=region),
+                    timeout=max(0.5, float(proxy_cfg.PROXY_API_TIMEOUT or 8.0)),
+                    log=log,
                 )
                 for api_proxy in api_proxies:
                     routes.append({
@@ -114,6 +124,9 @@ def _live_check_routes(account: dict, explicit_proxy: str | None = None) -> list
                 "proxy_used": None,
                 "proxy_fallback_reason": "账号缺少国家/地区，跳过代理 API",
             })
+        # Do not obtain a second API batch through the plan-check fallback:
+        # that would reset the budget and use the registration region.
+        return routes
 
     pool_route = resolve_plan_check_route(explicit_proxy=None)
     pool_route["source"] = "proxy_pool"
@@ -277,7 +290,10 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             raise RuntimeError(f"LIVE_CHECK_DRIVER 配置无效：{selected_driver}")
         selected_headless = bool(getattr(live_cfg, "LIVE_CHECK_HEADLESS", False))
         account = db.get_account(account_id) or {}
-        routes = _live_check_routes(account, explicit_proxy=proxy)
+        routes = _live_check_routes(
+            account, explicit_proxy=proxy,
+            log=lambda message: _append_log(email, f"[查活] {message}"),
+        )
         final_result: dict | None = None
         final_proxy: str | None = None
 

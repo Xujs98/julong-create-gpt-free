@@ -14,13 +14,11 @@ LIVE_CHECK_DRIVER: str = "cloak"
 # 仅在查活驱动为 cloak/roxy 时生效，不修改对应浏览器的注册无头配置。
 LIVE_CHECK_HEADLESS: bool = False
 
-# 查活出口优先级：注册代理（开关开启时）→代理 API（开关开启时）→代理池。
+# 查活可优先复用注册代理，其余出口来源统一跟随 config.proxy.PROXY_MODE。
 LIVE_CHECK_USE_REGISTRATION_PROXY: bool = True
-LIVE_CHECK_PROXY_API_ENABLED: bool = False
-LIVE_CHECK_PROXY_API_URL: str = (
-    "https://api.cliproxy.io/white/api?region={region}&num=2&time=10&format=n&type=json"
-)
-LIVE_CHECK_PROXY_API_TIMEOUT: float = 8.0
+# 仅地区由查活单独指定：account=跟随账号注册地区，Rand=随机，或 ISO 国家码。
+# API 地址、数量、会话、时长、格式、超时与尝试次数统一读取代理池配置。
+LIVE_CHECK_PROXY_API_REGION: str = "account"
 
 # 换绑阶段配置。``protocol``、``cloak``、``roxy`` 均可用；混合模式开启
 # 时分别使用登录驱动和变更驱动。默认组合为“Cloak 登录 + 协议换绑”。
@@ -35,9 +33,7 @@ apply_env_overrides(globals(), {
     "LIVE_CHECK_DRIVER": "str",
     "LIVE_CHECK_HEADLESS": "bool",
     "LIVE_CHECK_USE_REGISTRATION_PROXY": "bool",
-    "LIVE_CHECK_PROXY_API_ENABLED": "bool",
-    "LIVE_CHECK_PROXY_API_URL": "str",
-    "LIVE_CHECK_PROXY_API_TIMEOUT": "float",
+    "LIVE_CHECK_PROXY_API_REGION": "str",
     "REBIND_LOGIN_DRIVER": "str",
     "REBIND_ACTION_DRIVER": "str",
     "REBIND_HYBRID_MODE": "bool",

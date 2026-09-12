@@ -10348,7 +10348,7 @@ function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === 'WebUI') return 'WebUI 界面行为与任务日志刷新设置。';
   if (name === '日志管理') return '统一管理任务日志与账号级查活、提链、2FA、Codex 补跑日志的保留策略。';
-  if (name === '账号查活') return '配置查活出口优先级、查活方式及换绑登录/提交方式；代理优先级为注册代理 → 代理 API → 代理池。';
+  if (name === '账号查活') return '配置查活方式及换绑登录/提交方式；代理来源与 API 参数统一跟随代理池配置，仅查活地区单独设置。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择自动化驱动与注册流量模式，可在默认、稳定和节流三档之间对比。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
@@ -11004,17 +11004,18 @@ function renderProxyPoolSectionV2(fields) {
   const typeField = proxyApiFieldV2(fields, 'PROXY_API_TYPE');
   const numField = proxyApiFieldV2(fields, 'PROXY_API_NUM');
   const timeoutField = proxyApiFieldV2(fields, 'PROXY_API_TIMEOUT');
+  const attemptsField = proxyApiFieldV2(fields, 'PROXY_API_MAX_ATTEMPTS');
   const mode = String(proxyApiValueV2('PROXY_MODE', modeField.value || 'pool') || 'pool').toLowerCase() === 'api' ? 'api' : 'pool';
   const regionOptions = regionField.choices || ['Rand'];
   const regionLabels = regionField.choice_labels || {};
   const poolField = fields.find(field => field.key === 'PROXY_POOL');
   const poolHtml = poolField ? `<div class="proxy-pool-editor-v2">${renderConfigPlainFieldV2(poolField)}</div>` : '';
-  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_URL'].includes(field.key));
+  const otherFields = fields.filter(field => !['PROXY_MODE', 'PROXY_POOL', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_MAX_ATTEMPTS', 'PROXY_API_URL'].includes(field.key));
   const otherSwitches = otherFields.filter(field => field.type === 'bool');
   const otherInputs = otherFields.filter(field => field.type !== 'bool');
   const apiUrl = proxyApiLinkV2();
   return `<section class="config-section-v2" id="${esc(configGroupSlug('代理池'))}" data-config-section="代理池">
-    ${renderConfigSectionHead('代理池', '代理池与 API 代理二选一；查活 API 配置独立于这里，不会被覆盖。')}
+    ${renderConfigSectionHead('代理池', '代理池与 API 代理二选一；所有任务共用 API 配置，查活地区在账号查活中单独设置。')}
     <div class="config-mode-v2" role="group" aria-label="代理来源">
       <button type="button" class="config-ep-select-item${mode === 'pool' ? ' is-active' : ''}" data-proxy-mode="pool" aria-pressed="${mode === 'pool'}">代理池</button>
       <button type="button" class="config-ep-select-item${mode === 'api' ? ' is-active' : ''}" data-proxy-mode="api" aria-pressed="${mode === 'api'}">API代理</button>
@@ -11029,13 +11030,14 @@ function renderProxyPoolSectionV2(fields) {
         ${renderProxyApiFieldV2(typeField, '数据格式', proxyApiSelectV2(typeField, typeField.choices || ['json', 'txt'], typeField.choice_labels || {}))}
         ${renderProxyApiFieldV2(numField, '数量', `<input type="number" min="1" max="20" step="1" data-key="${attrEsc(numField.key)}" value="${attrEsc(proxyApiValueV2(numField.key, numField.value || 1))}">`)}
         ${renderProxyApiFieldV2(timeoutField, '请求超时(秒)', `<input type="number" min="0.5" max="60" step="0.5" data-key="${attrEsc(timeoutField.key)}" value="${attrEsc(proxyApiValueV2(timeoutField.key, timeoutField.value || 10))}">`)}
+        ${renderProxyApiFieldV2(attemptsField, '健康检查尝试次数', `<input type="number" min="1" max="20" step="1" data-key="${attrEsc(attemptsField.key)}" value="${attrEsc(proxyApiValueV2(attemptsField.key, attemptsField.value || 3))}">`)}
       </div>
       <div class="proxy-api-link-v2">
         <label><span>API链接</span><input type="text" readonly data-proxy-api-link value="${attrEsc(apiUrl)}"><input type="hidden" data-key="PROXY_API_URL" value="${attrEsc(apiUrl)}"></label>
         <button type="button" data-proxy-api-copy title="复制 API 链接">复制链接</button>
         <button type="button" class="primary" data-proxy-api-open title="打开 API 链接">打开链接</button>
       </div>
-      <div class="proxy-api-hint-v2">Sticky IP 会在时长内保持出口；Rotating IP 在每个注册任务重新请求。保存后注册任务按当前 API 参数获取代理。</div>
+      <div class="proxy-api-hint-v2">Sticky IP 会在时长内保持出口；Rotating IP 在每个注册任务重新请求。健康检查尝试次数（含首次）由所有 API 代理任务共用：每次重新获取并检查一个 IP，通过即停止；获取失败也计次。关闭健康检查时仅重试获取代理，保存后下一次代理选择生效。</div>
     </div>
     <div class="proxy-pool-panel-v2" data-proxy-pool-panel${mode === 'api' ? ' hidden' : ''}>${poolHtml}</div>
     ${otherSwitches.length ? `<div class="config-switches-v2">${otherSwitches.map(field => renderFeatureSwitchField(field, { withIcon: false })).join('')}</div>` : ''}
@@ -12013,7 +12015,7 @@ function trackConfigFieldChange(e) {
   if (!f) return;
   setConfigPendingValueV2(f.key, readConfigElementValue(el, f));
   if (f.key === 'PROXY_POOL') updateProxyPoolCountV2(el.value);
-  if (['PROXY_MODE', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_URL'].includes(f.key)) syncProxyModeV2();
+  if (['PROXY_MODE', 'PROXY_API_REGION', 'PROXY_API_FORMAT', 'PROXY_API_SESSION_TYPE', 'PROXY_API_TIME', 'PROXY_API_TYPE', 'PROXY_API_NUM', 'PROXY_API_TIMEOUT', 'PROXY_API_MAX_ATTEMPTS', 'PROXY_API_URL'].includes(f.key)) syncProxyModeV2();
   if (f.key === 'AUTO_BROWSER_LOCALE_FROM_IP') syncRegionProfileControlV2();
   if (f.key === 'ACCOUNT_LOG_AUTO_CLEANUP') syncAccountLogManagementControlsV2();
   if (f.key === 'REGISTRATION_TRAFFIC_MODE') syncRegistrationModeCardV2();
