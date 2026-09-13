@@ -231,6 +231,7 @@ def run_registration(
     otp_code: str = None,
     batch_dir=None,
     profile_binding_key: str | None = None,
+    registration_workers: int | None = None,
 ):
     """
     执行完整的 ChatGPT 注册流程；按 ENABLE_CREATE_PASSWORD 选择密码或 OTP-only 分支。
@@ -245,6 +246,7 @@ def run_registration(
         birthday: 生日，格式 YYYY-MM-DD
         proxy: 代理地址（不传则从 PROXY_POOL 随机抽）
         otp_code: 邮箱验证码（如果为None，会等待手动输入）
+        registration_workers: Roxy 持久注册环境容量目标，通常等于本批并发线程数
     """
     # 所有驱动统一校验生日；传入空值时生成至少 19 岁的随机生日。
     birthday = validate_registration_birthday(birthday or generate_random_birthday())
@@ -259,14 +261,19 @@ def run_registration(
     driver_mode = normalize_registration_driver(getattr(_roxy_cfg, "REGISTRATION_DRIVER", "protocol"))
     if driver_mode in ("roxy", "roxybrowser", "fingerprint", "browser"):
         from core.roxy_registration import run_roxy_registration
+        roxy_kwargs = {
+            "email": email,
+            "name": name,
+            "birthday": birthday,
+            "proxy": proxy,
+            "otp_code": otp_code,
+            "batch_dir": batch_dir,
+            "profile_binding_key": profile_binding_key,
+        }
+        if registration_workers is not None:
+            roxy_kwargs["registration_workers"] = registration_workers
         return run_roxy_registration(
-            email=email,
-            name=name,
-            birthday=birthday,
-            proxy=proxy,
-            otp_code=otp_code,
-            batch_dir=batch_dir,
-            profile_binding_key=profile_binding_key,
+            **roxy_kwargs,
         )
     if driver_mode in ("cloak", "cloakbrowser"):
         from core.cloakbrowser_registration import run_cloak_registration

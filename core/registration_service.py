@@ -588,7 +588,7 @@ class _JobLogContext:
                 _JOB_LOG_PREVIOUS_LEVEL = None
 
 
-def _run_one_job(job_id: int, log_file: str) -> None:
+def _run_one_job(job_id: int, log_file: str, registration_workers: int | None = None) -> None:
     """单任务入口（线程池里跑这个）。"""
     log_logger = logging.getLogger(__name__)
     _activate_job(job_id)
@@ -665,6 +665,8 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                         "roxy", "roxybrowser", "fingerprint", "browser",
                     }:
                         registration_kwargs["profile_binding_key"] = email
+                        if registration_workers is not None:
+                            registration_kwargs["registration_workers"] = registration_workers
                     if registration_proxy:
                         registration_kwargs["proxy"] = registration_proxy
                     result = run_registration(**registration_kwargs)
@@ -946,7 +948,7 @@ def submit_registration(
                     registration_group_name=resolved_group_name,
                 )
                 try:
-                    executor.submit(_run_one_job, job["id"], job["log_file"])
+                    executor.submit(_run_one_job, job["id"], job["log_file"], effective_workers)
                 except Exception as exc:
                     db.update_job(
                         int(job["id"]),
@@ -1093,10 +1095,11 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             db.update_account_codex_status(email, "retrying", None)
         with _executor_lock:
             executor = get_executor(max_workers=workers)
+            effective_workers = get_executor_workers()
             if action == "codex":
                 executor.submit(_run_codex_retry_job, job["id"], job["log_file"], email, int(account_id))
             else:
-                executor.submit(_run_one_job, job["id"], job["log_file"])
+                executor.submit(_run_one_job, job["id"], job["log_file"], effective_workers)
     except Exception as exc:
         if reserved_codex:
             codex_retry_service.release(email)

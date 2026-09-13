@@ -80,6 +80,7 @@ def test_registration_jobs_persist_group_and_retry_inherits_it(monkeypatch, tmp_
         )
 
     job = jobs[0]
+    assert executor.submit.call_args.args[3] == 2
     assert job["registration_group_id"] == group["id"]
     assert job["registration_group_name"] == "批次分组"
     batch = db.get_registration_batch(job["batch_id"])

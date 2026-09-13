@@ -263,3 +263,21 @@ def test_persistent_mode_allows_opening_account_bound_profile():
         opened = client.open_profile(profile_id="PROFILE")
     assert opened.profile_id == "PROFILE"
     assert opened.created_by_run is False
+
+
+def test_registration_workers_are_passed_to_persistent_profile_pool():
+    client = RoxyBrowserClient(api_base="http://roxy.test", token="")
+    lease = Mock()
+    with patch(
+        "core.roxybrowser_client._cfg.ROXY_PERSIST_PROFILE_PER_ACCOUNT", True
+    ), patch(
+        "core.roxy_profile_pool.prepare_idle_profile",
+        return_value=("PROFILE", lease, {}),
+    ) as prepare, patch.object(
+        client,
+        "request",
+        return_value={"code": 0, "data": {"debuggerAddress": "127.0.0.1:9222"}},
+    ):
+        client.open_profile(task_kind="registration", registration_workers=3)
+
+    assert prepare.call_args.kwargs["capacity_target"] == 3

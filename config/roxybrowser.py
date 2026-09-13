@@ -96,7 +96,8 @@ ROXY_CREATE_RETRIES: int = 3
 ROXY_ONE_PROFILE_PER_ACCOUNT: bool = True
 
 # 持久环境模式：所有 Roxy 任务复用当前工作区/项目内明确关闭的环境，
-# 并发占用互斥，任务结束只关闭不删除；无空闲环境时等待，绝不新建。
+# 并发占用互斥，任务结束只关闭不删除；注册任务会把本批 workers 作为容量目标，
+# 若环境总数少于该目标，每个注册任务启动时最多补建一个环境；其它任务绝不新建。
 # 仅补跑/查活/套餐/资格任务读取已有账号指纹，代理始终由本次任务重新分配。
 ROXY_PERSIST_PROFILE_PER_ACCOUNT: bool = False
 ROXY_PROFILE_LIST_PATH: str = "/browser/list"

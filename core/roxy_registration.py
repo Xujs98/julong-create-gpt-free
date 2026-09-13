@@ -2998,6 +2998,7 @@ def run_roxy_registration(
     otp_code: str = None,
     batch_dir: Path | None = None,
     profile_binding_key: str | None = None,
+    registration_workers: int | None = None,
 ) -> dict:
     """Roxy 指纹浏览器自动化注册入口。"""
     if proxy is None:
@@ -3020,7 +3021,14 @@ def run_roxy_registration(
     fingerprint_generation = ""
     try:
         if persistent_mode:
-            opened = client.open_profile(proxy=proxy, proxy_is_fresh=bool(proxy), task_kind="registration")
+            open_kwargs = {
+                "proxy": proxy,
+                "proxy_is_fresh": bool(proxy),
+                "task_kind": "registration",
+            }
+            if registration_workers is not None:
+                open_kwargs["registration_workers"] = registration_workers
+            opened = client.open_profile(**open_kwargs)
             from core.roxy_profile_pool import save_account_snapshot
             save_account_snapshot(str(profile_binding_key or email), opened)
             fingerprint_generation = time.strftime("%Y-%m-%dT%H:%M:%S")

@@ -19,6 +19,9 @@ from config import roxybrowser as cfg
 
 logger = logging.getLogger(__name__)
 ACCOUNT_TASKS = frozenset({'codex_retry', 'live_check', 'plan_check', 'qualification'})
+# A profile-shaped lock key used to serialize the workspace capacity check and
+# the single replenishment create across threads and processes.
+_CAPACITY_LOCK_PROFILE_ID = '__registration_capacity__'
 FINGER_FIELDS = frozenset('''isLanguageBaseIp language isDisplayLanguageBaseIp displayLanguage
 isTimeZone timeZone position isPositionBaseIp longitude latitude precisionPos webRTC
 resolutionType resolutionX resolutionY fontType font canvas webGL webGLInfo webGLManufacturer
@@ -47,6 +50,16 @@ def profile_closed(profile: dict) -> bool:
     status = profile.get('openStatus')
     return status is False or (type(status) is int and status == 0) or (
         isinstance(status, str) and status.strip().lower() in {'0', 'false', 'closed'})
+
+
+def _capacity_target(value: int | str | None, task_kind: str) -> int:
+    """Return a positive registration-only environment capacity target."""
+    if str(task_kind or '').strip().lower() != 'registration':
+        return 0
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _runtime_root() -> Path:
@@ -129,7 +142,8 @@ def _account_context(account: dict | None, account_key: str, task_kind: str) -> 
 
 
 def prepare_idle_profile(client, *, proxy: str | None, proxy_is_fresh: bool,
-                         account: dict | None, account_key: str, task_kind: str):
+                         account: dict | None, account_key: str, task_kind: str,
+                         capacity_target: int | None = None):
     preferred, saved, old_proxy = _account_context(account, account_key, task_kind)
     if preferred and not saved:
         # Reading a historical profile is allowed even when it is busy; never
@@ -146,8 +160,38 @@ def prepare_idle_profile(client, *, proxy: str | None, proxy_is_fresh: bool,
     timeout = max(0, min(3600, float(getattr(cfg, 'ROXY_IDLE_PROFILE_WAIT_TIMEOUT', 300))))
     deadline = time.monotonic() + timeout
     next_log = 0
+    target = _capacity_target(capacity_target, task_kind)
+    capacity_creation_attempted = False
     while True:
         profiles = client.list_profiles()
+
+        # Registration workers define the reusable Roxy capacity.  Only one
+        # profile is replenished per task start; other Roxy task kinds retain
+        # the strict reuse-only behavior.  The workspace lock is separate
+        # from per-profile leases so concurrent workers cannot all create for
+        # the same capacity gap.
+        if target and len(profiles) < target and not capacity_creation_attempted:
+            capacity_lease = ProfileLease.try_acquire(workspace, _CAPACITY_LOCK_PROFILE_ID)
+            if capacity_lease is not None:
+                try:
+                    current_profiles = client.list_profiles()
+                    if len(current_profiles) < target:
+                        create_proxy = proxy if proxy_is_fresh else None
+                        client.create_profile(proxy=create_proxy, allow_persistent=True)
+                        capacity_creation_attempted = True
+                        logger.info(
+                            '[Roxy] 注册环境容量不足，已补建 1 个环境：当前=%s 目标线程数=%s',
+                            len(current_profiles), target,
+                        )
+                        # Creation is asynchronous in some Roxy versions;
+                        # refresh immediately and let the normal closed-state
+                        # loop wait for the new row if it is not visible yet.
+                        profiles = client.list_profiles()
+                    else:
+                        profiles = current_profiles
+                finally:
+                    capacity_lease.release()
+
         profiles.sort(key=lambda row: str(row['dirId']) != preferred)
         for row in profiles:
             if not profile_closed(row):
@@ -191,9 +235,20 @@ def prepare_idle_profile(client, *, proxy: str | None, proxy_is_fresh: bool,
                 lease.release()
                 raise
         if time.monotonic() >= deadline:
+            if target:
+                raise RuntimeError(
+                    f'Roxy 暂无空闲的关闭环境（等待 {timeout:g} 秒）；'
+                    f'注册容量目标={target}，本任务已补建={capacity_creation_attempted}，请关闭空闲窗口或降低并发'
+                )
             raise RuntimeError(f'Roxy 暂无空闲的关闭环境（等待 {timeout:g} 秒）；请关闭空闲窗口或降低并发，持久模式不新建环境')
         if time.monotonic() >= next_log:
-            logger.info('[Roxy] 等待关闭环境可用，当前环境总数=%s；不创建新窗口', len(profiles))
+            if target:
+                logger.info(
+                    '[Roxy] 等待关闭环境可用，当前环境总数=%s，注册容量目标=%s；本任务已补建=%s',
+                    len(profiles), target, capacity_creation_attempted,
+                )
+            else:
+                logger.info('[Roxy] 等待关闭环境可用，当前环境总数=%s；不创建新窗口', len(profiles))
             next_log = time.monotonic() + 15
         time.sleep(min(2, max(0, deadline - time.monotonic())))
 

@@ -565,8 +565,14 @@ class RoxyBrowserClient:
             "fingerInfo": finger,
         })
 
-    def create_profile(self, payload: dict | None = None, proxy: str | None = None) -> str:
-        if bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)):
+    def create_profile(
+        self,
+        payload: dict | None = None,
+        proxy: str | None = None,
+        *,
+        allow_persistent: bool = False,
+    ) -> str:
+        if bool(getattr(_cfg, "ROXY_PERSIST_PROFILE_PER_ACCOUNT", False)) and not allow_persistent:
             raise RuntimeError("持久环境模式使用关闭环境，请通过 open_profile 获取；不创建新窗口")
         body = dict(getattr(_cfg, "ROXY_PROFILE_CREATE_PAYLOAD", {}) or {})
         self.last_proxy_url = None
@@ -716,6 +722,7 @@ class RoxyBrowserClient:
         account: dict | None = None,
         account_key: str = "",
         task_kind: str = "task",
+        registration_workers: int | None = None,
     ) -> RoxyOpenResult:
         """打开 Roxy 环境；headless 显式传值时仅覆盖本次调用。"""
         one_profile = bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
@@ -733,10 +740,16 @@ class RoxyBrowserClient:
         fingerprint = None
         if persistent:
             from core.roxy_profile_pool import prepare_idle_profile
-            pid, lease, fingerprint = prepare_idle_profile(
-                self, proxy=proxy, proxy_is_fresh=proxy_is_fresh, account=account,
-                account_key=account_key, task_kind=task_kind,
-            )
+            prepare_kwargs = {
+                "proxy": proxy,
+                "proxy_is_fresh": proxy_is_fresh,
+                "account": account,
+                "account_key": account_key,
+                "task_kind": task_kind,
+            }
+            if registration_workers is not None:
+                prepare_kwargs["capacity_target"] = registration_workers
+            pid, lease, fingerprint = prepare_idle_profile(self, **prepare_kwargs)
         elif not pid:
             pid = self.create_profile(proxy=proxy)
             created_by_run = True

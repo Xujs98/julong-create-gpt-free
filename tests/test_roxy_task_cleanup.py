@@ -27,6 +27,28 @@ def test_roxy_registration_failure_forces_cleanup_even_when_keep_open_enabled():
     client.cleanup_profile.assert_called_once_with(opened, force=True)
 
 
+def test_persistent_registration_forwards_worker_capacity_to_roxy():
+    opened = RoxyOpenResult("PROFILE", {}, created_by_run=False)
+    client = MagicMock()
+    client.open_profile.return_value = opened
+
+    with patch("core.roxy_registration.RoxyBrowserClient", return_value=client), patch(
+        "core.roxy_registration._build_driver", side_effect=RuntimeError("driver failed")
+    ), patch("core.roxy_registration._cfg.ROXY_PERSIST_PROFILE_PER_ACCOUNT", True), patch(
+        "core.roxy_profile_pool.save_account_snapshot"
+    ), patch("core.email_provider.release_email"):
+        result = run_roxy_registration(
+            "user@example.com",
+            "Sample User",
+            "1990-01-01",
+            proxy="",
+            registration_workers=3,
+        )
+
+    assert result["success"] is False
+    assert client.open_profile.call_args.kwargs["registration_workers"] == 3
+
+
 def test_roxy_codex_failure_forces_cleanup_even_when_keep_open_enabled():
     opened = RoxyOpenResult("PROFILE", {}, created_by_run=True)
     client = MagicMock()

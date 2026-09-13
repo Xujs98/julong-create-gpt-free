@@ -1,5 +1,6 @@
 import json
 import platform
+import threading
 from unittest.mock import Mock, patch
 
 import pytest
@@ -25,8 +26,15 @@ def client(rows=None):
 
 
 def prepare(c, **kwargs):
-    return pool.prepare_idle_profile(c,proxy='http://fresh.test:8080',proxy_is_fresh=True,
-        account=kwargs.get('account'),account_key=kwargs.get('account_key',''),task_kind=kwargs.get('task_kind','registration'))
+    return pool.prepare_idle_profile(
+        c,
+        proxy='http://fresh.test:8080',
+        proxy_is_fresh=True,
+        account=kwargs.get('account'),
+        account_key=kwargs.get('account_key', ''),
+        task_kind=kwargs.get('task_kind', 'registration'),
+        capacity_target=kwargs.get('capacity_target'),
+    )
 
 
 @pytest.mark.parametrize('status,closed',[(False,True),(0,True),('0',True),('false',True),('closed',True),(True,False),(1,False),('true',False),('opening',False),(None,False),('',False)])
@@ -52,6 +60,99 @@ def test_no_closed_window_never_creates_or_closes_running():
     with pytest.raises(RuntimeError,match='暂无空闲'):
         prepare(c)
     c.create_profile.assert_not_called();c.close_profile.assert_not_called()
+
+
+def test_registration_capacity_replenishes_one_environment_before_reuse():
+    rows = [dict(dirId='a', openStatus=0), dict(dirId='b', openStatus=0)]
+    expanded = rows + [dict(dirId='c', openStatus=0)]
+    state = {'created': False}
+    c = client(rows)
+
+    def list_profiles():
+        return list(expanded if state['created'] else rows)
+
+    def create_profile(**kwargs):
+        state['created'] = True
+        assert kwargs == {'proxy': 'http://fresh.test:8080', 'allow_persistent': True}
+        return 'c'
+
+    c.list_profiles.side_effect = list_profiles
+    c.create_profile.side_effect = create_profile
+    pid, lease, _ = prepare(c, capacity_target=3)
+    try:
+        assert pid == 'a'
+        c.create_profile.assert_called_once()
+    finally:
+        lease.release()
+
+
+def test_registration_capacity_at_target_does_not_create():
+    c = client([
+        dict(dirId='a', openStatus=0),
+        dict(dirId='b', openStatus=0),
+        dict(dirId='c', openStatus=0),
+    ])
+    pid, lease, _ = prepare(c, capacity_target=3)
+    try:
+        assert pid == 'a'
+        c.create_profile.assert_not_called()
+    finally:
+        lease.release()
+
+
+def test_non_registration_tasks_never_replenish_capacity():
+    c = client([dict(dirId='a', openStatus=0)])
+    pid, lease, _ = prepare(c, task_kind='live_check', capacity_target=3)
+    try:
+        assert pid == 'a'
+        c.create_profile.assert_not_called()
+    finally:
+        lease.release()
+
+
+def test_concurrent_registration_capacity_check_creates_only_one_environment():
+    rows = [dict(dirId='a', openStatus=0), dict(dirId='b', openStatus=0)]
+    expanded = rows + [dict(dirId='c', openStatus=0)]
+    state = {'created': False, 'initial_calls': 0}
+    state_lock = threading.Lock()
+    initial_calls = threading.Barrier(2)
+    c = client(rows)
+
+    def list_profiles():
+        with state_lock:
+            state['initial_calls'] += 1
+            first_two = state['initial_calls'] <= 2
+            current = list(expanded if state['created'] else rows)
+        if first_two:
+            initial_calls.wait(timeout=2)
+        return current
+
+    def create_profile(**_kwargs):
+        with state_lock:
+            state['created'] = True
+        return 'c'
+
+    c.list_profiles.side_effect = list_profiles
+    c.create_profile.side_effect = create_profile
+    leases = []
+    errors = []
+
+    def run_one():
+        try:
+            leases.append(prepare(c, capacity_target=3))
+        except Exception as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_one) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+    assert not errors
+    assert all(not thread.is_alive() for thread in threads)
+    assert c.create_profile.call_count == 1
+    for _, lease, _ in leases:
+        lease.release()
 
 
 def test_leases_exclude_concurrent_tasks_and_release():

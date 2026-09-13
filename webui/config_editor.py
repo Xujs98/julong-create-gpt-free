@@ -532,7 +532,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "ROXY_PERSIST_PROFILE_PER_ACCOUNT", "file": "roxybrowser.py", "type": "bool", "group": "RoxyBrowser",
-        "label": "账号持久环境模式", "help": "所有 Roxy 任务复用关闭状态的环境；先清理本地/云端 Cookie、缓存和站点状态，再初始化指纹并分配新代理。补跑/查活/套餐/资格任务优先读取账号指纹；其他任务随机指纹。无空闲环境时等待，不新建；结束关闭不删除。",
+        "label": "账号持久环境模式", "help": "所有 Roxy 任务复用关闭状态的环境；注册任务按本批并发线程数补足环境容量（每个任务启动时最多补建一个），再从关闭环境中租用。先清理本地/云端 Cookie、缓存和站点状态，再初始化指纹并分配新代理。补跑/查活/套餐/资格任务优先读取账号指纹；其他任务随机指纹。无空闲环境时等待；结束关闭不删除。",
     },
     {
         "key": "ROXY_PROFILE_LIST_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
@@ -540,7 +540,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "ROXY_IDLE_PROFILE_WAIT_TIMEOUT", "file": "roxybrowser.py", "type": "int", "group": "RoxyBrowser",
-        "label": "等待空闲环境(秒)", "help": "并发超出关闭环境数量时等待；超时返回明确错误，不创建新窗口。0 表示立即返回。", "min": 0, "max": 3600,
+        "label": "等待空闲环境(秒)", "help": "注册任务先按本批并发线程数逐个补足容量，再等待关闭状态环境；其它任务只复用既有环境。超时返回明确错误。0 表示立即返回。", "min": 0, "max": 3600,
     },
     {
         "key": "ROXY_RANDOM_ENV_PATH", "file": "roxybrowser.py", "type": "str", "group": "RoxyBrowser",
