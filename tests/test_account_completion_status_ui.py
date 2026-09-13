@@ -12,6 +12,8 @@ def test_account_table_exposes_link_payment_and_sms_statuses():
     assert "is-link-on" in source
     assert "is-link-failed" in source
     assert "is-link-progress" in source
+    assert "Boolean(r.link_completed)" in source
+    assert "Plus 套餐已自动点亮提链状态" in source
     assert "is-payment-on" in source
     assert "is-sms-on" in source
     assert "data-copy-extract-link" in source

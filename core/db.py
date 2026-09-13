@@ -1384,6 +1384,30 @@ def _account_proxy_country_code(row: dict) -> str:
     return _country_code_from_value(row.get("proxy_used"))
 
 
+def _is_plus_plan_value(value: Any) -> bool:
+    """判断套餐字段是否明确表示已开通 Plus。"""
+    plan = str(value or "").strip().lower()
+    return "plus" in plan and "free" not in plan
+
+
+def _auto_complete_plus_statuses(row: dict, *plan_values: Any, now: str | None = None) -> bool:
+    """Plus 套餐查实后幂等点亮提链和支付状态。"""
+    if not any(_is_plus_plan_value(value) for value in plan_values):
+        return False
+
+    stamp = now or _now()
+    changed = False
+    for field, status_name in (("link_completed", "link"), ("payment_completed", "payment")):
+        if bool(row.get(field)):
+            continue
+        row[field] = True
+        row[f"{field}_at"] = row.get(f"{field}_at") or stamp
+        row[f"{status_name}_status_source"] = "plan_plus_auto"
+        row[f"{status_name}_status_updated_at"] = stamp
+        changed = True
+    return changed
+
+
 def _decorate_account(
     row: dict,
     *,
@@ -2186,6 +2210,13 @@ def update_account_plan_check(acc_id: int | None = None, email: str | None = Non
                 row["billing_currency"] = result.get("billing_currency")
             if result.get("is_delinquent") is not None:
                 row["is_delinquent"] = bool(result.get("is_delinquent"))
+            _auto_complete_plus_statuses(
+                row,
+                result.get("current_plan_type"),
+                result.get("plan_type"),
+                result.get("subscription_plan"),
+                now=row.get("plan_checked_at") or now,
+            )
             for _k in (
                 "discount_type",
                 "discount_amount",
@@ -3133,6 +3164,14 @@ def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
                 row["user_name"] = user.get("name")
             if account.get("planType"):
                 row["plan_type"] = account.get("planType")
+            _auto_complete_plus_statuses(
+                row,
+                result.get("current_plan_type"),
+                result.get("plan_type"),
+                account.get("planType"),
+                result.get("subscription_plan"),
+                now=now,
+            )
             if session.get("expires"):
                 row["expires_at"] = session.get("expires")
             if result.get("device_id"):

@@ -77,6 +77,82 @@ class AccountCompletionStatusTests(unittest.TestCase):
             self.assertEqual(account["link_status_source"], "extract")
             self.assertEqual(account["sms_status_source"], "codex")
 
+    def test_plus_liveness_lights_link_and_payment_statuses(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "accounts.json").write_text(
+                '[{"id":1,"email":"plus@example.com"}]',
+                encoding="utf-8",
+            )
+            with self._storage(root):
+                self.assertTrue(db.update_account_liveness(1, {
+                    "ok": True,
+                    "status": "live",
+                    "session": {"account": {"planType": "plus"}},
+                }))
+                account = db.get_account(1)
+
+            self.assertTrue(account["link_completed"])
+            self.assertTrue(account["payment_completed"])
+            self.assertEqual(account["link_status_source"], "plan_plus_auto")
+            self.assertEqual(account["payment_status_source"], "plan_plus_auto")
+
+    def test_plus_plan_query_lights_link_and_payment_statuses(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "accounts.json").write_text(
+                '[{"id":1,"email":"plus@example.com"}]',
+                encoding="utf-8",
+            )
+            with self._storage(root):
+                self.assertTrue(db.update_account_plan_check(1, result={
+                    "ok": True,
+                    "current_plan_type": "plus",
+                    "checked_at": "2026-09-13T10:00:00",
+                }))
+                account = db.get_account(1)
+
+            self.assertTrue(account["link_completed"])
+            self.assertTrue(account["payment_completed"])
+            self.assertEqual(account["link_status_source"], "plan_plus_auto")
+            self.assertEqual(account["payment_status_source"], "plan_plus_auto")
+
+    def test_plus_subscription_plan_also_lights_statuses(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "accounts.json").write_text(
+                '[{"id":1,"email":"plus@example.com"}]',
+                encoding="utf-8",
+            )
+            with self._storage(root):
+                self.assertTrue(db.update_account_plan_check(1, result={
+                    "ok": True,
+                    "current_plan_type": "",
+                    "subscription_plan": "chatgptplusplan",
+                }))
+                account = db.get_account(1)
+
+            self.assertTrue(account["link_completed"])
+            self.assertTrue(account["payment_completed"])
+
+    def test_free_plan_does_not_light_plus_statuses(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "accounts.json").write_text(
+                '[{"id":1,"email":"free@example.com"}]',
+                encoding="utf-8",
+            )
+            with self._storage(root):
+                self.assertTrue(db.update_account_liveness(1, {
+                    "ok": True,
+                    "status": "live",
+                    "session": {"account": {"planType": "free"}},
+                }))
+                account = db.get_account(1)
+
+            self.assertFalse(account["link_completed"])
+            self.assertFalse(account["payment_completed"])
+
     def test_new_extract_clears_stale_link_and_progress_changes_poll_revision(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

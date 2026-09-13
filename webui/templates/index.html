@@ -7040,8 +7040,11 @@ function _accountCompletionStatusCell(r) {
   let linkButton = `<button type="button" class="acc-v2-completion-btn is-link-idle" data-extract-link="${esc(r.id)}" title="${esc(message)}">提链</button>`;
   if (status === 'queued' || status === 'running') {
     linkButton = `<button type="button" class="acc-v2-completion-btn is-link-progress" disabled style="--extract-progress:${progress}%" title="${esc(message)}"><span>提链 ${progress}%</span></button>`;
-  } else if (status === 'success') {
-    linkButton = `<button type="button" class="acc-v2-completion-btn is-link-on" data-copy-extract-link="${attrEsc(link)}" title="${esc(message || '提链成功，点击复制提链地址')}">提链</button>`;
+  } else if (status === 'success' || Boolean(r.link_completed)) {
+    const autoCompleted = status !== 'success' && Boolean(r.link_completed);
+    const linkTitle = autoCompleted ? 'Plus 套餐已自动点亮提链状态' : (message || '提链成功，点击复制提链地址');
+    const copyAttr = link ? ` data-copy-extract-link="${attrEsc(link)}"` : '';
+    linkButton = `<button type="button" class="acc-v2-completion-btn is-link-on"${copyAttr} title="${esc(linkTitle)}">提链</button>`;
   } else if (status === 'failed') {
     linkButton = `<button type="button" class="acc-v2-completion-btn is-link-failed" data-extract-link="${esc(r.id)}" title="${esc(message)}">提链失败</button>`;
   }
